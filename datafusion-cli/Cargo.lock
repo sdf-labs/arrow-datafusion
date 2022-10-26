@@ -677,6 +677,7 @@ dependencies = [
  "arrow",
  "datafusion-common",
  "datafusion-expr",
+ "lazy_static",
  "sqlparser",
 ]
 

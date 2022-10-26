@@ -19,13 +19,74 @@
 //!
 //! Declares a SQL parser based on sqlparser that handles custom formats that we need.
 
+
 use sqlparser::{
-    ast::{ColumnDef, ColumnOptionDef, Statement as SQLStatement, TableConstraint},
+    ast::{ColumnDef, ColumnOptionDef, Statement as SQLStatement, TableConstraint, ObjectName, Ident},
     dialect::{keywords::Keyword, Dialect, GenericDialect},
     parser::{Parser, ParserError},
     tokenizer::{Token, Tokenizer},
 };
-use std::{collections::VecDeque, fmt};
+use std::{
+    collections::{HashSet, VecDeque},
+    fmt, fs, path::{Path, PathBuf}, 
+};
+
+use lazy_static::lazy_static;
+use std::sync::Mutex;
+// use crate::{dialect::Dialect, parser::{Parser, ParserError}, ast::Statement, tokenizer::Token, keywords::Keyword};
+
+lazy_static! {
+    // absolute path. last component is the module name, 
+    // collects all modules that have been visited so far
+    pub static ref VISITED_FILES: Mutex<HashSet<String>> = Mutex::new(HashSet::new());
+    // absolute paths, last one is the package name
+    pub static ref VISITED_PACKAGES: Mutex<HashSet<String>> = Mutex::new(HashSet::new());
+}
+
+// Removes directory path and returns the file name; like path.filename, but for strings
+pub fn  basename(path: &str) -> String{
+    match path.rfind('/'){
+        Some(i) => path[i+1..].to_owned(),
+        None => path.to_owned()
+    }
+}
+// Combines package and module path with suffix
+pub fn  sql_filename(package_path: &str, module_path: &str) -> String{
+    if package_path=="" {
+        module_path.to_owned()+".sql"
+    } else {
+        package_path.to_owned()+"/"+module_path+".sql"
+    }
+}
+
+static ROOT: &str = "sdf.pkg.yml";
+
+pub fn find_package_file(starting_directory: &Path) -> Option<PathBuf> {
+    let mut path: PathBuf = starting_directory.into();
+    let root_filename = Path::new(ROOT);
+
+    loop {
+        path.push(root_filename);
+        if path.is_file() {           
+            break Some(path.canonicalize().unwrap());
+        } 
+        if !(path.pop() && path.pop()) { // remove file && remove parent
+            break None;
+        }
+    }
+}
+
+pub fn find_package_path(starting_directory: &Path) -> Option<PathBuf>   {
+    if let Some( path) = find_package_file(Path::new(&starting_directory)) {
+        let mut tmp: PathBuf = path.into();
+        tmp.pop();
+        Some(tmp)
+    } else {
+       None
+   }
+}
+
+
 
 // Use `Parser::expected` instead, if possible
 macro_rules! parser_err {
@@ -35,6 +96,7 @@ macro_rules! parser_err {
 }
 
 fn parse_file_type(s: &str) -> Result<String, ParserError> {
+    // let res = FILENAME.lock().unwrap().replace(String::from("other"));
     Ok(s.to_uppercase())
 }
 
@@ -89,17 +151,21 @@ pub struct DescribeTable {
 /// Tokens parsed by `DFParser` are converted into these values.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Statement {
-    /// ANSI SQL AST node
-    Statement(Box<SQLStatement>),
-    /// Extension: `CREATE EXTERNAL TABLE`
-    CreateExternalTable(CreateExternalTable),
-    /// Extension: `DESCRIBE TABLE`
-    DescribeTable(DescribeTable),
+    /// ANSI SQL AST node with package_path module_path
+    Statement(Box<SQLStatement>, String, String),
+    /// Extension: `CREATE EXTERNAL TABLE` with package_path module_path
+    CreateExternalTable(CreateExternalTable, String, String),
+    /// Extension: `DESCRIBE TABLE` with package_path module_path
+    DescribeTable(DescribeTable, String, String),
+
 }
 
 /// SQL Parser
+#[allow(dead_code)]
 pub struct DFParser<'a> {
     parser: Parser<'a>,
+    package_path: String,
+    module_path: String,
 }
 
 impl<'a> DFParser<'a> {
@@ -119,6 +185,26 @@ impl<'a> DFParser<'a> {
 
         Ok(DFParser {
             parser: Parser::new(tokens, dialect),
+            package_path : String::new(),
+            module_path : String::new(),
+        })
+    }
+
+    pub fn new_with_dialect_and_scope(
+        sql: &str,
+        dialect: &'a dyn Dialect,
+        _filename: String,
+        package_path: String,
+        module_path: String,
+    ) -> Result<Self, ParserError> {
+        let mut tokenizer = Tokenizer::new(dialect, sql);
+        let tokens = tokenizer.tokenize()?;
+        Ok(DFParser {
+            parser: Parser::new(
+                tokens, dialect, // filename
+            ),
+            package_path : package_path,
+            module_path : module_path,
         })
     }
 
@@ -127,13 +213,39 @@ impl<'a> DFParser<'a> {
         let dialect = &GenericDialect {};
         DFParser::parse_sql_with_dialect(sql, dialect)
     }
-
+    
+    /// Parse a SQL statement and produce a set of statements with dialect
+    pub fn parse_sql_with_scope(sql: &str,
+        _filename: String,
+        package_path: String, module_path:String) -> Result<VecDeque<Statement>, ParserError> {
+        let dialect = &GenericDialect {};
+        DFParser::parse_sql_with_dialect_and_scope(sql, dialect, _filename, package_path, module_path)
+    }
     /// Parse a SQL statement and produce a set of statements
     pub fn parse_sql_with_dialect(
         sql: &str,
         dialect: &dyn Dialect,
     ) -> Result<VecDeque<Statement>, ParserError> {
-        let mut parser = DFParser::new_with_dialect(sql, dialect)?;
+        let parser = DFParser::new_with_dialect(sql, dialect)?;
+        Self::parse_statements(parser)
+    }
+    /// Parse a SQL statement and produce a set of statements
+    pub fn parse_sql_with_dialect_and_scope(
+        sql: &str,
+        dialect: &dyn Dialect,
+
+        _filename: String,
+        package_path: String,
+        module_path: String,
+  
+    ) -> Result<VecDeque<Statement>, ParserError> {
+        let parser = DFParser::new_with_dialect_and_scope(sql, dialect,_filename,package_path, module_path)?;
+        Self::parse_statements(parser)
+    }
+
+    fn parse_statements(
+        mut parser: DFParser,
+    ) -> Result<VecDeque<Statement>, ParserError> {
         let mut stmts = VecDeque::new();
         let mut expecting_statement_delimiter = false;
         loop {
@@ -148,9 +260,24 @@ impl<'a> DFParser<'a> {
             if expecting_statement_delimiter {
                 return parser.expected("end of statement", parser.parser.peek_token());
             }
+            let result_statements = match parser.parser.next_token() {
+                Token::Word(w) => match w.keyword {
+                    Keyword::USE => {
+                        Self::parse_use_from(&mut parser)},
+                    _ => {
+                        parser.parser.prev_token();
+                        parser
+                            .parse_statement()
+                            .map(|stm| VecDeque::from(vec![stm]))
+                    }
+                },
+                unexpected => parser.expected("end of statement", unexpected),
+            };
+            match result_statements {
+                Ok(stms) => stmts.extend(stms),
+                Err(err) => return Err(err),
+            }
 
-            let statement = parser.parse_statement()?;
-            stmts.push_back(statement);
             expecting_statement_delimiter = true;
         }
         Ok(stmts)
@@ -159,6 +286,116 @@ impl<'a> DFParser<'a> {
     /// Report unexpected token
     fn expected<T>(&self, expected: &str, found: Token) -> Result<T, ParserError> {
         parser_err!(format!("Expected {}, found: {}", expected, found))
+    }
+
+    fn parse_use_from(parser: &mut DFParser) -> Result<VecDeque<Statement>, ParserError> {
+        // parser.expected("module identifier", parser.peek_token())?
+        // TODO look into scopes...
+        
+        match parser.parser.next_token() {
+             Token::SingleQuotedString(target_module_path)
+                    
+             => {
+                // Note: in the GenericDialect SingleQuotedString is a string
+                // we are staying in the same package
+
+                let package_path = parser.package_path.clone();
+                let package_name = basename(&package_path);
+
+                // compute filename
+                let target_module_name = basename(&target_module_path);
+                let target_filename = sql_filename(&package_path, &target_module_path);
+
+                // avoid duplicate uses
+                if VISITED_FILES.lock().unwrap().contains(&target_filename) {
+                    return Ok(VecDeque::new());
+                }
+                VISITED_FILES.lock().unwrap().insert(target_filename.clone());
+                
+                // create scopes
+                let prefix = String::from("CREATE SCHEMA ")+ &package_name + "." + &target_module_name+";\n"; 
+                
+                // continue parsing  
+                Self::parse_sql_file(&GenericDialect {}, target_filename, package_path.to_owned(),  target_module_path.to_owned(), prefix)
+
+            }
+            Token::Word(w) => {
+                // Note: in the GenericDialect DoubleQuotedString is an
+                // identifier -- for now that is not supported
+                
+                // parse
+                let target_package_name =  w.value;
+                let _ = parser.parser.expect_token(&Token::Period);
+                let target_module_name = match parser.parser.parse_identifier(){
+                    Ok(id) => id.value,
+                    Err(_) => "".to_owned()
+                };
+                
+                // check wither the new path is a package
+                let old_package_path = parser.package_path.clone();
+                let target_package_path = old_package_path.strip_suffix(&basename(&old_package_path)).unwrap().clone().to_owned()+&target_package_name;
+                let target_root_file = target_package_path.clone()+"/"+&ROOT;
+                if !Path::new(&target_root_file).is_file(){
+                    return parser.expected("root target file", parser.parser.peek_token())
+                } 
+                // compute filename
+                let target_module_path = target_module_name.clone();
+                let target_filename = sql_filename(&target_package_path, &target_module_path);
+
+                // avoid duplicate uses
+                if VISITED_FILES.lock().unwrap().contains(&target_filename) {
+                    return Ok(VecDeque::new());
+                }
+                VISITED_FILES.lock().unwrap().insert(target_filename.clone());
+
+                // create scopes
+                let prefix: String =
+                    if VISITED_PACKAGES.lock().unwrap().contains(&target_package_name) {
+                        String::new()   
+                    } else {
+                        VISITED_PACKAGES.lock().unwrap().insert(target_package_name.clone());
+                        (String::from("CREATE DATABASE ")+ &target_package_name + ";\n").to_owned()
+                    };
+                let prefix = prefix + &String::from("CREATE SCHEMA ")+ &target_package_name + "." + &target_module_name+";\n";   
+                
+                // continue parsing
+                Self::parse_sql_file(&GenericDialect {}, target_filename, target_package_path,  target_module_path, prefix)
+
+            }
+            unexpected => parser.expected("module identifier", unexpected)?,
+        }
+        // }
+    }
+
+    /// Parse a file of SQL statements and produce an Abstract Syntax Tree (AST)
+    pub fn parse_sql_file(
+        dialect: &dyn Dialect,
+        filename: String,
+        package_path: String,
+        module_path: String,
+        prefix: String
+    ) -> Result<VecDeque<Statement>, ParserError> {
+        let contents = fs::read_to_string(&filename)
+            .unwrap_or_else(|_| panic!("Unable to read the file {}", &filename));
+        let contents_with_prefix = prefix.clone() + &contents;   
+        let parse_result = Self::tokenize_and_parse_sql(&*dialect, &contents_with_prefix, filename, package_path, module_path);
+
+        parse_result
+    }
+
+    /// Tokenize and parse a SQL fragment and produce an Abstract Syntax Tree (AST)
+    fn tokenize_and_parse_sql(
+        dialect: &dyn Dialect,
+        sql: &str,
+        filename: String,
+        package_path: String,
+        module_path: String,
+    ) -> Result<VecDeque<Statement>, ParserError> {
+        let parser = match DFParser::new_with_dialect_and_scope(sql, dialect, filename, package_path, module_path) {
+            Ok(it) => it,
+            Err(err) => return Err(err),
+        };
+        Self::parse_statements(parser)
     }
 
     /// Parse a new expression
@@ -180,17 +417,27 @@ impl<'a> DFParser<'a> {
                     }
                     _ => {
                         // use the native parser
-                        Ok(Statement::Statement(Box::from(
-                            self.parser.parse_statement()?,
-                        )))
+                        let stm = self.parser.parse_statement()?;
+                        // let stm = match stm {
+                        //     SQLStatement::Query(query) => SQLStatement::CreateTable { temporary: true, name: ObjectName(vec![]), query: Some(query)},
+                        //     s => s
+                        // };
+                        Ok(Statement::Statement(
+                            Box::from(stm),
+                            self.package_path.to_owned(),
+                            self.module_path.to_owned()
+                        ))
                     }
                 }
             }
             _ => {
                 // use the native parser
-                Ok(Statement::Statement(Box::from(
-                    self.parser.parse_statement()?,
-                )))
+                let stm = self.parser.parse_statement()?;
+                Ok(Statement::Statement(
+                    Box::from(stm),
+                    self.package_path.to_owned(),
+                    self.module_path.to_owned()
+                ))
             }
         }
     }
@@ -201,7 +448,11 @@ impl<'a> DFParser<'a> {
         let des = DescribeTable {
             table_name: table_name.to_string(),
         };
-        Ok(Statement::DescribeTable(des))
+        Ok(Statement::DescribeTable(
+            des,
+            self.package_path.to_owned(),
+            self.module_path.to_owned()
+        ))
     }
 
     /// Parse a SQL CREATE statement
@@ -209,7 +460,11 @@ impl<'a> DFParser<'a> {
         if self.parser.parse_keyword(Keyword::EXTERNAL) {
             self.parse_create_external_table()
         } else {
-            Ok(Statement::Statement(Box::from(self.parser.parse_create()?)))
+            Ok(Statement::Statement(
+                Box::from(self.parser.parse_create()?),
+                self.package_path.to_owned(),
+                self.module_path.to_owned()
+            ))
         }
     }
 
@@ -350,9 +605,27 @@ impl<'a> DFParser<'a> {
 
         self.parser.expect_keyword(Keyword::LOCATION)?;
         let location = self.parser.parse_literal_string()?;
+        
+    
+        // TODO Make consistent: Currently
+        // - parser creates full name for external table, 
+        // - planner does for normal tables.. 
+        let current_package_name = basename(&self.package_path);
+        let current_module_name = basename(&self.module_path);
+        
+        let enriched_table_name: ObjectName = match table_name{
+            ObjectName(ids)=> {
+                match ids.len(){
+                    1 => {ObjectName(vec![Ident::new(current_package_name), Ident::new(current_module_name), ids[0].clone()])}
+                    2 => {ObjectName(vec![Ident::new(current_package_name), ids[0].clone(), ids[1].clone()])}
+                    _ => {ObjectName(ids)}
+                }
+            }
+        };
 
         let create = CreateExternalTable {
-            name: table_name.to_string(),
+
+            name: enriched_table_name.to_string(),
             columns,
             file_type,
             has_header,
@@ -362,7 +635,10 @@ impl<'a> DFParser<'a> {
             if_not_exists,
             file_compression_type,
         };
-        Ok(Statement::CreateExternalTable(create))
+        Ok(Statement::CreateExternalTable(
+            create,
+            self.package_path.to_owned(), self.module_path.to_owned()
+        ))
     }
 
     /// Parses the set of valid formats
@@ -476,49 +752,58 @@ mod tests {
         // positive case
         let sql = "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV LOCATION 'foo.csv'";
         let display = None;
-        let expected = Statement::CreateExternalTable(CreateExternalTable {
-            name: "t".into(),
-            columns: vec![make_column_def("c1", DataType::Int(display))],
-            file_type: "CSV".to_string(),
-            has_header: false,
-            delimiter: ',',
-            location: "foo.csv".into(),
-            table_partition_cols: vec![],
-            if_not_exists: false,
-            file_compression_type: "".to_string(),
-        });
+        let expected = Statement::CreateExternalTable(
+            CreateExternalTable {
+                name: "t".into(),
+                columns: vec![make_column_def("c1", DataType::Int(display))],
+                file_type: "CSV".to_string(),
+                has_header: false,
+                delimiter: ',',
+                location: "foo.csv".into(),
+                table_partition_cols: vec![],
+                if_not_exists: false,
+                file_compression_type: "".to_string(),
+            },
+            String::new(), String::new()
+        );
         expect_parse_ok(sql, expected)?;
 
         // positive case with delimiter
         let sql = "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV DELIMITER '|' LOCATION 'foo.csv'";
         let display = None;
-        let expected = Statement::CreateExternalTable(CreateExternalTable {
-            name: "t".into(),
-            columns: vec![make_column_def("c1", DataType::Int(display))],
-            file_type: "CSV".to_string(),
-            has_header: false,
-            delimiter: '|',
-            location: "foo.csv".into(),
-            table_partition_cols: vec![],
-            if_not_exists: false,
-            file_compression_type: "".to_string(),
-        });
+        let expected = Statement::CreateExternalTable(
+            CreateExternalTable {
+                name: "t".into(),
+                columns: vec![make_column_def("c1", DataType::Int(display))],
+                file_type: "CSV".to_string(),
+                has_header: false,
+                delimiter: '|',
+                location: "foo.csv".into(),
+                table_partition_cols: vec![],
+                if_not_exists: false,
+                file_compression_type: "".to_string(),
+            },
+            String::new(), String::new()
+        );
         expect_parse_ok(sql, expected)?;
 
         // positive case: partitioned by
         let sql = "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV PARTITIONED BY (p1, p2) LOCATION 'foo.csv'";
         let display = None;
-        let expected = Statement::CreateExternalTable(CreateExternalTable {
-            name: "t".into(),
-            columns: vec![make_column_def("c1", DataType::Int(display))],
-            file_type: "CSV".to_string(),
-            has_header: false,
-            delimiter: ',',
-            location: "foo.csv".into(),
-            table_partition_cols: vec!["p1".to_string(), "p2".to_string()],
-            if_not_exists: false,
-            file_compression_type: "".to_string(),
-        });
+        let expected = Statement::CreateExternalTable(
+            CreateExternalTable {
+                name: "t".into(),
+                columns: vec![make_column_def("c1", DataType::Int(display))],
+                file_type: "CSV".to_string(),
+                has_header: false,
+                delimiter: ',',
+                location: "foo.csv".into(),
+                table_partition_cols: vec!["p1".to_string(), "p2".to_string()],
+                if_not_exists: false,
+                file_compression_type: "".to_string(),
+            },
+            String::new(), String::new()
+        );
         expect_parse_ok(sql, expected)?;
 
         // positive case: it is ok for case insensitive sql stmt with `WITH HEADER ROW` tokens
@@ -527,17 +812,20 @@ mod tests {
             "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV with header row LOCATION 'foo.csv'"
         ];
         for sql in sqls {
-            let expected = Statement::CreateExternalTable(CreateExternalTable {
-                name: "t".into(),
-                columns: vec![make_column_def("c1", DataType::Int(display))],
-                file_type: "CSV".to_string(),
-                has_header: true,
-                delimiter: ',',
-                location: "foo.csv".into(),
-                table_partition_cols: vec![],
-                if_not_exists: false,
-                file_compression_type: "".to_string(),
-            });
+            let expected = Statement::CreateExternalTable(
+                CreateExternalTable {
+                    name: "t".into(),
+                    columns: vec![make_column_def("c1", DataType::Int(display))],
+                    file_type: "CSV".to_string(),
+                    has_header: true,
+                    delimiter: ',',
+                    location: "foo.csv".into(),
+                    table_partition_cols: vec![],
+                    if_not_exists: false,
+                    file_compression_type: "".to_string(),
+                },
+                String::new(), String::new()
+            );
             expect_parse_ok(sql, expected)?;
         }
 
@@ -547,79 +835,94 @@ mod tests {
             ("CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV COMPRESSION TYPE BZIP2 LOCATION 'foo.csv'", "BZIP2"),
         ];
         for (sql, file_compression_type) in sqls {
-            let expected = Statement::CreateExternalTable(CreateExternalTable {
-                name: "t".into(),
-                columns: vec![make_column_def("c1", DataType::Int(display))],
-                file_type: "CSV".to_string(),
-                has_header: false,
-                delimiter: ',',
-                location: "foo.csv".into(),
-                table_partition_cols: vec![],
-                if_not_exists: false,
-                file_compression_type: file_compression_type.to_owned(),
-            });
+            let expected = Statement::CreateExternalTable(
+                CreateExternalTable {
+                    name: "t".into(),
+                    columns: vec![make_column_def("c1", DataType::Int(display))],
+                    file_type: "CSV".to_string(),
+                    has_header: false,
+                    delimiter: ',',
+                    location: "foo.csv".into(),
+                    table_partition_cols: vec![],
+                    if_not_exists: false,
+                    file_compression_type: file_compression_type.to_owned(),
+                },
+                String::new(), String::new()
+            );
             expect_parse_ok(sql, expected)?;
         }
 
         // positive case: it is ok for parquet files not to have columns specified
         let sql = "CREATE EXTERNAL TABLE t STORED AS PARQUET LOCATION 'foo.parquet'";
-        let expected = Statement::CreateExternalTable(CreateExternalTable {
-            name: "t".into(),
-            columns: vec![],
-            file_type: "PARQUET".to_string(),
-            has_header: false,
-            delimiter: ',',
-            location: "foo.parquet".into(),
-            table_partition_cols: vec![],
-            if_not_exists: false,
-            file_compression_type: "".to_string(),
-        });
+        let expected = Statement::CreateExternalTable(
+            CreateExternalTable {
+                name: "t".into(),
+                columns: vec![],
+                file_type: "PARQUET".to_string(),
+                has_header: false,
+                delimiter: ',',
+                location: "foo.parquet".into(),
+                table_partition_cols: vec![],
+                if_not_exists: false,
+                file_compression_type: "".to_string(),
+            },
+            String::new(), String::new()
+        );
         expect_parse_ok(sql, expected)?;
 
         // positive case: it is ok for parquet files to be other than upper case
         let sql = "CREATE EXTERNAL TABLE t STORED AS parqueT LOCATION 'foo.parquet'";
-        let expected = Statement::CreateExternalTable(CreateExternalTable {
-            name: "t".into(),
-            columns: vec![],
-            file_type: "PARQUET".to_string(),
-            has_header: false,
-            delimiter: ',',
-            location: "foo.parquet".into(),
-            table_partition_cols: vec![],
-            if_not_exists: false,
-            file_compression_type: "".to_string(),
-        });
+        let expected = Statement::CreateExternalTable(
+            CreateExternalTable {
+                name: "t".into(),
+                columns: vec![],
+                file_type: "PARQUET".to_string(),
+                has_header: false,
+                delimiter: ',',
+                location: "foo.parquet".into(),
+                table_partition_cols: vec![],
+                if_not_exists: false,
+                file_compression_type: "".to_string(),
+            },
+            String::new(), String::new()
+        );
         expect_parse_ok(sql, expected)?;
 
         // positive case: it is ok for avro files not to have columns specified
         let sql = "CREATE EXTERNAL TABLE t STORED AS AVRO LOCATION 'foo.avro'";
-        let expected = Statement::CreateExternalTable(CreateExternalTable {
-            name: "t".into(),
-            columns: vec![],
-            file_type: "AVRO".to_string(),
-            has_header: false,
-            delimiter: ',',
-            location: "foo.avro".into(),
-            table_partition_cols: vec![],
-            if_not_exists: false,
-            file_compression_type: "".to_string(),
-        });
+        let expected = Statement::CreateExternalTable(
+            CreateExternalTable {
+                name: "t".into(),
+                columns: vec![],
+                file_type: "AVRO".to_string(),
+                has_header: false,
+                delimiter: ',',
+                location: "foo.avro".into(),
+                table_partition_cols: vec![],
+                if_not_exists: false,
+                file_compression_type: "".to_string(),
+            },
+            String::new(), String::new()
+        );
         expect_parse_ok(sql, expected)?;
 
         // positive case: it is ok for avro files not to have columns specified
         let sql =
             "CREATE EXTERNAL TABLE IF NOT EXISTS t STORED AS PARQUET LOCATION 'foo.parquet'";
-        let expected = Statement::CreateExternalTable(CreateExternalTable {
-            name: "t".into(),
-            columns: vec![],
-            file_type: "PARQUET".to_string(),
-            has_header: false,
-            delimiter: ',',
-            location: "foo.parquet".into(),
-            table_partition_cols: vec![],
-            if_not_exists: true,
-            file_compression_type: "".to_string(),
-        });
+        let expected = Statement::CreateExternalTable(
+            CreateExternalTable {
+                name: "t".into(),
+                columns: vec![],
+                file_type: "PARQUET".to_string(),
+                has_header: false,
+                delimiter: ',',
+                location: "foo.parquet".into(),
+                table_partition_cols: vec![],
+                if_not_exists: true,
+                file_compression_type: "".to_string(),
+            },
+            String::new(), String::new()
+        );
         expect_parse_ok(sql, expected)?;
 
         // Error cases: partition column does not support type

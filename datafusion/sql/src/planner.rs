@@ -17,7 +17,7 @@
 
 //! SQL Query Planner (produces logical plan from SQL AST)
 
-use crate::parser::{CreateExternalTable, DescribeTable, Statement as DFStatement};
+use crate::parser::{CreateExternalTable, DescribeTable, Statement as DFStatement, basename};
 use arrow::datatypes::*;
 use datafusion_common::parsers::parse_interval;
 use datafusion_common::{context, ToDFSchema};
@@ -139,12 +139,71 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     }
 
     /// Generate a logical plan from an DataFusion SQL statement
+    pub fn statement_to_plan_with_scope(&self, statement: DFStatement) -> Result<(LogicalPlan, String, String)> {
+        match statement {
+            DFStatement::CreateExternalTable(s, package_path, module_path) => 
+                self.external_table_to_plan(s).map(|p| (p,package_path, module_path)),
+            DFStatement::Statement(s, package_path, module_path) => 
+                self.sql_create_statement_to_plan(*s,package_path.clone(), module_path.clone()).map(|p| (p,package_path, module_path)),
+            DFStatement::DescribeTable(s,package_path, module_path) => 
+                self.describe_table_to_plan(s).map(|p| (p,package_path, module_path)),
+          }
+    }
+
     pub fn statement_to_plan(&self, statement: DFStatement) -> Result<LogicalPlan> {
         match statement {
-            DFStatement::CreateExternalTable(s) => self.external_table_to_plan(s),
-            DFStatement::Statement(s) => self.sql_statement_to_plan(*s),
-            DFStatement::DescribeTable(s) => self.describe_table_to_plan(s),
+            DFStatement::CreateExternalTable(s, _, _) => self.external_table_to_plan(s),
+            DFStatement::Statement(s, _, _) => self.sql_statement_to_plan(*s),
+            DFStatement::DescribeTable(s,__, _) => self.describe_table_to_plan(s),
         }
+    }
+
+    /// Generate a logical plan from a SQL CreateTable statement (special casing)
+    pub fn sql_create_statement_to_plan(&self, statement: Statement, package_path: String, module_path: String) -> Result<LogicalPlan> {
+        match statement {
+                Statement::CreateTable {
+                    query: Some(query),
+                    name,
+                    columns,
+                    constraints,
+                    table_properties,
+                    with_options,
+                    if_not_exists,
+                    or_replace,
+                    ..
+                } if columns.is_empty()
+                    && constraints.is_empty()
+                    && table_properties.is_empty()
+                    && with_options.is_empty() =>
+                {
+                    let plan = self.query_to_plan(*query, &mut HashMap::new())?;
+
+                    // qualify new table with current package_name module_name,
+                    // ...provided not already given
+                    let package_name = basename(&package_path);
+                    let module_name = basename(&module_path);
+                    
+                    // println!("planner: Original table name {} current_package_name {} current_module_path {}", name.to_string(), package_name, module_path );
+                    let enriched_table_name: ObjectName = match name{
+                        ObjectName(ids)=> {
+                            match ids.len(){
+                                1 => {ObjectName(vec![Ident::new(package_name), Ident::new(module_name), ids[0].clone()])}
+                                2 => {ObjectName(vec![Ident::new(package_name), ids[0].clone(), ids[1].clone()])}
+                                _ => {ObjectName(ids)}
+                            }
+                        }
+                    };
+                
+                    Ok(LogicalPlan::CreateMemoryTable(CreateMemoryTable {
+                        name: enriched_table_name.to_string(),
+                        input: Arc::new(plan),
+                        if_not_exists,
+                        or_replace,
+                    }))
+                }
+        
+                stm =>  self.sql_statement_to_plan(stm)
+            }
     }
 
     /// Generate a logical plan from an SQL statement
