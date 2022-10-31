@@ -30,6 +30,8 @@ use std::{
     collections::{HashSet, VecDeque},
     fmt, fs, path::{Path, PathBuf}, 
 };
+use regex::Regex;
+extern crate regex;
 
 use lazy_static::lazy_static;
 use std::sync::Mutex;
@@ -263,7 +265,7 @@ impl<'a> DFParser<'a> {
             let result_statements = match parser.parser.next_token() {
                 Token::Word(w) => match w.keyword {
                     Keyword::USE => {
-                        Self::parse_use_from(&mut parser)},
+                        Self::parse_use(&mut parser)},
                     _ => {
                         parser.parser.prev_token();
                         parser
@@ -288,11 +290,14 @@ impl<'a> DFParser<'a> {
         parser_err!(format!("Expected {}, found: {}", expected, found))
     }
 
-    fn parse_use_from(parser: &mut DFParser) -> Result<VecDeque<Statement>, ParserError> {
-        // parser.expected("module identifier", parser.peek_token())?
-        // TODO look into scopes...
-        
-        match parser.parser.next_token() {
+     /// Report wrong use
+     fn wrong_use<T>(&self, msg: &str, _at: Token) -> Result<T, ParserError> {
+        Err(ParserError::ParserError(msg.to_owned()))
+    }
+
+    fn parse_use(parser: &mut DFParser) -> Result<VecDeque<Statement>, ParserError> {
+        let next=parser.parser.next_token() ; 
+        match next.clone() {
              Token::SingleQuotedString(target_module_path)
                     
              => {
@@ -305,12 +310,19 @@ impl<'a> DFParser<'a> {
                 // compute filename
                 let target_module_name = basename(&target_module_path);
                 let target_filename = sql_filename(&package_path, &target_module_path);
-
+            
                 // avoid duplicate uses
                 if VISITED_FILES.lock().unwrap().contains(&target_filename) {
                     return Ok(VecDeque::new());
                 }
                 VISITED_FILES.lock().unwrap().insert(target_filename.clone());
+                let regex = Regex::new(r"^[/a-z0-9_]*$").unwrap();
+                if !regex.is_match(&target_module_path){ 
+                    return parser.wrong_use(&format!("Module path must consist only of lowercase chars, digits or '_' separated by '/', found {}",next), next );
+                }
+                if !Path::new(&target_filename).is_file(){
+                    return parser.wrong_use(&format!("missing module file {}",target_filename), next );
+                };
                 
                 // create scopes
                 let prefix = String::from("CREATE SCHEMA ")+ &package_name + "." + &target_module_name+";\n"; 
@@ -320,9 +332,6 @@ impl<'a> DFParser<'a> {
 
             }
             Token::Word(w) => {
-                // Note: in the GenericDialect DoubleQuotedString is an
-                // identifier -- for now that is not supported
-                
                 // parse
                 let target_package_name =  w.value;
                 let _ = parser.parser.expect_token(&Token::Period);
@@ -331,13 +340,27 @@ impl<'a> DFParser<'a> {
                     Err(_) => "".to_owned()
                 };
                 
-                // check wither the new path is a package
+                // check package/module naming
+                let regex = Regex::new(r"^[[:lower:][:digit:]_]+$").unwrap();
+                if !regex.is_match(&target_package_name){ 
+                    return parser.wrong_use(&format!("Package names must only be lowercase, digits or '_', found {}",target_package_name), next );
+                }
+                if !regex.is_match(&target_module_name){ 
+                    return parser.wrong_use(&format!("Module names must only be lowercase, digits or '_', found {}",target_package_name), next );
+                }
+
+                // check package file
                 let old_package_path = parser.package_path.clone();
                 let target_package_path = old_package_path.strip_suffix(&basename(&old_package_path)).unwrap().clone().to_owned()+&target_package_name;
+              
                 let target_root_file = target_package_path.clone()+"/"+&ROOT;
                 if !Path::new(&target_root_file).is_file(){
-                    return parser.expected("root target file", parser.parser.peek_token())
-                } 
+                    if w.quote_style == None{
+                        return parser.wrong_use(&format!("Missing package file {}",target_root_file), next );
+                    } else {
+                        return parser.wrong_use(&format!("Missing package file {}, did you use double quotes instead of single quotes",target_root_file), next );
+                    }
+                };
                 // compute filename
                 let target_module_path = target_module_name.clone();
                 let target_filename = sql_filename(&target_package_path, &target_module_path);
@@ -347,6 +370,11 @@ impl<'a> DFParser<'a> {
                     return Ok(VecDeque::new());
                 }
                 VISITED_FILES.lock().unwrap().insert(target_filename.clone());
+                
+                // check module file
+                if !Path::new(&target_filename).is_file(){
+                    return parser.wrong_use(&format!("missing module file {}",target_filename), next );
+                };
 
                 // create scopes
                 let prefix: String =

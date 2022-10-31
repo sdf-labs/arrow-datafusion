@@ -1728,7 +1728,8 @@ impl ContextProvider for SessionState {
         let package_name = basename(&PACKAGE_PATH_IN_SCOPE.lock().unwrap()[0]);
         let module_name = basename(&MODULE_PATH_IN_SCOPE.lock().unwrap()[0]);         
         let resolved_ref = self.resolve_table_ref_in_scope(name, &package_name, &module_name);
-        // println!("---- FROM {}.{}.{}",resolved_ref.catalog, resolved_ref.schema, resolved_ref.table );
+        // TODO: delete this eventually...
+        println!("---- FROM {}.{}.{}",resolved_ref.catalog, resolved_ref.schema, resolved_ref.table );
         USE_DEPS.lock().unwrap().insert(resolved_ref.catalog.to_owned()+"."+ &resolved_ref.schema+"."+ &resolved_ref.table);
         
         match self.schema_for_ref(resolved_ref) {
@@ -1741,7 +1742,11 @@ impl ContextProvider for SessionState {
                 })?;
                 Ok(provider_as_source(provider))
             }
-            Err(e) => Err(e),
+            Err(e) => {
+                // TODO: delete this eventually...
+                eprintln!("name resolution failed {:?}", e );
+                Err(e)
+            }
         }
     }
 
