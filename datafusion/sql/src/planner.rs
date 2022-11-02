@@ -17,7 +17,7 @@
 
 //! SQL Query Planner (produces logical plan from SQL AST)
 
-use crate::parser::{CreateExternalTable, DescribeTable, Statement as DFStatement, basename};
+use crate::parser::{CreateExternalTable, DescribeTable, Statement as DFStatement};
 use arrow::datatypes::*;
 use datafusion_common::parsers::parse_interval;
 use datafusion_common::{context, ToDFSchema};
@@ -144,7 +144,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             DFStatement::CreateExternalTable(s, package_path, module_path) => 
                 self.external_table_to_plan(s).map(|p| (p,package_path, module_path)),
             DFStatement::Statement(s, package_path, module_path) => 
-                self.sql_create_statement_to_plan(*s,package_path.clone(), module_path.clone()).map(|p| (p,package_path, module_path)),
+                self.sql_create_statement_to_plan(*s).map(|p| (p,package_path, module_path)),
             DFStatement::DescribeTable(s,package_path, module_path) => 
                 self.describe_table_to_plan(s).map(|p| (p,package_path, module_path)),
           }
@@ -159,7 +159,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     }
 
     /// Generate a logical plan from a SQL CreateTable statement (special casing)
-    pub fn sql_create_statement_to_plan(&self, statement: Statement, package_path: String, module_path: String) -> Result<LogicalPlan> {
+    pub fn sql_create_statement_to_plan(&self, statement: Statement) -> Result<LogicalPlan> {
         match statement {
                 Statement::CreateTable {
                     query: Some(query),

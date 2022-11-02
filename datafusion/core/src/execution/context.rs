@@ -588,7 +588,6 @@ impl SessionContext {
                 JsonFormat::default().with_file_compression_type(file_compression_type),
             ),
         };
-        eprintln!("create_listing_table {}", cmd.name.as_str());
         let table = self.table(cmd.name.as_str());
         match (cmd.if_not_exists, table) {
             (true, Ok(_)) => self.return_empty_dataframe(),
@@ -994,14 +993,6 @@ impl SessionContext {
         provider: Arc<dyn TableProvider>,
     ) -> Result<Option<Arc<dyn TableProvider>>> {
         let table_ref = table_ref.into();
-        let schema = self.copied_config().default_schema;
-        let catalog = self.copied_config().default_catalog;
-
-        eprintln!(
-            "register_table {:?} catalog {} schema {}",
-            table_ref, catalog, schema
-        );
-
         self.state
             .read()
             .schema_for_ref(table_ref)?
