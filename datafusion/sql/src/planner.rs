@@ -177,25 +177,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     && with_options.is_empty() =>
                 {
                     let plan = self.query_to_plan(*query, &mut HashMap::new())?;
-
-                    // qualify new table with current package_name module_name,
-                    // ...provided not already given
-                    let package_name = basename(&package_path);
-                    let module_name = basename(&module_path);
-                    
-                    // println!("planner: Original table name {} current_package_name {} current_module_path {}", name.to_string(), package_name, module_path );
-                    let enriched_table_name: ObjectName = match name{
-                        ObjectName(ids)=> {
-                            match ids.len(){
-                                1 => {ObjectName(vec![Ident::new(package_name), Ident::new(module_name), ids[0].clone()])}
-                                2 => {ObjectName(vec![Ident::new(package_name), ids[0].clone(), ids[1].clone()])}
-                                _ => {ObjectName(ids)}
-                            }
-                        }
-                    };
-                
                     Ok(LogicalPlan::CreateMemoryTable(CreateMemoryTable {
-                        name: enriched_table_name.to_string(),
+                        name: name.to_string(),
                         input: Arc::new(plan),
                         if_not_exists,
                         or_replace,

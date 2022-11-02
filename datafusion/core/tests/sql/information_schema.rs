@@ -38,7 +38,9 @@ async fn information_schema_tables_not_exist_by_default() {
     assert_eq!(
         err.to_string(),
         // Error propagates from SessionState::schema_for_ref
-        "Error during planning: failed to resolve schema: information_schema"
+        //"Error during planning: failed to resolve schema: information_schema"
+        "Error during planning: failed to resolve schema: datafusion.information_schema.tables"
+        
     );
 }
 
@@ -491,7 +493,8 @@ async fn information_schema_columns_not_exist_by_default() {
     assert_eq!(
         err.to_string(),
         // Error propagates from SessionState::schema_for_ref
-        "Error during planning: failed to resolve schema: information_schema"
+        //"Error during planning: failed to resolve schema: information_schema"
+        "Error during planning: failed to resolve schema: datafusion.information_schema.columns"
     );
 }
 

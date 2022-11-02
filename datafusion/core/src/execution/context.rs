@@ -21,6 +21,7 @@ use crate::{
         catalog::{CatalogList, MemoryCatalogList},
         information_schema::CatalogWithInformationSchema,
     },
+
     datasource::listing::{ListingOptions, ListingTable},
     datasource::{
         file_format::{
@@ -39,7 +40,7 @@ use crate::{
 pub use datafusion_physical_expr::execution_props::ExecutionProps;
 use datafusion_physical_expr::var_provider::is_system_variables;
 use parking_lot::RwLock;
-use std::str::FromStr;
+use std::{str::FromStr};
 use std::sync::Arc;
 use std::{
     any::{Any, TypeId},
@@ -70,8 +71,7 @@ use crate::logical_expr::{
     TableSource, TableType, UNNAMED_TABLE,
 };
 use crate::optimizer::optimizer::{OptimizerConfig, OptimizerRule};
-use datafusion_sql::{ResolvedTableReference, TableReference};//, parser::basename};
-
+use datafusion_sql::{ResolvedTableReference, TableReference}; //, parser::basename};
 use crate::physical_optimizer::coalesce_batches::CoalesceBatches;
 use crate::physical_optimizer::merge_exec::AddCoalescePartitionsExec;
 use crate::physical_optimizer::repartition::Repartition;
@@ -105,10 +105,10 @@ use super::options::{
 };
 
 /// Removes directory path and returns the file name; like path.filename, but for strings
-fn  basename(path: &str) -> String{
-    match path.rfind('/'){
-        Some(i) => path[i+1..].to_owned(),
-        None => path.to_owned()
+fn basename(path: &str) -> String {
+    match path.rfind('/') {
+        Some(i) => path[i + 1..].to_owned(),
+        None => path.to_owned(),
     }
 }
 
@@ -158,7 +158,7 @@ const DEFAULT_SCHEMA: &str = "public";
 /// # Ok(())
 /// # }
 /// ```
-/// 
+///
 #[derive(Clone)]
 pub struct SessionContext {
     /// Uuid for the session
@@ -169,20 +169,35 @@ pub struct SessionContext {
     pub state: Arc<RwLock<SessionState>>,
 }
 
-
-
 use lazy_static::lazy_static;
 use std::sync::Mutex;
 
 lazy_static! {
-    /// Module path in scope, only index 0 is used
-    pub static ref MODULE_PATH_IN_SCOPE:  Mutex<Vec<String>> = Mutex::new(vec![String::new()]);
-    /// Package path in scope, only index 0 is used
-    pub static ref PACKAGE_PATH_IN_SCOPE: Mutex<Vec<String>> = Mutex::new(vec![String::new()]);
-    /// Collect all catalog.schema.table defs with its used deps
+    /// Collect all definition-use dependencies (in the form catalog.schema.table) used by all statements
     pub static ref DEF_USE_DEPS: Mutex<HashMap<String, HashSet<String>>> = Mutex::new(HashMap::new());
      /// Collect all used catalog.schema.table names used in from or join for **this** statement
-    pub static ref USE_DEPS: Mutex<HashSet<String>> = Mutex::new(HashSet::new());
+    static ref USE_DEPS: Mutex<HashSet<String>> = Mutex::new(HashSet::new());
+}
+
+/// fully qualified name of a table reference, could go into table_reference
+fn fully_qualified_name(table_reference: TableReference, catalog: &str, schema: &str)-> String{
+    match table_reference{
+        TableReference::Bare { table } => format!("{}.{}.{}", catalog, schema, table),
+        TableReference::Partial { schema, table } => format!("{}.{}.{}", catalog, schema, table),
+        TableReference::Full { catalog, schema, table } => format!("{}.{}.{}", catalog, schema, table),
+    }
+}
+
+fn update_def_use_and_return(tr: TableReference, state: SessionState, result: Result<Arc<DataFrame>>) -> Result<Arc<DataFrame>> {
+    let qn = fully_qualified_name(tr, &state.config.default_catalog, &state.config.default_schema );
+    result.and_then(|op| {
+        DEF_USE_DEPS
+            .lock()
+            .unwrap()
+            .insert(qn, USE_DEPS.lock().unwrap().clone());
+        USE_DEPS.lock().unwrap().clear();
+        Ok(op)
+    })
 }
 
 
@@ -211,6 +226,7 @@ impl SessionContext {
             session_id: state.session_id.clone(),
             session_start_time: chrono::Utc::now(),
             state: Arc::new(RwLock::new(state)),
+
         }
     }
 
@@ -220,6 +236,28 @@ impl SessionContext {
             session_id: state.session_id.clone(),
             session_start_time: chrono::Utc::now(),
             state: Arc::new(RwLock::new(state)),
+
+        }
+    }
+
+    /// Creates a new session context using the provided session state.
+    pub fn with_state_and_scope(
+        state: SessionState,
+        package_path: String,
+        module_path: String,
+    ) -> Self {
+        let mut state = state.to_owned();
+        if package_path != "" {
+            state.inject_scope_into_default_catalog_and_schema(
+                &package_path,
+                &module_path,
+            );
+        };
+        Self {
+            session_id: state.session_id.clone(),
+            session_start_time: chrono::Utc::now(),
+            state: Arc::new(RwLock::new(state)),
+
         }
     }
 
@@ -249,30 +287,40 @@ impl SessionContext {
     }
 
     /// Creates a [`DataFrame`] taking a plan within a package/module context
-    pub async fn plan_with_scope(& self, plan: LogicalPlan, package_path: String, module_path: String) -> Result<Arc<DataFrame>> {
-        PACKAGE_PATH_IN_SCOPE.lock().unwrap()[0] = package_path;
-        MODULE_PATH_IN_SCOPE.lock().unwrap()[0] = module_path;
-        let result = self.plan(plan).await;
-        result
-    // }    
-}
+    pub async fn plan_with_scope(
+        &mut self,
+        plan: LogicalPlan,
+        package_path: String,
+        module_path: String,
+    ) -> Result<Arc<DataFrame>> {
+         let fresh_self = if package_path != "" {
+            let state = self.state();
+            Self::with_state_and_scope(state, package_path, module_path)
+        } else {
+            self.to_owned()
+        };
+
+        fresh_self.plan(plan).await
+    }
     /// Creates a [`DataFrame`] from a logical plan that will execute a SQL query.
     ///
     /// This method is `async` because queries of type `CREATE EXTERNAL TABLE`
     /// might require the schema to be inferred.
-    pub async fn sql(& self, sql: &str) -> Result<Arc<DataFrame>> {
+    pub async fn sql(&self, sql: &str) -> Result<Arc<DataFrame>> {
         let logical_plan = self.create_logical_plan(sql)?;
         self.plan(logical_plan).await
     }
+
+
 
     /// Creates a [`DataFrame`] taking a plan.
     ///
     /// This method is `async` because queries of type `CREATE EXTERNAL TABLE`
     /// might require the schema to be inferred.
-    pub async fn plan(& self, plan: LogicalPlan) -> Result<Arc<DataFrame>> {
+    pub async fn plan(&self, plan: LogicalPlan) -> Result<Arc<DataFrame>> {
         match plan {
             LogicalPlan::CreateExternalTable(cmd) => {
-                let res = match cmd.file_type.as_str() {
+                let result = match cmd.file_type.as_str() {
                     "PARQUET" | "CSV" | "JSON" | "AVRO" => {
                         let cmd_name = cmd.clone().name.clone();
                         println!("-- CREATE EXTERNAL TABLE {};", cmd_name);
@@ -281,10 +329,12 @@ impl SessionContext {
                     _ => {
                         println!("-- CREATE CUSTOM TABLE {};", cmd.name);
                         self.create_custom_table(&cmd).await
-                    },
+                    }
                 };
-                res.and_then(|op| {DEF_USE_DEPS.lock().unwrap().insert(cmd.name.clone(),USE_DEPS.lock().unwrap().clone()); USE_DEPS.lock().unwrap().clear();Ok(op)} )
-            },
+                let tr = TableReference::from(cmd.name.as_str());
+                let state= self.state();
+                update_def_use_and_return(tr, state, result)
+            }
 
             LogicalPlan::CreateMemoryTable(CreateMemoryTable {
                 name,
@@ -293,9 +343,11 @@ impl SessionContext {
                 or_replace,
             }) => {
                 println!("-- CREATE MEMORY TABLE {};", name);
-                let table = self.table(name.as_str());
+                let tr = TableReference::from(name.as_str());
 
-                let res = match (if_not_exists, or_replace, table) {
+                let table = self.table(tr);
+
+                let result = match (if_not_exists, or_replace, table) {
                     (true, false, Ok(_)) => self.return_empty_dataframe(),
                     (false, true, Ok(_)) => {
                         self.deregister_table(name.as_str())?;
@@ -332,8 +384,9 @@ impl SessionContext {
                         name
                     ))),
                 };
-                
-                res.and_then(|op| {DEF_USE_DEPS.lock().unwrap().insert(name.clone(),USE_DEPS.lock().unwrap().clone() ); USE_DEPS.lock().unwrap().clear();Ok(op)})
+
+                let state= self.state();
+                update_def_use_and_return(tr, state, result)
             }
 
             LogicalPlan::CreateView(CreateView {
@@ -343,10 +396,10 @@ impl SessionContext {
                 definition,
             }) => {
                 println!("-- CREATE VIEW {};", name);
-                
+
                 let view = self.table(name.as_str());
 
-                let res = match (or_replace, view) {
+                let result = match (or_replace, view) {
                     (true, Ok(_)) => {
                         self.deregister_table(name.as_str())?;
                         let table =
@@ -367,7 +420,9 @@ impl SessionContext {
                         name
                     ))),
                 };
-                res.and_then(|op| {DEF_USE_DEPS.lock().unwrap().insert(name.clone(),USE_DEPS.lock().unwrap().clone()); USE_DEPS.lock().unwrap().clear();Ok(op)} )
+                let tr = TableReference::from(name.as_str());
+                let state= self.state();
+                update_def_use_and_return(tr, state, result)
             }
 
             LogicalPlan::DropTable(DropTable {
@@ -488,7 +543,7 @@ impl SessionContext {
                 ))
             })?;
         let table = (*factory).create(cmd.location.as_str()).await?;
-            /*
+        /*
         let table = (*factory)
             .create(cmd.name.as_str(), cmd.location.as_str())
             .await?;
@@ -533,7 +588,7 @@ impl SessionContext {
                 JsonFormat::default().with_file_compression_type(file_compression_type),
             ),
         };
-
+        eprintln!("create_listing_table {}", cmd.name.as_str());
         let table = self.table(cmd.name.as_str());
         match (cmd.if_not_exists, table) {
             (true, Ok(_)) => self.return_empty_dataframe(),
@@ -939,6 +994,14 @@ impl SessionContext {
         provider: Arc<dyn TableProvider>,
     ) -> Result<Option<Arc<dyn TableProvider>>> {
         let table_ref = table_ref.into();
+        let schema = self.copied_config().default_schema;
+        let catalog = self.copied_config().default_catalog;
+
+        eprintln!(
+            "register_table {:?} catalog {} schema {}",
+            table_ref, catalog, schema
+        );
+
         self.state
             .read()
             .schema_for_ref(table_ref)?
@@ -1094,6 +1157,8 @@ impl SessionContext {
     }
 }
 
+
+
 impl FunctionRegistry for SessionContext {
     fn udfs(&self) -> HashSet<String> {
         self.state.read().udfs()
@@ -1187,9 +1252,9 @@ pub struct SessionConfig {
     /// Number of partitions for query execution. Increasing partitions can increase concurrency.
     pub target_partitions: usize,
     /// Default catalog name for table resolution
-    default_catalog: String,
+    pub default_catalog: String,
     /// Default schema name for table resolution
-    default_schema: String,
+    pub default_schema: String,
     /// Whether the default catalog and schema should be created automatically
     create_default_catalog_and_schema: bool,
     /// Should DataFusion provide access to `information_schema`
@@ -1502,6 +1567,21 @@ pub fn default_session_builder(config: SessionConfig) -> SessionState {
 }
 
 impl SessionState {
+    /// test
+    pub fn inject_scope_into_default_catalog_and_schema<'a>(
+        &'a mut self,
+        current_package_name: &'a str,
+        current_module_name: &'a str,
+    ) -> () {
+        if current_package_name != "" {
+            let package_name = basename(current_package_name);
+            let module_name = basename(current_module_name);
+            let config = self.config.clone();
+            self.config =
+                config.with_default_catalog_and_schema(package_name, module_name);
+        }
+    }
+
     /// Returns new SessionState using the provided configuration and runtime
     pub fn with_config_rt(config: SessionConfig, runtime: Arc<RuntimeEnv>) -> Self {
         let session_id = Uuid::new_v4().to_string();
@@ -1584,17 +1664,7 @@ impl SessionState {
             .resolve(&self.config.default_catalog, &self.config.default_schema)
     }
 
-    fn resolve_table_ref_in_scope<'a>(
-        &'a self,
-        table_ref: impl Into<TableReference<'a>>,
-         current_package_name : &'a str,
-         current_module_name :  &'a str
 
-    ) -> ResolvedTableReference<'a> {
-        table_ref
-            .into()
-            .resolve(current_package_name, current_module_name)
-    }
 
     fn schema_for_ref<'a>(
         &'a self,
@@ -1605,15 +1675,15 @@ impl SessionState {
             .catalog(resolved_ref.catalog)
             .ok_or_else(|| {
                 DataFusionError::Plan(format!(
-                    "failed to resolve catalog: {}",
-                    resolved_ref.catalog
+                    "failed to resolve catalog: {}.{}.{}",
+                    resolved_ref.catalog, resolved_ref.schema, resolved_ref.table
                 ))
             })?
             .schema(resolved_ref.schema)
             .ok_or_else(|| {
                 DataFusionError::Plan(format!(
-                    "failed to resolve schema: {}",
-                    resolved_ref.schema
+                    "failed to resolve schema: {}.{}.{}",
+                    resolved_ref.catalog, resolved_ref.schema, resolved_ref.table
                 ))
             })
     }
@@ -1723,15 +1793,14 @@ impl SessionState {
 
 impl ContextProvider for SessionState {
     fn get_table_provider(&self, name: TableReference) -> Result<Arc<dyn TableSource>> {
+        let resolved_ref = self.resolve_table_ref(name);
 
         // collect dependencies
-        let package_name = basename(&PACKAGE_PATH_IN_SCOPE.lock().unwrap()[0]);
-        let module_name = basename(&MODULE_PATH_IN_SCOPE.lock().unwrap()[0]);         
-        let resolved_ref = self.resolve_table_ref_in_scope(name, &package_name, &module_name);
-        // TODO: delete this eventually...
-        println!("---- FROM {}.{}.{}",resolved_ref.catalog, resolved_ref.schema, resolved_ref.table );
-        USE_DEPS.lock().unwrap().insert(resolved_ref.catalog.to_owned()+"."+ &resolved_ref.schema+"."+ &resolved_ref.table);
-        
+        USE_DEPS.lock().unwrap().insert(format!(
+            "{}.{}.{}",
+            &resolved_ref.catalog, &resolved_ref.schema, &resolved_ref.table
+        ));
+
         match self.schema_for_ref(resolved_ref) {
             Ok(schema) => {
                 let provider = schema.table(resolved_ref.table).ok_or_else(|| {
@@ -1744,7 +1813,7 @@ impl ContextProvider for SessionState {
             }
             Err(e) => {
                 // TODO: delete this eventually...
-                eprintln!("name resolution failed {:?}", e );
+                eprintln!("name resolution failed {:?}", e);
                 Err(e)
             }
         }
@@ -2397,7 +2466,7 @@ mod tests {
         ctx.sql("CREATE SCHEMA abc").await?.collect().await?;
 
         // Add table to schema
-        ctx.sql("CREATE TABLE abc.y AS VALUES (1,2,3)")
+        ctx.sql("CREATE TABLE datafusion.abc.y AS VALUES (1,2,3)")
             .await?
             .collect()
             .await?;
