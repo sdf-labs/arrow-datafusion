@@ -139,22 +139,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     }
 
     /// Generate a logical plan from an DataFusion SQL statement
-    pub fn statement_to_plan_with_scope(&self, statement: DFStatement) -> Result<(LogicalPlan, String, String)> {
-        match statement {
-            DFStatement::CreateExternalTable(s, package_path, module_path) => 
-                self.external_table_to_plan(s).map(|p| (p,package_path, module_path)),
-            DFStatement::Statement(s, package_path, module_path) => 
-                self.sql_create_statement_to_plan(*s).map(|p| (p,package_path, module_path)),
-            DFStatement::DescribeTable(s,package_path, module_path) => 
-                self.describe_table_to_plan(s).map(|p| (p,package_path, module_path)),
-          }
-    }
-
     pub fn statement_to_plan(&self, statement: DFStatement) -> Result<LogicalPlan> {
         match statement {
-            DFStatement::CreateExternalTable(s, _, _) => self.external_table_to_plan(s),
-            DFStatement::Statement(s, _, _) => self.sql_statement_to_plan(*s),
-            DFStatement::DescribeTable(s,__, _) => self.describe_table_to_plan(s),
+            DFStatement::CreateExternalTable(s) => self.external_table_to_plan(s),
+            DFStatement::Statement(s) => self.sql_statement_to_plan(*s),
+            DFStatement::DescribeTable(s) => self.describe_table_to_plan(s),
         }
     }
 
