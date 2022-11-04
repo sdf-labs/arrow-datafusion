@@ -243,14 +243,14 @@ impl SessionContext {
     /// Creates a new session context using the provided session state.
     pub fn with_state_and_scope(
         state: SessionState,
-        package_path: String,
-        module_path: String,
+        catalog: String,
+        schema: String,
     ) -> Self {
         let mut state = state.to_owned();
-        if package_path != "" {
-            state.inject_scope_into_default_catalog_and_schema(
-                &package_path,
-                &module_path,
+        if catalog != "" {
+            state.with_new_default_catalog_and_schema(
+                &catalog,
+                &schema,
             );
         };
         Self {
@@ -286,21 +286,19 @@ impl SessionContext {
         self.state.read().config.clone()
     }
 
-    /// Creates a [`DataFrame`] taking a plan within a package/module context
+    /// Creates a [`DataFrame`] taking a plan within a catalog/schema context
     pub async fn plan_with_scope(
         &mut self,
         plan: LogicalPlan,
-        package_path: String,
-        module_path: String,
+        catalog: String,
+        schema: String,
     ) -> Result<Arc<DataFrame>> {
-         let fresh_self = if package_path != "" {
+         if catalog != "" {
             let state = self.state();
-            Self::with_state_and_scope(state, package_path, module_path)
+            Self::with_state_and_scope(state, catalog, schema)
         } else {
             self.to_owned()
-        };
-
-        fresh_self.plan(plan).await
+        }.plan(plan).await
     }
     /// Creates a [`DataFrame`] from a logical plan that will execute a SQL query.
     ///
@@ -1558,18 +1556,17 @@ pub fn default_session_builder(config: SessionConfig) -> SessionState {
 }
 
 impl SessionState {
-    /// test
-    pub fn inject_scope_into_default_catalog_and_schema<'a>(
+
+    /// Updates SessionState using the provided catalog and schema
+    pub fn with_new_default_catalog_and_schema<'a>(
         &'a mut self,
-        current_package_name: &'a str,
-        current_module_name: &'a str,
+        catalog: &'a str,
+        schema: &'a str,
     ) -> () {
-        if current_package_name != "" {
-            let package_name = basename(current_package_name);
-            let module_name = basename(current_module_name);
+        if catalog != "" {
             let config = self.config.clone();
             self.config =
-                config.with_default_catalog_and_schema(package_name, module_name);
+                config.with_default_catalog_and_schema(catalog, schema);
         }
     }
 
