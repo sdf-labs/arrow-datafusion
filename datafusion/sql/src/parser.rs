@@ -39,9 +39,11 @@ use std::sync::Mutex;
 
 lazy_static! {
     /// collects all files that have been visited so far
-    static ref VISITED_FILES: Mutex<HashSet<String>> = Mutex::new(HashSet::new());
+    pub static ref VISITED_FILES: Mutex<HashSet<String>> = Mutex::new(HashSet::new());
     // collects all packages that have been visited so far
     static ref VISITED_CATALOGS: Mutex<HashSet<String>> = Mutex::new(HashSet::new());
+    // collects all external table locations, catalog.schema.table -> relative path
+    pub static ref LOCATIONS: Mutex<HashSet<String>> = Mutex::new(HashSet::new());
 }
 
 static CATALOG_ROOT: &str = "sdf.pkg.yml";
@@ -168,6 +170,7 @@ pub enum Statement {
 pub struct StatementMeta {
     pub catalog: String,
     pub schema_path: String,
+    pub table: String,
     pub line_number: i32,
 }
 
@@ -177,6 +180,7 @@ impl StatementMeta {
         StatementMeta {
             catalog: String::new(),
             schema_path: String::new(),
+            table: String::new(),
             line_number: 0,
         }
     }
@@ -186,6 +190,17 @@ impl StatementMeta {
         StatementMeta {
             catalog,
             schema_path,
+            table: String::new(),
+            line_number: 0,
+        }
+    }
+    /// An statement definition location without line number
+    //   That's' what Datafusion gives us today
+    pub fn new_with_table(catalog: String, schema_path: String, table: String)  -> Self {
+        StatementMeta {
+            catalog,
+            schema_path,
+            table,
             line_number: 0,
         }
     }
@@ -361,7 +376,7 @@ impl<'a> DFParser<'a> {
         let workspace_path = parser.workspace_path.clone();
         match next.clone() {
             Token::SingleQuotedString(schema_path) => {
-                // we are staying in the same package -- we are reusing parser.catalog
+                // we are staying in the same catalog -- we are reusing parser.catalog
 
                 // compute filename
                 let schema = basename(&schema_path);
@@ -405,7 +420,7 @@ impl<'a> DFParser<'a> {
                 )
             }
             Token::Word(w) => {
-                // switch to a possibly new package
+                // switch to a possibly new catalog
 
                 //parse
                 let catalog = w.value.clone();
@@ -414,7 +429,7 @@ impl<'a> DFParser<'a> {
                     Ok(id) => id.value,
                     Err(_) => "".to_owned(),
                 };
-                // check package/module naming
+                // check catalog/schema naming
                 let regex = Regex::new(r"^[a-z0-9_]+$").unwrap();
                 if !regex.is_match(&catalog) {
                     return parser.wrong_use(&format!("Catalog names must only be lowercase, digits or '_', found {}",catalog), next );
@@ -449,7 +464,7 @@ impl<'a> DFParser<'a> {
                     .unwrap()
                     .insert(schema_filename.clone());
 
-                // check module file
+                // check schema file
                 if !Path::new(&schema_filename).is_file() {
                     return parser.wrong_use(
                         &format!("Missing schema file {}", schema_filename),
@@ -539,7 +554,7 @@ impl<'a> DFParser<'a> {
                         // };
                         Ok((
                             Statement::Statement(Box::from(stm)),
-                            self.with_meta(),
+                            self.with_meta("".to_owned()),
                         ))
                     }
                 }
@@ -547,7 +562,7 @@ impl<'a> DFParser<'a> {
             _ => {
                 // use the native parser
                 let stm = self.parser.parse_statement()?;
-                Ok((Statement::Statement(Box::from(stm)), self.with_meta()))
+                Ok((Statement::Statement(Box::from(stm)), self.with_meta("".to_owned())))
             }
         }
     }
@@ -558,7 +573,7 @@ impl<'a> DFParser<'a> {
         let des = DescribeTable {
             table_name: table_name.to_string(),
         };
-        Ok((Statement::DescribeTable(des), self.with_meta()))
+        Ok((Statement::DescribeTable(des), self.with_meta( table_name.to_string())))
     }
 
     /// Parse a SQL CREATE statement
@@ -566,15 +581,22 @@ impl<'a> DFParser<'a> {
         if self.parser.parse_keyword(Keyword::EXTERNAL) {
             self.parse_create_external_table()
         } else {
+            let stm = self.parser.parse_create()?;
+            let table = match  &stm {
+                SQLStatement::CreateView { name, ..} 
+                | SQLStatement::CreateTable { name, .. } 
+                | SQLStatement::CreateVirtualTable { name, ..} => name.to_owned(),
+                _ => { sqlparser::ast::ObjectName(vec![])}
+               };
             Ok((
-                Statement::Statement(Box::from(self.parser.parse_create()?)),
-                self.with_meta(),
+                Statement::Statement(Box::from(stm)),
+                self.with_meta(table.to_string()),
             ))
         }
     }
 
-    fn with_meta(&mut self) -> StatementMeta {
-        StatementMeta::new(self.catalog.to_owned(), self.schema.to_owned())
+    fn with_meta(&mut self, table: String) -> StatementMeta {
+        StatementMeta::new_with_table(self.catalog.to_owned(), self.schema.to_owned(), table)
     }
 
     fn parse_partitions(&mut self) -> Result<Vec<String>, ParserError> {
@@ -728,10 +750,11 @@ impl<'a> DFParser<'a> {
             if_not_exists,
             file_compression_type,
         };
+
         Ok((
             Statement::CreateExternalTable(create),
-            self.with_meta()),
-        ))
+            self.with_meta(table_name.to_string().to_owned())),
+        )
     }
 
     /// Parses the set of valid formats

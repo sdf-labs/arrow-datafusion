@@ -21,7 +21,6 @@ use crate::{
         catalog::{CatalogList, MemoryCatalogList},
         information_schema::CatalogWithInformationSchema,
     },
-
     datasource::listing::{ListingOptions, ListingTable},
     datasource::{
         file_format::{
@@ -40,7 +39,7 @@ use crate::{
 pub use datafusion_physical_expr::execution_props::ExecutionProps;
 use datafusion_physical_expr::var_provider::is_system_variables;
 use parking_lot::RwLock;
-use std::{str::FromStr};
+use std::str::FromStr;
 use std::sync::Arc;
 use std::{
     any::{Any, TypeId},
@@ -71,10 +70,10 @@ use crate::logical_expr::{
     TableSource, TableType, UNNAMED_TABLE,
 };
 use crate::optimizer::optimizer::{OptimizerConfig, OptimizerRule};
-use datafusion_sql::{ResolvedTableReference, TableReference}; //, parser::basename};
 use crate::physical_optimizer::coalesce_batches::CoalesceBatches;
 use crate::physical_optimizer::merge_exec::AddCoalescePartitionsExec;
 use crate::physical_optimizer::repartition::Repartition;
+use datafusion_sql::{ResolvedTableReference, TableReference}; 
 
 use crate::config::{
     ConfigOptions, OPT_BATCH_SIZE, OPT_COALESCE_BATCHES, OPT_COALESCE_TARGET_BATCH_SIZE,
@@ -103,14 +102,6 @@ use uuid::Uuid;
 use super::options::{
     AvroReadOptions, CsvReadOptions, NdJsonReadOptions, ParquetReadOptions,
 };
-
-/// Removes directory path and returns the file name; like path.filename, but for strings
-fn basename(path: &str) -> String {
-    match path.rfind('/') {
-        Some(i) => path[i + 1..].to_owned(),
-        None => path.to_owned(),
-    }
-}
 
 /// The default catalog name - this impacts what SQL queries use if not specified
 const DEFAULT_CATALOG: &str = "datafusion";
@@ -179,17 +170,59 @@ lazy_static! {
     static ref USE_DEPS: Mutex<HashSet<String>> = Mutex::new(HashSet::new());
 }
 
-/// fully qualified name of a table reference, could go into table_reference
-fn fully_qualified_name(table_reference: TableReference, catalog: &str, schema: &str)-> String{
-    match table_reference{
-        TableReference::Bare { table } => format!("{}.{}.{}", catalog, schema, table),
-        TableReference::Partial { schema, table } => format!("{}.{}.{}", catalog, schema, table),
-        TableReference::Full { catalog, schema, table } => format!("{}.{}.{}", catalog, schema, table),
+/// Return fully qualified name of a table reference
+fn qualify_table_reference(
+    table_reference: &TableReference,
+    catalog: &str,
+    schema: &str,
+) -> String {
+    if catalog == "" {
+        match table_reference {
+            TableReference::Bare { table } => format!("{}", table),
+            TableReference::Partial { schema, table } => {
+                format!("{}.{}", schema, table)
+            }
+            TableReference::Full {
+                catalog,
+                schema,
+                table,
+            } => format!("{}.{}.{}", catalog, schema, table),
+        }
+    } else {
+        match table_reference {
+            TableReference::Bare { table } => format!("{}.{}.{}", catalog, schema, table),
+            TableReference::Partial { schema, table } => {
+                format!("{}.{}.{}", catalog, schema, table)
+            }
+            TableReference::Full {
+                catalog,
+                schema,
+                table,
+            } => format!("{}.{}.{}", catalog, schema, table),
+        }
     }
 }
 
-fn update_def_use_and_return(tr: TableReference, state: SessionState, result: Result<Arc<DataFrame>>) -> Result<Arc<DataFrame>> {
-    let qn = fully_qualified_name(tr, &state.config.default_catalog, &state.config.default_schema );
+/// Return fully qualified name of a table name
+fn qualify_table_name(name: &str, catalog: &str, schema: &str) -> String {
+    if catalog == "" {
+        name.to_owned()
+    } else {
+        qualify_table_reference(&TableReference::from(name), catalog, schema)
+    }
+}
+
+/// Update definition-use chain with collected use dep
+fn update_def_use_and_return(
+    tr: TableReference,
+    state: SessionState,
+    result: Result<Arc<DataFrame>>,
+) -> Result<Arc<DataFrame>> {
+    let qn = qualify_table_reference(
+        &tr,
+        &state.config.default_catalog,
+        &state.config.default_schema,
+    );
     result.and_then(|op| {
         DEF_USE_DEPS
             .lock()
@@ -199,7 +232,6 @@ fn update_def_use_and_return(tr: TableReference, state: SessionState, result: Re
         Ok(op)
     })
 }
-
 
 impl Default for SessionContext {
     fn default() -> Self {
@@ -211,6 +243,11 @@ impl SessionContext {
     /// Creates a new execution context using a default session configuration.
     pub fn new() -> Self {
         Self::with_config(SessionConfig::new())
+    }
+    /// Returns the table name, qualified wih default catalog and default schema
+    pub fn qualify_table_name(&self, name: &str) -> String {
+        let config = self.state().config;
+        qualify_table_name(name, &config.default_catalog, &config.default_schema)
     }
 
     /// Creates a new session context using the provided session configuration.
@@ -226,7 +263,6 @@ impl SessionContext {
             session_id: state.session_id.clone(),
             session_start_time: chrono::Utc::now(),
             state: Arc::new(RwLock::new(state)),
-
         }
     }
 
@@ -236,7 +272,6 @@ impl SessionContext {
             session_id: state.session_id.clone(),
             session_start_time: chrono::Utc::now(),
             state: Arc::new(RwLock::new(state)),
-
         }
     }
 
@@ -248,16 +283,12 @@ impl SessionContext {
     ) -> Self {
         let mut state = state.to_owned();
         if catalog != "" {
-            state.with_new_default_catalog_and_schema(
-                &catalog,
-                &schema,
-            );
+            state.with_new_default_catalog_and_schema(&catalog, &schema);
         };
         Self {
             session_id: state.session_id.clone(),
             session_start_time: chrono::Utc::now(),
             state: Arc::new(RwLock::new(state)),
-
         }
     }
 
@@ -267,8 +298,10 @@ impl SessionContext {
         table_name: &str,
         batch: RecordBatch,
     ) -> Result<Option<Arc<dyn TableProvider>>> {
+        // TODO TBD Qualified or not? let table_name = self.qualify_table_name(&table_name);
+        let table_name = table_name.to_owned();
         let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
-        self.register_table(table_name, Arc::new(table))
+        self.register_table(table_name.as_str(), Arc::new(table))
     }
 
     /// Return the [RuntimeEnv] used to run queries with this [SessionContext]
@@ -293,12 +326,15 @@ impl SessionContext {
         catalog: String,
         schema: String,
     ) -> Result<Arc<DataFrame>> {
-         if catalog != "" {
+
+        if catalog != "" {
             let state = self.state();
             Self::with_state_and_scope(state, catalog, schema)
         } else {
             self.to_owned()
-        }.plan(plan).await
+        }
+        .plan(plan)
+        .await
     }
     /// Creates a [`DataFrame`] from a logical plan that will execute a SQL query.
     ///
@@ -309,8 +345,6 @@ impl SessionContext {
         self.plan(logical_plan).await
     }
 
-
-
     /// Creates a [`DataFrame`] taking a plan.
     ///
     /// This method is `async` because queries of type `CREATE EXTERNAL TABLE`
@@ -318,19 +352,20 @@ impl SessionContext {
     pub async fn plan(&self, plan: LogicalPlan) -> Result<Arc<DataFrame>> {
         match plan {
             LogicalPlan::CreateExternalTable(cmd) => {
+                let name = self.qualify_table_name(&cmd.name); 
                 let result = match cmd.file_type.as_str() {
                     "PARQUET" | "CSV" | "JSON" | "AVRO" => {
-                        let cmd_name = cmd.clone().name.clone();
-                        println!("-- CREATE EXTERNAL TABLE {};", cmd_name);
+                       
+                        println!("-- CREATE EXTERNAL TABLE {};", name);
                         self.create_listing_table(&cmd).await
                     }
                     _ => {
-                        println!("-- CREATE CUSTOM TABLE {};", cmd.name);
+                        println!("-- CREATE CUSTOM TABLE {};", name);
                         self.create_custom_table(&cmd).await
                     }
                 };
-                let tr = TableReference::from(cmd.name.as_str());
-                let state= self.state();
+                let tr = TableReference::from(name.as_str());
+                let state = self.state();
                 update_def_use_and_return(tr, state, result)
             }
 
@@ -340,6 +375,7 @@ impl SessionContext {
                 if_not_exists,
                 or_replace,
             }) => {
+                let name = self.qualify_table_name(&name);
                 println!("-- CREATE MEMORY TABLE {};", name);
                 let tr = TableReference::from(name.as_str());
 
@@ -383,7 +419,7 @@ impl SessionContext {
                     ))),
                 };
 
-                let state= self.state();
+                let state = self.state();
                 update_def_use_and_return(tr, state, result)
             }
 
@@ -393,6 +429,7 @@ impl SessionContext {
                 or_replace,
                 definition,
             }) => {
+                let name = self.qualify_table_name(&name);
                 println!("-- CREATE VIEW {};", name);
 
                 let view = self.table(name.as_str());
@@ -419,7 +456,7 @@ impl SessionContext {
                     ))),
                 };
                 let tr = TableReference::from(name.as_str());
-                let state= self.state();
+                let state = self.state();
                 update_def_use_and_return(tr, state, result)
             }
 
@@ -546,7 +583,8 @@ impl SessionContext {
             .create(cmd.name.as_str(), cmd.location.as_str())
             .await?;
         */
-        self.register_table(cmd.name.as_str(), table)?;
+        let name = self.qualify_table_name(&cmd.name).to_owned();
+        self.register_table(name.as_str(), table)?;
         let plan = LogicalPlanBuilder::empty(false).build()?;
         Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
     }
@@ -586,7 +624,8 @@ impl SessionContext {
                 JsonFormat::default().with_file_compression_type(file_compression_type),
             ),
         };
-        let table = self.table(cmd.name.as_str());
+        let name = self.qualify_table_name(&cmd.name).to_owned();
+        let table = self.table(name.as_str());
         match (cmd.if_not_exists, table) {
             (true, Ok(_)) => self.return_empty_dataframe(),
             (_, Err(_)) => {
@@ -604,7 +643,7 @@ impl SessionContext {
                     table_partition_cols: cmd.table_partition_cols.clone(),
                 };
                 self.register_listing_table(
-                    cmd.name.as_str(),
+                    name.as_str(),
                     cmd.location.clone(),
                     options,
                     provided_schema,
@@ -1146,8 +1185,6 @@ impl SessionContext {
     }
 }
 
-
-
 impl FunctionRegistry for SessionContext {
     fn udfs(&self) -> HashSet<String> {
         self.state.read().udfs()
@@ -1556,7 +1593,6 @@ pub fn default_session_builder(config: SessionConfig) -> SessionState {
 }
 
 impl SessionState {
-
     /// Updates SessionState using the provided catalog and schema
     pub fn with_new_default_catalog_and_schema<'a>(
         &'a mut self,
@@ -1565,8 +1601,7 @@ impl SessionState {
     ) -> () {
         if catalog != "" {
             let config = self.config.clone();
-            self.config =
-                config.with_default_catalog_and_schema(catalog, schema);
+            self.config = config.with_default_catalog_and_schema(catalog, schema);
         }
     }
 
@@ -1651,8 +1686,6 @@ impl SessionState {
             .into()
             .resolve(&self.config.default_catalog, &self.config.default_schema)
     }
-
-
 
     fn schema_for_ref<'a>(
         &'a self,
@@ -1800,8 +1833,6 @@ impl ContextProvider for SessionState {
                 Ok(provider_as_source(provider))
             }
             Err(e) => {
-                // TODO: delete this eventually...
-                eprintln!("name resolution failed {:?}", e);
                 Err(e)
             }
         }
