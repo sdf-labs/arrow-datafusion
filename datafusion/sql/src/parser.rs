@@ -27,7 +27,7 @@ use sqlparser::{
     tokenizer::{Token, Tokenizer},
 };
 use std::{
-    collections::{HashSet, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     fmt, fs,
     path::{Path, PathBuf},
 };
@@ -41,22 +41,25 @@ lazy_static! {
     /// collects all files that have been visited so far
     pub static ref VISITED_FILES: Mutex<HashSet<String>> = Mutex::new(HashSet::new());
     // collects all packages that have been visited so far
-    static ref VISITED_CATALOGS: Mutex<HashSet<String>> = Mutex::new(HashSet::new());
+    pub static ref VISITED_CATALOGS: Mutex<HashSet<String>> = Mutex::new(HashSet::new());
     // collects all external table locations, catalog.schema.table -> relative path
-    pub static ref LOCATIONS: Mutex<HashSet<String>> = Mutex::new(HashSet::new());
+    pub static ref LOCATIONS: Mutex<HashMap<String, String>> = Mutex::new(HashMap::new());
 }
+pub static WORKSPACE_FILENAME: &str = "workspace.yml";
+pub static CATALOG_FILENAME: &str = "catalog.yml";
+pub static SCHEMA_FILENAME_SUFFIX: &str = "schema.yml";
+pub static DIRECTORY_FOR_TEMPORARIES: &str = ".sdf";
 
-static CATALOG_ROOT: &str = "sdf.pkg.yml";
-
-pub fn init_visited(target_filename: &String, package_name: &String) {
+pub fn add_to_visited(target_filename: &str, catalog: &str, catalog_filename: &str) {
     VISITED_FILES
         .lock()
         .unwrap()
-        .insert(target_filename.clone());
-    VISITED_CATALOGS
+        .insert(target_filename.to_owned());
+    VISITED_FILES
         .lock()
         .unwrap()
-        .insert(package_name.clone());
+        .insert(catalog_filename.to_owned());
+    VISITED_CATALOGS.lock().unwrap().insert(catalog.to_owned());
 }
 
 // Removes directory path and returns the file name; like path.filename, but for strings
@@ -69,12 +72,12 @@ pub fn basename(path: &str) -> String {
 
 pub fn find_package_file(starting_directory: &Path) -> Option<PathBuf> {
     let mut path: PathBuf = starting_directory.into();
-    let root_filename = Path::new(CATALOG_ROOT);
+    let root_filename = Path::new(CATALOG_FILENAME);
 
     loop {
         path.push(root_filename);
         if path.is_file() {
-            break Some(path.canonicalize().unwrap());
+            break Some(path.to_path_buf().canonicalize().unwrap());
         }
         if !(path.pop() && path.pop()) {
             // remove file && remove parent
@@ -101,7 +104,6 @@ macro_rules! parser_err {
 }
 
 fn parse_file_type(s: &str) -> Result<String, ParserError> {
-    // let res = FILENAME.lock().unwrap().replace(String::from("other"));
     Ok(s.to_uppercase())
 }
 
@@ -168,6 +170,7 @@ pub enum Statement {
 ///
 /// The location at which the statement is defined.
 pub struct StatementMeta {
+    pub workspace_path: String,
     pub catalog: String,
     pub schema_path: String,
     pub table: String,
@@ -178,26 +181,24 @@ impl StatementMeta {
     /// An empty statement definition location
     pub fn empty() -> Self {
         StatementMeta {
+            workspace_path: String::new(),
             catalog: String::new(),
             schema_path: String::new(),
             table: String::new(),
             line_number: 0,
         }
     }
+
     /// An statement definition location without line number
     //   That's' what Datafusion gives us today
-    pub fn new(catalog: String, schema_path: String) -> Self {
+    pub fn new(
+        workspace_path: String,
+        catalog: String,
+        schema_path: String,
+        table: String,
+    ) -> Self {
         StatementMeta {
-            catalog,
-            schema_path,
-            table: String::new(),
-            line_number: 0,
-        }
-    }
-    /// An statement definition location without line number
-    //   That's' what Datafusion gives us today
-    pub fn new_with_table(catalog: String, schema_path: String, table: String)  -> Self {
-        StatementMeta {
+            workspace_path,
             catalog,
             schema_path,
             table,
@@ -271,19 +272,20 @@ impl<'a> DFParser<'a> {
     /// Parse a SQL statement and produce a set of statements with dialect
     pub fn parse_sql_with_scope(
         sql: &str,
-        _filename: String,
-        catalog: String,
-        schema: String,
-        workspace_path: String,
+        _filename: &str,
+        catalog: &str,
+        schema: &str,
+        workspace_path: &str,
     ) -> Result<VecDeque<(Statement, StatementMeta)>, ParserError> {
+        // eprintln!("PARSE {} {} {} {} \n[{}\n]", _filename, workspace_path, catalog, schema, sql );
         let dialect = &GenericDialect {};
         DFParser::parse_sql_with_dialect_and_scope(
             sql,
             dialect,
-            _filename,
-            catalog,
-            schema,
-            workspace_path,
+            _filename.to_owned(),
+            catalog.to_owned(),
+            schema.to_owned(),
+            workspace_path.to_owned(),
         )
     }
     /// Parse a SQL statement and produce a set of statements
@@ -369,7 +371,7 @@ impl<'a> DFParser<'a> {
         let next = parser.parser.next_token();
         if parser.catalog == "" {
             return parser.wrong_use(
-                &format!("Use statement can only be used in a catalog contexts; did you a miss to add a {} file", CATALOG_ROOT),
+                &format!("Use statement can only be used in a catalog contexts; did you a miss to add a {} file", CATALOG_FILENAME),
                 next,
             );
         }
@@ -440,7 +442,7 @@ impl<'a> DFParser<'a> {
 
                 // check whether new catalog exists
                 let catalog_file =
-                    format!("{}/{}/{}", parser.workspace_path, catalog, CATALOG_ROOT);
+                    format!("{}/{}/{}", parser.workspace_path, catalog, CATALOG_FILENAME);
                 if !Path::new(&catalog_file).is_file() {
                     if w.quote_style == None {
                         return parser.wrong_use(
@@ -463,6 +465,7 @@ impl<'a> DFParser<'a> {
                     .lock()
                     .unwrap()
                     .insert(schema_filename.clone());
+                VISITED_FILES.lock().unwrap().insert(catalog_file.clone());
 
                 // check schema file
                 if !Path::new(&schema_filename).is_file() {
@@ -492,7 +495,7 @@ impl<'a> DFParser<'a> {
                     workspace_path,
                 )
             }
-            unexpected => parser.expected("Module identifier", unexpected)?,
+            unexpected => parser.expected("Schema identifier", unexpected)?,
         }
         // }
     }
@@ -562,7 +565,10 @@ impl<'a> DFParser<'a> {
             _ => {
                 // use the native parser
                 let stm = self.parser.parse_statement()?;
-                Ok((Statement::Statement(Box::from(stm)), self.with_meta("".to_owned())))
+                Ok((
+                    Statement::Statement(Box::from(stm)),
+                    self.with_meta("".to_owned()),
+                ))
             }
         }
     }
@@ -573,7 +579,10 @@ impl<'a> DFParser<'a> {
         let des = DescribeTable {
             table_name: table_name.to_string(),
         };
-        Ok((Statement::DescribeTable(des), self.with_meta( table_name.to_string())))
+        Ok((
+            Statement::DescribeTable(des),
+            self.with_meta(table_name.to_string()),
+        ))
     }
 
     /// Parse a SQL CREATE statement
@@ -582,12 +591,12 @@ impl<'a> DFParser<'a> {
             self.parse_create_external_table()
         } else {
             let stm = self.parser.parse_create()?;
-            let table = match  &stm {
-                SQLStatement::CreateView { name, ..} 
-                | SQLStatement::CreateTable { name, .. } 
-                | SQLStatement::CreateVirtualTable { name, ..} => name.to_owned(),
-                _ => { sqlparser::ast::ObjectName(vec![])}
-               };
+            let table = match &stm {
+                SQLStatement::CreateView { name, .. }
+                | SQLStatement::CreateTable { name, .. }
+                | SQLStatement::CreateVirtualTable { name, .. } => name.to_owned(),
+                _ => sqlparser::ast::ObjectName(vec![]),
+            };
             Ok((
                 Statement::Statement(Box::from(stm)),
                 self.with_meta(table.to_string()),
@@ -596,7 +605,12 @@ impl<'a> DFParser<'a> {
     }
 
     fn with_meta(&mut self, table: String) -> StatementMeta {
-        StatementMeta::new_with_table(self.catalog.to_owned(), self.schema.to_owned(), table)
+        StatementMeta::new(
+            self.workspace_path.to_owned(),
+            self.catalog.to_owned(),
+            self.schema.to_owned(),
+            table,
+        )
     }
 
     fn parse_partitions(&mut self) -> Result<Vec<String>, ParserError> {
@@ -738,6 +752,7 @@ impl<'a> DFParser<'a> {
 
         self.parser.expect_keyword(Keyword::LOCATION)?;
         let location = self.parser.parse_literal_string()?;
+        let location_clone = location.clone();
 
         let create = CreateExternalTable {
             name: table_name.to_string(),
@@ -751,10 +766,29 @@ impl<'a> DFParser<'a> {
             file_compression_type,
         };
 
+        let name = match table_name.0.len() {
+            1 => format!("{}.{}.{}", self.catalog, self.schema, table_name.0[0].value),
+            2 => format!(
+                "{}.{}.{}",
+                self.catalog, table_name.0[0].value, table_name.0[1].value
+            ),
+            3 => table_name.to_string(),
+            _ => return Err(ParserError::ParserError("unexpected case".to_owned())),
+        };
+        let file_location = if location_clone.ends_with("parquet")
+            || location_clone.ends_with("csv")
+            || location_clone.ends_with("ndjson")
+        {
+            location_clone
+        } else {
+            format!("{}/*", location_clone)
+        };
+        LOCATIONS.lock().unwrap().insert(name, file_location);
+
         Ok((
             Statement::CreateExternalTable(create),
-            self.with_meta(table_name.to_string().to_owned())),
-        )
+            self.with_meta(table_name.to_string().to_owned()),
+        ))
     }
 
     /// Parses the set of valid formats

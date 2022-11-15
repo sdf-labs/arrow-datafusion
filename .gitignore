@@ -98,3 +98,6 @@ dev/dist
 
 # CI
 arrow-ballista
+
+# SDF -- ignore all stuff in .sdf directories
+.sdf/
