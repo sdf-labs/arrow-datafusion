@@ -47,8 +47,8 @@ fn case_when() -> Result<()> {
 
     let sql = "SELECT CASE WHEN col_uint32 > 0 THEN 1 ELSE 0 END FROM test";
     let plan = test_sql(sql)?;
-    let expected = "Projection: CASE WHEN CAST(test.col_uint32 AS Int64) > Int64(0) THEN Int64(1) ELSE Int64(0) END\
-    \n  TableScan: test projection=[col_uint32]";
+    let expected = "Projection: CASE WHEN test.col_uint32 > UInt32(0) THEN Int64(1) ELSE Int64(0) END AS CASE WHEN test.col_uint32 > Int64(0) THEN Int64(1) ELSE Int64(0) END\
+                    \n  TableScan: test projection=[col_uint32]";
     assert_eq!(expected, format!("{:?}", plan));
     Ok(())
 }
@@ -91,7 +91,7 @@ fn unsigned_target_type() -> Result<()> {
     let sql = "SELECT col_utf8 FROM test WHERE col_uint32 > 0";
     let plan = test_sql(sql)?;
     let expected = "Projection: test.col_utf8\
-                    \n  Filter: CAST(test.col_uint32 AS Int64) > Int64(0)\
+                    \n  Filter: test.col_uint32 > UInt32(0)\
                     \n    TableScan: test projection=[col_uint32, col_utf8]";
     assert_eq!(expected, format!("{:?}", plan));
     Ok(())
@@ -117,7 +117,7 @@ fn semi_join_with_join_filter() -> Result<()> {
                AND test.col_uint32 != t2.col_uint32)";
     let plan = test_sql(sql)?;
     let expected = "Projection: test.col_utf8\
-                    \n  Semi Join: test.col_int32 = t2.col_int32 Filter: test.col_uint32 != t2.col_uint32\
+                    \n  LeftSemi Join: test.col_int32 = t2.col_int32 Filter: test.col_uint32 != t2.col_uint32\
                     \n    TableScan: test projection=[col_int32, col_uint32, col_utf8]\
                     \n    SubqueryAlias: t2\
                     \n      TableScan: test projection=[col_int32, col_uint32, col_utf8]";
@@ -133,7 +133,7 @@ fn anti_join_with_join_filter() -> Result<()> {
                AND test.col_uint32 != t2.col_uint32)";
     let plan = test_sql(sql)?;
     let expected = "Projection: test.col_utf8\
-                    \n  Anti Join: test.col_int32 = t2.col_int32 Filter: test.col_uint32 != t2.col_uint32\
+                    \n  LeftAnti Join: test.col_int32 = t2.col_int32 Filter: test.col_uint32 != t2.col_uint32\
                     \n    TableScan: test projection=[col_int32, col_uint32, col_utf8]\
                     \n    SubqueryAlias: t2\
                     \n      TableScan: test projection=[col_int32, col_uint32, col_utf8]";
@@ -148,7 +148,7 @@ fn where_exists_distinct() -> Result<()> {
                SELECT DISTINCT col_int32 FROM test t2 WHERE test.col_int32 = t2.col_int32)";
     let plan = test_sql(sql)?;
     let expected = "Projection: test.col_int32\
-                    \n  Semi Join: test.col_int32 = t2.col_int32\
+                    \n  LeftSemi Join: test.col_int32 = t2.col_int32\
                     \n    TableScan: test projection=[col_int32]\
                     \n    SubqueryAlias: t2\
                     \n      TableScan: test projection=[col_int32]";
@@ -163,9 +163,9 @@ fn intersect() -> Result<()> {
     INTERSECT SELECT col_int32, col_utf8 FROM test";
     let plan = test_sql(sql)?;
     let expected =
-        "Semi Join: test.col_int32 = test.col_int32, test.col_utf8 = test.col_utf8\
+        "LeftSemi Join: test.col_int32 = test.col_int32, test.col_utf8 = test.col_utf8\
     \n  Distinct:\
-    \n    Semi Join: test.col_int32 = test.col_int32, test.col_utf8 = test.col_utf8\
+    \n    LeftSemi Join: test.col_int32 = test.col_int32, test.col_utf8 = test.col_utf8\
     \n      Distinct:\
     \n        TableScan: test projection=[col_int32, col_utf8]\
     \n      TableScan: test projection=[col_int32, col_utf8]\
@@ -180,7 +180,7 @@ fn between_date32_plus_interval() -> Result<()> {
     WHERE col_date32 between '1998-03-18' AND cast('1998-03-18' as date) + INTERVAL '90 days'";
     let plan = test_sql(sql)?;
     let expected =
-        "Projection: COUNT(UInt8(1))\n  Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
+        "Projection: COUNT(Int64(1))\n  Aggregate: groupBy=[[]], aggr=[[COUNT(Int64(1))]]\
         \n    Filter: test.col_date32 >= Date32(\"10303\") AND test.col_date32 <= Date32(\"10393\")\
         \n      TableScan: test projection=[col_date32]";
     assert_eq!(expected, format!("{:?}", plan));
@@ -193,7 +193,7 @@ fn between_date64_plus_interval() -> Result<()> {
     WHERE col_date64 between '1998-03-18T00:00:00' AND cast('1998-03-18' as date) + INTERVAL '90 days'";
     let plan = test_sql(sql)?;
     let expected =
-        "Projection: COUNT(UInt8(1))\n  Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
+        "Projection: COUNT(Int64(1))\n  Aggregate: groupBy=[[]], aggr=[[COUNT(Int64(1))]]\
         \n    Filter: test.col_date64 >= Date64(\"890179200000\") AND test.col_date64 <= Date64(\"897955200000\")\
         \n      TableScan: test projection=[col_date64]";
     assert_eq!(expected, format!("{:?}", plan));
@@ -227,8 +227,6 @@ fn concat_ws_literals() -> Result<()> {
 }
 
 #[test]
-#[ignore]
-// https://github.com/apache/arrow-datafusion/issues/3938
 fn timestamp_nano_ts_none_predicates() -> Result<()> {
     let sql = "SELECT col_int32
         FROM test
@@ -237,25 +235,36 @@ fn timestamp_nano_ts_none_predicates() -> Result<()> {
     // a scan should have the now()... predicate folded to a single
     // constant and compared to the column without a cast so it can be
     // pushed down / pruned
-    let expected = "Projection: test.col_int32\n  Filter: test.col_ts_nano_utc < TimestampNanosecond(1666612093000000000, Some(\"UTC\"))\
-                    \n    TableScan: test projection=[col_int32, col_ts_nano_none]";
+    let expected =
+        "Projection: test.col_int32\
+         \n  Filter: test.col_ts_nano_none < TimestampNanosecond(1666612093000000000, None)\
+         \n    TableScan: test projection=[col_int32, col_ts_nano_none]";
     assert_eq!(expected, format!("{:?}", plan));
     Ok(())
 }
 
 #[test]
-fn timestamp_nano_ts_utc_predicates() -> Result<()> {
+fn timestamp_nano_ts_utc_predicates() {
     let sql = "SELECT col_int32
         FROM test
         WHERE col_ts_nano_utc < (now() - interval '1 hour')";
-    let plan = test_sql(sql)?;
+    let plan = test_sql(sql).unwrap();
     // a scan should have the now()... predicate folded to a single
     // constant and compared to the column without a cast so it can be
     // pushed down / pruned
-    let expected = "Projection: test.col_int32\n  Filter: test.col_ts_nano_utc < TimestampNanosecond(1666612093000000000, Some(\"UTC\"))\
-                    \n    TableScan: test projection=[col_int32, col_ts_nano_utc]";
+    let expected =
+        "Projection: test.col_int32\n  Filter: test.col_ts_nano_utc < TimestampNanosecond(1666612093000000000, Some(\"+00:00\"))\
+         \n    TableScan: test projection=[col_int32, col_ts_nano_utc]";
     assert_eq!(expected, format!("{:?}", plan));
-    Ok(())
+}
+
+#[test]
+fn propagate_empty_relation() {
+    let sql = "SELECT col_int32 FROM test JOIN ( SELECT col_int32 FROM test WHERE false ) AS ta1 ON test.col_int32 = ta1.col_int32;";
+    let plan = test_sql(sql).unwrap();
+    // when children exist EmptyRelation, it will bottom-up propagate.
+    let expected = "EmptyRelation";
+    assert_eq!(expected, format!("{:?}", plan));
 }
 
 fn test_sql(sql: &str) -> Result<LogicalPlan> {
@@ -270,8 +279,8 @@ fn test_sql(sql: &str) -> Result<LogicalPlan> {
     let plan = sql_to_rel.sql_statement_to_plan(statement.clone()).unwrap();
 
     // hard code the return value of now()
-    let now_time =
-        DateTime::<Utc>::from_utc(NaiveDateTime::from_timestamp(1666615693, 0), Utc);
+    let ts = NaiveDateTime::from_timestamp_opt(1666615693, 0).unwrap();
+    let now_time = DateTime::<Utc>::from_utc(ts, Utc);
     let mut config = OptimizerConfig::new()
         .with_skip_failing_rules(false)
         .with_query_execution_start_time(now_time);
@@ -305,7 +314,7 @@ impl ContextProvider for MySchemaProvider {
                     // timestamp with UTC timezone
                     Field::new(
                         "col_ts_nano_utc",
-                        DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
+                        DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".into())),
                         true,
                     ),
                 ],
@@ -329,6 +338,13 @@ impl ContextProvider for MySchemaProvider {
     }
 
     fn get_variable_type(&self, _variable_names: &[String]) -> Option<DataType> {
+        None
+    }
+
+    fn get_config_option(
+        &self,
+        _variable: &str,
+    ) -> Option<datafusion_common::ScalarValue> {
         None
     }
 }

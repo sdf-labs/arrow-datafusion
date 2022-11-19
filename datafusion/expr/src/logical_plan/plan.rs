@@ -26,7 +26,7 @@ use crate::utils::{
 use crate::{Expr, ExprSchemable, TableProviderFilterPushDown, TableSource};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::{plan_err, Column, DFSchema, DFSchemaRef, DataFusionError};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -106,6 +106,8 @@ pub enum LogicalPlan {
     Extension(Extension),
     /// Remove duplicate rows from the input
     Distinct(Distinct),
+    /// Set a Variable
+    SetVariable(SetVariable),
 }
 
 impl LogicalPlan {
@@ -144,6 +146,7 @@ impl LogicalPlan {
             LogicalPlan::CreateCatalog(CreateCatalog { schema, .. }) => schema,
             LogicalPlan::DropTable(DropTable { schema, .. }) => schema,
             LogicalPlan::DropView(DropView { schema, .. }) => schema,
+            LogicalPlan::SetVariable(SetVariable { schema, .. }) => schema,
         }
     }
 
@@ -200,7 +203,9 @@ impl LogicalPlan {
             | LogicalPlan::CreateView(CreateView { input, .. })
             | LogicalPlan::Filter(Filter { input, .. }) => input.all_schemas(),
             LogicalPlan::Distinct(Distinct { input, .. }) => input.all_schemas(),
-            LogicalPlan::DropTable(_) | LogicalPlan::DropView(_) => vec![],
+            LogicalPlan::DropTable(_)
+            | LogicalPlan::DropView(_)
+            | LogicalPlan::SetVariable(_) => vec![],
         }
     }
 
@@ -249,7 +254,7 @@ impl LogicalPlan {
             LogicalPlan::Sort(Sort { expr, .. }) => expr.clone(),
             LogicalPlan::Extension(extension) => extension.node.expressions(),
             // plans without expressions
-            LogicalPlan::TableScan { .. }
+            LogicalPlan::TableScan(_)
             | LogicalPlan::EmptyRelation(_)
             | LogicalPlan::Subquery(_)
             | LogicalPlan::SubqueryAlias(_)
@@ -260,10 +265,11 @@ impl LogicalPlan {
             | LogicalPlan::CreateCatalogSchema(_)
             | LogicalPlan::CreateCatalog(_)
             | LogicalPlan::DropTable(_)
+            | LogicalPlan::SetVariable(_)
             | LogicalPlan::DropView(_)
             | LogicalPlan::CrossJoin(_)
-            | LogicalPlan::Analyze { .. }
-            | LogicalPlan::Explain { .. }
+            | LogicalPlan::Analyze(_)
+            | LogicalPlan::Explain(_)
             | LogicalPlan::Union(_)
             | LogicalPlan::Distinct(_) => {
                 vec![]
@@ -305,6 +311,7 @@ impl LogicalPlan {
             | LogicalPlan::CreateCatalogSchema(_)
             | LogicalPlan::CreateCatalog(_)
             | LogicalPlan::DropTable(_)
+            | LogicalPlan::SetVariable(_)
             | LogicalPlan::DropView(_) => vec![],
         }
     }
@@ -378,17 +385,13 @@ pub trait PlanVisitor {
     /// visited. If Ok(true) is returned, the recursion continues. If
     /// Err(..) or Ok(false) are returned, the recursion stops
     /// immediately and the error, if any, is returned to `accept`
-    fn pre_visit(&mut self, plan: &LogicalPlan)
-        -> std::result::Result<bool, Self::Error>;
+    fn pre_visit(&mut self, plan: &LogicalPlan) -> Result<bool, Self::Error>;
 
     /// Invoked on a logical plan after all of its child inputs have
     /// been visited. The return value is handled the same as the
     /// return value of `pre_visit`. The provided default implementation
     /// returns `Ok(true)`.
-    fn post_visit(
-        &mut self,
-        _plan: &LogicalPlan,
-    ) -> std::result::Result<bool, Self::Error> {
+    fn post_visit(&mut self, _plan: &LogicalPlan) -> Result<bool, Self::Error> {
         Ok(true)
     }
 }
@@ -398,7 +401,7 @@ impl LogicalPlan {
     /// all nodes were visited, and Ok(false) if any call to
     /// `pre_visit` or `post_visit` returned Ok(false) and may have
     /// cut short the recursion
-    pub fn accept<V>(&self, visitor: &mut V) -> std::result::Result<bool, V::Error>
+    pub fn accept<V>(&self, visitor: &mut V) -> Result<bool, V::Error>
     where
         V: PlanVisitor,
     {
@@ -459,6 +462,7 @@ impl LogicalPlan {
             | LogicalPlan::CreateCatalogSchema(_)
             | LogicalPlan::CreateCatalog(_)
             | LogicalPlan::DropTable(_)
+            | LogicalPlan::SetVariable(_)
             | LogicalPlan::DropView(_) => true,
         };
         if !recurse {
@@ -490,7 +494,7 @@ impl LogicalPlan {
     fn all_inputs(&self) -> Vec<Arc<LogicalPlan>> {
         let mut inputs = vec![];
         for expr in self.expressions() {
-            self.collect_subqueries(&expr, &mut inputs);
+            Self::collect_subqueries(&expr, &mut inputs);
         }
         for input in self.inputs() {
             inputs.push(Arc::new(input.clone()));
@@ -498,11 +502,11 @@ impl LogicalPlan {
         inputs
     }
 
-    fn collect_subqueries(&self, expr: &Expr, sub: &mut Vec<Arc<LogicalPlan>>) {
+    fn collect_subqueries(expr: &Expr, sub: &mut Vec<Arc<LogicalPlan>>) {
         match expr {
             Expr::BinaryExpr(BinaryExpr { left, right, .. }) => {
-                self.collect_subqueries(left, sub);
-                self.collect_subqueries(right, sub);
+                Self::collect_subqueries(left, sub);
+                Self::collect_subqueries(right, sub);
             }
             Expr::Exists { subquery, .. } => {
                 sub.push(Arc::new(LogicalPlan::Subquery(subquery.clone())));
@@ -545,12 +549,12 @@ impl LogicalPlan {
     /// assert_eq!("Filter: t1.id = Int32(5)\n  TableScan: t1",
     ///             display_string);
     /// ```
-    pub fn display_indent(&self) -> impl fmt::Display + '_ {
+    pub fn display_indent(&self) -> impl Display + '_ {
         // Boilerplate structure to wrap LogicalPlan with something
         // that that can be formatted
         struct Wrapper<'a>(&'a LogicalPlan);
-        impl<'a> fmt::Display for Wrapper<'a> {
-            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        impl<'a> Display for Wrapper<'a> {
+            fn fmt(&self, f: &mut Formatter) -> fmt::Result {
                 let with_schema = false;
                 let mut visitor = IndentVisitor::new(f, with_schema);
                 match self.0.accept(&mut visitor) {
@@ -588,12 +592,12 @@ impl LogicalPlan {
     ///             \n  TableScan: t1 [id:Int32]",
     ///             display_string);
     /// ```
-    pub fn display_indent_schema(&self) -> impl fmt::Display + '_ {
+    pub fn display_indent_schema(&self) -> impl Display + '_ {
         // Boilerplate structure to wrap LogicalPlan with something
         // that that can be formatted
         struct Wrapper<'a>(&'a LogicalPlan);
-        impl<'a> fmt::Display for Wrapper<'a> {
-            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        impl<'a> Display for Wrapper<'a> {
+            fn fmt(&self, f: &mut Formatter) -> fmt::Result {
                 let with_schema = true;
                 let mut visitor = IndentVisitor::new(f, with_schema);
                 match self.0.accept(&mut visitor) {
@@ -634,12 +638,12 @@ impl LogicalPlan {
     ///   dot -Tpdf < /tmp/example.dot  > /tmp/example.pdf
     /// ```
     ///
-    pub fn display_graphviz(&self) -> impl fmt::Display + '_ {
+    pub fn display_graphviz(&self) -> impl Display + '_ {
         // Boilerplate structure to wrap LogicalPlan with something
         // that that can be formatted
         struct Wrapper<'a>(&'a LogicalPlan);
-        impl<'a> fmt::Display for Wrapper<'a> {
-            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        impl<'a> Display for Wrapper<'a> {
+            fn fmt(&self, f: &mut Formatter) -> fmt::Result {
                 writeln!(
                     f,
                     "// Begin DataFusion GraphViz Plan (see https://graphviz.org)"
@@ -686,12 +690,12 @@ impl LogicalPlan {
     ///
     /// assert_eq!("TableScan: t1", display_string);
     /// ```
-    pub fn display(&self) -> impl fmt::Display + '_ {
+    pub fn display(&self) -> impl Display + '_ {
         // Boilerplate structure to wrap LogicalPlan with something
         // that that can be formatted
         struct Wrapper<'a>(&'a LogicalPlan);
-        impl<'a> fmt::Display for Wrapper<'a> {
-            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        impl<'a> Display for Wrapper<'a> {
+            fn fmt(&self, f: &mut Formatter) -> fmt::Result {
                 match self.0 {
                     LogicalPlan::EmptyRelation(_) => write!(f, "EmptyRelation"),
                     LogicalPlan::Values(Values { ref values, .. }) => {
@@ -943,6 +947,11 @@ impl LogicalPlan {
                     }) => {
                         write!(f, "DropView: {:?} if not exist:={}", name, if_exists)
                     }
+                    LogicalPlan::SetVariable(SetVariable {
+                        variable, value, ..
+                    }) => {
+                        write!(f, "SetVariable: set {:?} to {:?}", variable, value)
+                    }
                     LogicalPlan::Distinct(Distinct { .. }) => {
                         write!(f, "Distinct:")
                     }
@@ -957,8 +966,8 @@ impl LogicalPlan {
     }
 }
 
-impl fmt::Debug for LogicalPlan {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+impl Debug for LogicalPlan {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         self.display_indent().fmt(f)
     }
 }
@@ -980,10 +989,14 @@ pub enum JoinType {
     Right,
     /// Full Join
     Full,
-    /// Semi Join
-    Semi,
-    /// Anti Join
-    Anti,
+    /// Left Semi Join
+    LeftSemi,
+    /// Right Semi Join
+    RightSemi,
+    /// Left Anti Join
+    LeftAnti,
+    /// Right Anti Join
+    RightAnti,
 }
 
 impl Display for JoinType {
@@ -993,8 +1006,10 @@ impl Display for JoinType {
             JoinType::Left => "Left",
             JoinType::Right => "Right",
             JoinType::Full => "Full",
-            JoinType::Semi => "Semi",
-            JoinType::Anti => "Anti",
+            JoinType::LeftSemi => "LeftSemi",
+            JoinType::RightSemi => "RightSemi",
+            JoinType::LeftAnti => "LeftAnti",
+            JoinType::RightAnti => "RightAnti",
         };
         write!(f, "{}", join_type)
     }
@@ -1049,6 +1064,17 @@ pub struct DropView {
     pub name: String,
     /// If the view exists
     pub if_exists: bool,
+    /// Dummy schema
+    pub schema: DFSchemaRef,
+}
+
+/// Set a Variable -- value in [`ConfigOptions`]
+#[derive(Clone)]
+pub struct SetVariable {
+    /// The variable name
+    pub variable: String,
+    /// The value to set
+    pub value: String,
     /// Dummy schema
     pub schema: DFSchemaRef,
 }
@@ -1117,6 +1143,26 @@ impl Projection {
             schema,
             alias,
         })
+    }
+
+    /// Create a new Projection using the specified output schema
+    pub fn new_from_schema(
+        input: Arc<LogicalPlan>,
+        schema: DFSchemaRef,
+        alias: Option<String>,
+    ) -> Self {
+        let expr: Vec<Expr> = schema
+            .fields()
+            .iter()
+            .map(|field| field.qualified_column())
+            .map(Expr::Column)
+            .collect();
+        Self {
+            expr,
+            input,
+            schema,
+            alias,
+        }
     }
 
     pub fn try_from_plan(plan: &LogicalPlan) -> datafusion_common::Result<&Projection> {
@@ -1259,8 +1305,6 @@ pub struct Union {
     pub inputs: Vec<Arc<LogicalPlan>>,
     /// Union schema. Should be the same for all inputs.
     pub schema: DFSchemaRef,
-    /// Union output relation alias
-    pub alias: Option<String>,
 }
 
 /// Creates an in memory table.
@@ -1312,6 +1356,8 @@ pub struct CreateExternalTable {
     pub definition: Option<String>,
     /// File compression type (GZIP, BZIP2)
     pub file_compression_type: String,
+    /// Table(provider) specific options
+    pub options: HashMap<String, String>,
 }
 
 /// Produces a relation with string representations of
@@ -1486,6 +1532,7 @@ impl Subquery {
     pub fn try_from_expr(plan: &Expr) -> datafusion_common::Result<&Subquery> {
         match plan {
             Expr::ScalarSubquery(it) => Ok(it),
+            Expr::Cast(cast) => Subquery::try_from_expr(cast.expr.as_ref()),
             _ => plan_err!("Could not coerce into ScalarSubquery!"),
         }
     }
@@ -1554,8 +1601,8 @@ pub enum PlanType {
     FinalPhysicalPlan,
 }
 
-impl fmt::Display for PlanType {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+impl Display for PlanType {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
             PlanType::InitialLogicalPlan => write!(f, "initial_logical_plan"),
             PlanType::OptimizedLogicalPlan { optimizer_name } => {

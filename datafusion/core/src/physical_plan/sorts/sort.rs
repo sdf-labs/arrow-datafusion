@@ -46,6 +46,7 @@ use arrow::error::{ArrowError, Result as ArrowResult};
 use arrow::ipc::reader::FileReader;
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
+use datafusion_physical_expr::EquivalenceProperties;
 use futures::lock::Mutex;
 use futures::{Stream, StreamExt, TryFutureExt, TryStreamExt};
 use log::{debug, error};
@@ -652,7 +653,7 @@ fn write_sorted(
 }
 
 fn read_spill(sender: Sender<ArrowResult<RecordBatch>>, path: &Path) -> Result<()> {
-    let file = BufReader::new(File::open(&path)?);
+    let file = BufReader::new(File::open(path)?);
     let reader = FileReader::try_new(file, None)?;
     for batch in reader {
         sender
@@ -743,21 +744,18 @@ impl ExecutionPlan for SortExec {
         }
     }
 
-    fn required_child_distribution(&self) -> Distribution {
+    fn required_input_distribution(&self) -> Vec<Distribution> {
         if self.preserve_partitioning {
-            Distribution::UnspecifiedDistribution
+            vec![Distribution::UnspecifiedDistribution]
         } else {
-            Distribution::SinglePartition
+            // global sort
+            // TODO support RangePartition and OrderedDistribution
+            vec![Distribution::SinglePartition]
         }
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
         vec![self.input.clone()]
-    }
-
-    fn relies_on_input_order(&self) -> bool {
-        // this operator resorts everything
-        false
     }
 
     fn benefits_from_input_partitioning(&self) -> bool {
@@ -766,6 +764,10 @@ impl ExecutionPlan for SortExec {
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         Some(&self.expr)
+    }
+
+    fn equivalence_properties(&self) -> EquivalenceProperties {
+        self.input.equivalence_properties()
     }
 
     fn with_new_children(
@@ -949,6 +951,7 @@ mod tests {
     use arrow::array::*;
     use arrow::compute::SortOptions;
     use arrow::datatypes::*;
+    use datafusion_common::cast::as_string_array;
     use futures::FutureExt;
     use std::collections::{BTreeMap, HashMap};
 
@@ -988,7 +991,7 @@ mod tests {
 
         let columns = result[0].columns();
 
-        let c1 = as_string_array(&columns[0]);
+        let c1 = as_string_array(&columns[0])?;
         assert_eq!(c1.value(0), "a");
         assert_eq!(c1.value(c1.len() - 1), "e");
 
@@ -1060,7 +1063,7 @@ mod tests {
 
         let columns = result[0].columns();
 
-        let c1 = as_string_array(&columns[0]);
+        let c1 = as_string_array(&columns[0])?;
         assert_eq!(c1.value(0), "a");
         assert_eq!(c1.value(c1.len() - 1), "e");
 

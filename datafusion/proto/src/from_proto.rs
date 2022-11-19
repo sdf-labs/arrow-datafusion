@@ -41,8 +41,8 @@ use datafusion_expr::{
     regexp_replace, repeat, replace, reverse, right, round, rpad, rtrim, sha224, sha256,
     sha384, sha512, signum, sin, split_part, sqrt, starts_with, strpos, substr,
     substring, tan, to_hex, to_timestamp_micros, to_timestamp_millis,
-    to_timestamp_seconds, translate, trim, trunc, upper, AggregateFunction, Between,
-    BuiltInWindowFunction, BuiltinScalarFunction, Case, Expr, GetIndexedField,
+    to_timestamp_seconds, translate, trim, trunc, upper, uuid, AggregateFunction,
+    Between, BuiltInWindowFunction, BuiltinScalarFunction, Case, Expr, GetIndexedField,
     GroupingSet,
     GroupingSet::GroupingSets,
     Like, Operator, WindowFrame, WindowFrameBound, WindowFrameUnits,
@@ -429,6 +429,9 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::ToTimestampMicros => Self::ToTimestampMicros,
             ScalarFunction::ToTimestampSeconds => Self::ToTimestampSeconds,
             ScalarFunction::Now => Self::Now,
+            ScalarFunction::CurrentDate => Self::CurrentDate,
+            ScalarFunction::CurrentTime => Self::CurrentTime,
+            ScalarFunction::Uuid => Self::Uuid,
             ScalarFunction::Translate => Self::Translate,
             ScalarFunction::RegexpMatch => Self::RegexpMatch,
             ScalarFunction::Coalesce => Self::Coalesce,
@@ -687,11 +690,29 @@ pub fn parse_expr(
         .ok_or_else(|| Error::required("expr_type"))?;
 
     match expr_type {
-        ExprType::BinaryExpr(binary_expr) => Ok(Expr::BinaryExpr(BinaryExpr::new(
-            Box::new(parse_required_expr(&binary_expr.l, registry, "l")?),
-            from_proto_binary_op(&binary_expr.op)?,
-            Box::new(parse_required_expr(&binary_expr.r, registry, "r")?),
-        ))),
+        ExprType::BinaryExpr(binary_expr) => {
+            let op = from_proto_binary_op(&binary_expr.op)?;
+            let operands = binary_expr
+                .operands
+                .iter()
+                .map(|expr| parse_expr(expr, registry))
+                .collect::<Result<Vec<_>, _>>()?;
+
+            if operands.len() < 2 {
+                return Err(proto_error(
+                    "A binary expression must always have at least 2 operands",
+                ));
+            }
+
+            // Reduce the linearized operands (ordered by left innermost to right
+            // outermost) into a single expression tree.
+            Ok(operands
+                .into_iter()
+                .reduce(|left, right| {
+                    Expr::BinaryExpr(BinaryExpr::new(Box::new(left), op, Box::new(right)))
+                })
+                .expect("Binary expression could not be reduced to a single expression."))
+        }
         ExprType::GetIndexedField(field) => {
             let key = field
                 .key
@@ -968,6 +989,7 @@ pub fn parse_expr(
                     parse_expr(&args[1], registry)?,
                 )),
                 ScalarFunction::Random => Ok(random()),
+                ScalarFunction::Uuid => Ok(uuid()),
                 ScalarFunction::Repeat => Ok(repeat(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,

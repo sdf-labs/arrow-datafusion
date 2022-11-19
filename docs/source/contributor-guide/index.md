@@ -31,6 +31,25 @@ You can find a curated
 [good-first-issue](https://github.com/apache/arrow-datafusion/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
 list to help you get started.
 
+# Pull Requests
+
+We welcome pull requests (PRs) from anyone from the community.
+
+DataFusion is a very active fast-moving project and we try to review and merge PRs quickly to keep the review backlog down and the pace up. After review and approval, one of the [many people with commit access](https://arrow.apache.org/committers/) will merge your PR.
+
+Review bandwidth is currently our most limited resource, and we highly encourage reviews by the broader community. If you are waiting for your PR to be reviewed, consider helping review other PRs that are waiting. Such review both helps the reviewer to learn the codebase and become more expert, as well as helps identify issues in the PR (such as lack of test coverage), that can be addressed and make future reviews faster and more efficient.
+
+## Merging PRs
+
+Since we are a worldwide community, we have contributors in many timezones who review and comment. To ensure anyone who wishes has an opportunity to review a PR, our committers try to ensure that at least 24 hours passes between when a "major" PR is approved and when it is merged.
+
+A "major" PR means there is a substantial change in design or a change in the API. Committers apply their best judgment to determine what constitutes a substantial change. A "minor" PR might be merged without a 24 hour delay, again subject to the judgment of the committer. Examples of potential "minor" PRs are:
+
+1. Documentation improvements/additions
+2. Small bug fixes
+3. Non-controversial build-related changes (clippy, version upgrades etc.)
+4. Smaller non-controversial feature additions
+
 # Developer's guide
 
 This section describes how you can get started at developing DataFusion.
@@ -43,6 +62,28 @@ choco install -y git rustup.install visualcpp-build-tools
 git-bash.exe
 cargo build
 ```
+
+## Protoc Installation
+
+Compiling DataFusion from sources requires an installed version of the protobuf compiler, `protoc`.
+
+On most platforms this can be installed from your system's package manager
+
+```
+$ apt install -y protobuf-compiler
+$ dnf install -y protobuf-compiler
+$ pacman -S protobuf
+$ brew install protobuf
+```
+
+You will want to verify the version installed is `3.12` or greater, which introduced support for explicit [field presence](https://github.com/protocolbuffers/protobuf/blob/v3.12.0/docs/field_presence.md). Older versions may fail to compile.
+
+```shell
+$ protoc --version
+libprotoc 3.12.4
+```
+
+Alternatively a binary release can be downloaded from the [Release Page](https://github.com/protocolbuffers/protobuf/releases) or [built from source](https://github.com/protocolbuffers/protobuf/blob/main/src/README.md).
 
 ## Bootstrap environment
 
@@ -237,7 +278,7 @@ can be displayed. For example, the following command creates a
 dot -Tpdf < /tmp/plan.dot > /tmp/plan.pdf
 ```
 
-## Specification
+## Specifications
 
 We formalize DataFusion semantics and behaviors through specification
 documents. These specifications are useful to be used as references to help

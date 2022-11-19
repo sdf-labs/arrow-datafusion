@@ -20,7 +20,7 @@ use super::*;
 #[tokio::test]
 async fn csv_query_error() -> Result<()> {
     // sin(utf8) should error
-    let ctx = create_ctx()?;
+    let ctx = create_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT sin(c1) FROM aggregate_test_100";
     let plan = ctx.create_logical_plan(sql);
@@ -31,7 +31,7 @@ async fn csv_query_error() -> Result<()> {
 #[tokio::test]
 async fn test_cast_expressions_error() -> Result<()> {
     // sin(utf8) should error
-    let ctx = create_ctx()?;
+    let ctx = create_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT CAST(c1 AS INT) FROM aggregate_test_100";
     let plan = ctx.create_logical_plan(sql).unwrap();
@@ -80,7 +80,7 @@ async fn query_cte_incorrect() -> Result<()> {
     assert!(plan.is_err());
     assert_eq!(
         format!("{}", plan.unwrap_err()),
-        "Error during planning: 'datafusion.public.t' not found"
+        "Error during planning: table 'datafusion.public.t' not found"
     );
 
     // forward referencing
@@ -89,7 +89,7 @@ async fn query_cte_incorrect() -> Result<()> {
     assert!(plan.is_err());
     assert_eq!(
         format!("{}", plan.unwrap_err()),
-        "Error during planning: 'datafusion.public.u' not found"
+        "Error during planning: table 'datafusion.public.u' not found"
     );
 
     // wrapping should hide u
@@ -98,7 +98,7 @@ async fn query_cte_incorrect() -> Result<()> {
     assert!(plan.is_err());
     assert_eq!(
         format!("{}", plan.unwrap_err()),
-        "Error during planning: 'datafusion.public.u' not found"
+        "Error during planning: table 'datafusion.public.u' not found"
     );
 
     Ok(())

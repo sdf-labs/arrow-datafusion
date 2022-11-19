@@ -25,7 +25,7 @@ use crate::logical_plan::{
     Limit, Partitioning, Projection, Repartition, Sort, Subquery, SubqueryAlias, Union,
     Values, Window,
 };
-use crate::{Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder};
+use crate::{Cast, Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder};
 use arrow::datatypes::{DataType, TimeUnit};
 use datafusion_common::{
     Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
@@ -546,13 +546,10 @@ pub fn from_plan(
         LogicalPlan::Extension(e) => Ok(LogicalPlan::Extension(Extension {
             node: e.node.from_template(expr, inputs),
         })),
-        LogicalPlan::Union(Union { schema, alias, .. }) => {
-            Ok(LogicalPlan::Union(Union {
-                inputs: inputs.iter().cloned().map(Arc::new).collect(),
-                schema: schema.clone(),
-                alias: alias.clone(),
-            }))
-        }
+        LogicalPlan::Union(Union { schema, .. }) => Ok(LogicalPlan::Union(Union {
+            inputs: inputs.iter().cloned().map(Arc::new).collect(),
+            schema: schema.clone(),
+        })),
         LogicalPlan::Distinct(Distinct { .. }) => Ok(LogicalPlan::Distinct(Distinct {
             input: Arc::new(inputs[0].clone()),
         })),
@@ -584,6 +581,7 @@ pub fn from_plan(
         | LogicalPlan::CreateExternalTable(_)
         | LogicalPlan::DropTable(_)
         | LogicalPlan::DropView(_)
+        | LogicalPlan::SetVariable(_)
         | LogicalPlan::CreateCatalogSchema(_)
         | LogicalPlan::CreateCatalog(_) => {
             // All of these plan types have no inputs / exprs so should not be called
@@ -675,6 +673,10 @@ pub fn columnize_expr(e: Expr, input_schema: &DFSchema) -> Expr {
         Expr::Alias(inner_expr, name) => {
             Expr::Alias(Box::new(columnize_expr(*inner_expr, input_schema)), name)
         }
+        Expr::Cast(Cast { expr, data_type }) => Expr::Cast(Cast {
+            expr: Box::new(columnize_expr(*expr, input_schema)),
+            data_type,
+        }),
         Expr::ScalarSubquery(_) => e.clone(),
         _ => match e.display_name() {
             Ok(name) => match input_schema.field_with_unqualified_name(&name) {
@@ -767,6 +769,18 @@ pub fn can_hash(data_type: &DataType) -> bool {
         }
         _ => false,
     }
+}
+
+/// Check whether all columns are from the schema.
+pub fn check_all_column_from_schema(
+    columns: &HashSet<Column>,
+    schema: DFSchemaRef,
+) -> Result<bool> {
+    let result = columns
+        .iter()
+        .all(|column| schema.index_of_column(column).is_ok());
+
+    Ok(result)
 }
 
 #[cfg(test)]

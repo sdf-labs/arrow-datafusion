@@ -50,7 +50,7 @@ impl OptimizerRule for ProjectionPushDown {
         plan: &LogicalPlan,
         optimizer_config: &mut OptimizerConfig,
     ) -> Result<LogicalPlan> {
-        // set of all columns refered by the plan (and thus considered required by the root)
+        // set of all columns referred by the plan (and thus considered required by the root)
         let required_columns = plan
             .schema()
             .fields()
@@ -112,9 +112,9 @@ fn get_projected_schema(
 
     // create the projected schema
     let projected_fields: Vec<DFField> = match table_name {
-        Some(qualifer) => projection
+        Some(qualifier) => projection
             .iter()
-            .map(|i| DFField::from_qualified(qualifer, schema.fields()[*i].clone()))
+            .map(|i| DFField::from_qualified(qualifier, schema.fields()[*i].clone()))
             .collect(),
         None => projection
             .iter()
@@ -392,11 +392,7 @@ fn optimize_plan(
                 schema: a.schema.clone(),
             }))
         }
-        LogicalPlan::Union(Union {
-            inputs,
-            schema,
-            alias,
-        }) => {
+        LogicalPlan::Union(Union { inputs, schema }) => {
             // UNION inputs will reference the same column with different identifiers, so we need
             // to populate new_required_columns by unqualified column name based on required fields
             // from the resulting UNION output
@@ -438,7 +434,6 @@ fn optimize_plan(
             Ok(LogicalPlan::Union(Union {
                 inputs: new_inputs.iter().cloned().map(Arc::new).collect(),
                 schema: Arc::new(new_schema),
-                alias: alias.clone(),
             }))
         }
         LogicalPlan::SubqueryAlias(SubqueryAlias { input, alias, .. }) => {
@@ -485,6 +480,7 @@ fn optimize_plan(
         | LogicalPlan::CreateCatalog(_)
         | LogicalPlan::DropTable(_)
         | LogicalPlan::DropView(_)
+        | LogicalPlan::SetVariable(_)
         | LogicalPlan::CrossJoin(_)
         | LogicalPlan::Distinct(_)
         | LogicalPlan::Extension { .. } => {
@@ -614,7 +610,7 @@ mod tests {
     }
 
     #[test]
-    fn redundunt_project() -> Result<()> {
+    fn redundant_project() -> Result<()> {
         let table_scan = test_table_scan()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
@@ -645,7 +641,7 @@ mod tests {
     }
 
     #[test]
-    fn noncontiguous_redundunt_projection() -> Result<()> {
+    fn noncontinuous_redundant_projection() -> Result<()> {
         let table_scan = test_table_scan()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
@@ -751,7 +747,7 @@ mod tests {
 
     #[test]
     fn join_schema_trim_using_join() -> Result<()> {
-        // shared join colums from using join should be pushed to both sides
+        // shared join columns from using join should be pushed to both sides
 
         let table_scan = test_table_scan()?;
 

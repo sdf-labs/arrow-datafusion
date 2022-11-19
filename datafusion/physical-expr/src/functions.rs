@@ -427,6 +427,18 @@ pub fn create_physical_fun(
                 execution_props.query_execution_start_time,
             ))
         }
+        BuiltinScalarFunction::CurrentDate => {
+            // bind value for current_date at plan time
+            Arc::new(datetime_expressions::make_current_date(
+                execution_props.query_execution_start_time,
+            ))
+        }
+        BuiltinScalarFunction::CurrentTime => {
+            // bind value for current_time at plan time
+            Arc::new(datetime_expressions::make_current_time(
+                execution_props.query_execution_start_time,
+            ))
+        }
         BuiltinScalarFunction::InitCap => Arc::new(|args| match args[0].data_type() {
             DataType::Utf8 => {
                 make_scalar_function(string_expressions::initcap::<i32>)(args)
@@ -748,6 +760,7 @@ pub fn create_physical_fun(
             ))),
         }),
         BuiltinScalarFunction::Upper => Arc::new(string_expressions::upper),
+        BuiltinScalarFunction::Uuid => Arc::new(string_expressions::uuid),
         _ => {
             return Err(DataFusionError::Internal(format!(
                 "create_physical_fun: Unsupported scalar function {:?}",
@@ -2748,7 +2761,11 @@ mod tests {
         let execution_props = ExecutionProps::new();
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
 
-        let funs = [BuiltinScalarFunction::Now, BuiltinScalarFunction::Random];
+        let funs = [
+            BuiltinScalarFunction::Now,
+            BuiltinScalarFunction::Random,
+            BuiltinScalarFunction::Uuid,
+        ];
 
         for fun in funs.iter() {
             create_physical_expr_with_type_coercion(fun, &[], &schema, &execution_props)?;
@@ -2803,24 +2820,24 @@ mod tests {
     #[test]
     fn test_array() -> Result<()> {
         generic_test_array(
-            Arc::new(StringArray::from_slice(&["aa"])),
-            Arc::new(StringArray::from_slice(&["bb"])),
+            Arc::new(StringArray::from_slice(["aa"])),
+            Arc::new(StringArray::from_slice(["bb"])),
             DataType::Utf8,
             "StringArray\n[\n  \"aa\",\n  \"bb\",\n]",
         )?;
 
         // different types, to validate that casting happens
         generic_test_array(
-            Arc::new(UInt32Array::from_slice(&[1u32])),
-            Arc::new(UInt64Array::from_slice(&[1u64])),
+            Arc::new(UInt32Array::from_slice([1u32])),
+            Arc::new(UInt64Array::from_slice([1u64])),
             DataType::UInt64,
             "PrimitiveArray<UInt64>\n[\n  1,\n  1,\n]",
         )?;
 
         // different types (another order), to validate that casting happens
         generic_test_array(
-            Arc::new(UInt64Array::from_slice(&[1u64])),
-            Arc::new(UInt32Array::from_slice(&[1u32])),
+            Arc::new(UInt64Array::from_slice([1u64])),
+            Arc::new(UInt32Array::from_slice([1u32])),
             DataType::UInt64,
             "PrimitiveArray<UInt64>\n[\n  1,\n  1,\n]",
         )
@@ -2830,10 +2847,11 @@ mod tests {
     #[cfg(feature = "regex_expressions")]
     fn test_regexp_match() -> Result<()> {
         use arrow::array::ListArray;
+        use datafusion_common::cast::as_string_array;
         let schema = Schema::new(vec![Field::new("a", DataType::Utf8, false)]);
         let execution_props = ExecutionProps::new();
 
-        let col_value: ArrayRef = Arc::new(StringArray::from_slice(&["aaa-555"]));
+        let col_value: ArrayRef = Arc::new(StringArray::from_slice(["aaa-555"]));
         let pattern = lit(r".*-(\d*)");
         let columns: Vec<ArrayRef> = vec![col_value];
         let expr = create_physical_expr_with_type_coercion(
@@ -2856,7 +2874,7 @@ mod tests {
         // downcast works
         let result = result.as_any().downcast_ref::<ListArray>().unwrap();
         let first_row = result.value(0);
-        let first_row = first_row.as_any().downcast_ref::<StringArray>().unwrap();
+        let first_row = as_string_array(&first_row)?;
 
         // value is correct
         let expected = "555".to_string();
@@ -2869,12 +2887,13 @@ mod tests {
     #[cfg(feature = "regex_expressions")]
     fn test_regexp_match_all_literals() -> Result<()> {
         use arrow::array::ListArray;
+        use datafusion_common::cast::as_string_array;
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
         let execution_props = ExecutionProps::new();
 
         let col_value = lit("aaa-555");
         let pattern = lit(r".*-(\d*)");
-        let columns: Vec<ArrayRef> = vec![Arc::new(Int32Array::from_slice(&[1]))];
+        let columns: Vec<ArrayRef> = vec![Arc::new(Int32Array::from_slice([1]))];
         let expr = create_physical_expr_with_type_coercion(
             &BuiltinScalarFunction::RegexpMatch,
             &[col_value, pattern],
@@ -2895,7 +2914,7 @@ mod tests {
         // downcast works
         let result = result.as_any().downcast_ref::<ListArray>().unwrap();
         let first_row = result.value(0);
-        let first_row = first_row.as_any().downcast_ref::<StringArray>().unwrap();
+        let first_row = as_string_array(&first_row)?;
 
         // value is correct
         let expected = "555".to_string();

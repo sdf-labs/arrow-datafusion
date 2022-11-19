@@ -40,6 +40,7 @@ use datafusion::{
     physical_plan::ColumnarValue,
 };
 use datafusion::{execution::context::SessionContext, physical_plan::displayable};
+use datafusion_common::cast::as_float64_array;
 use datafusion_common::{assert_contains, assert_not_contains};
 use datafusion_expr::Volatility;
 use object_store::path::Path;
@@ -109,6 +110,7 @@ pub mod idenfifers;
 pub mod information_schema;
 pub mod parquet_schema;
 pub mod partitioned_csv;
+pub mod set_variable;
 pub mod subqueries;
 #[cfg(feature = "unicode_expressions")]
 pub mod unicode;
@@ -134,8 +136,7 @@ where
         });
 }
 
-#[allow(clippy::unnecessary_wraps)]
-fn create_ctx() -> Result<SessionContext> {
+fn create_ctx() -> SessionContext {
     let mut ctx = SessionContext::new();
 
     // register a custom UDF
@@ -147,17 +148,13 @@ fn create_ctx() -> Result<SessionContext> {
         Arc::new(custom_sqrt),
     ));
 
-    Ok(ctx)
+    ctx
 }
 
 fn custom_sqrt(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     let arg = &args[0];
     if let ColumnarValue::Array(v) = arg {
-        let input = v
-            .as_any()
-            .downcast_ref::<Float64Array>()
-            .expect("cast failed");
-
+        let input = as_float64_array(v).expect("cast failed");
         let array: Float64Array = input.iter().map(|v| v.map(|x| x.sqrt())).collect();
         Ok(ColumnarValue::Array(Arc::new(array)))
     } else {
@@ -192,14 +189,14 @@ fn create_join_context(column_left: &str, column_right: &str) -> Result<SessionC
     let t1_data = RecordBatch::try_new(
         t1_schema,
         vec![
-            Arc::new(UInt32Array::from_slice(&[11, 22, 33, 44])),
+            Arc::new(UInt32Array::from_slice([11, 22, 33, 44])),
             Arc::new(StringArray::from(vec![
                 Some("a"),
                 Some("b"),
                 Some("c"),
                 Some("d"),
             ])),
-            Arc::new(UInt32Array::from_slice(&[1, 2, 3, 4])),
+            Arc::new(UInt32Array::from_slice([1, 2, 3, 4])),
         ],
     )?;
     ctx.register_batch("t1", t1_data)?;
@@ -212,14 +209,14 @@ fn create_join_context(column_left: &str, column_right: &str) -> Result<SessionC
     let t2_data = RecordBatch::try_new(
         t2_schema,
         vec![
-            Arc::new(UInt32Array::from_slice(&[11, 22, 44, 55])),
+            Arc::new(UInt32Array::from_slice([11, 22, 44, 55])),
             Arc::new(StringArray::from(vec![
                 Some("z"),
                 Some("y"),
                 Some("x"),
                 Some("w"),
             ])),
-            Arc::new(UInt32Array::from_slice(&[3, 1, 3, 3])),
+            Arc::new(UInt32Array::from_slice([3, 1, 3, 3])),
         ],
     )?;
     ctx.register_batch("t2", t2_data)?;
@@ -241,9 +238,9 @@ fn create_join_context_qualified(
     let t1_data = RecordBatch::try_new(
         t1_schema,
         vec![
-            Arc::new(UInt32Array::from_slice(&[1, 2, 3, 4])),
-            Arc::new(UInt32Array::from_slice(&[10, 20, 30, 40])),
-            Arc::new(UInt32Array::from_slice(&[50, 60, 70, 80])),
+            Arc::new(UInt32Array::from_slice([1, 2, 3, 4])),
+            Arc::new(UInt32Array::from_slice([10, 20, 30, 40])),
+            Arc::new(UInt32Array::from_slice([50, 60, 70, 80])),
         ],
     )?;
     ctx.register_batch(left_name, t1_data)?;
@@ -256,9 +253,9 @@ fn create_join_context_qualified(
     let t2_data = RecordBatch::try_new(
         t2_schema,
         vec![
-            Arc::new(UInt32Array::from_slice(&[1, 2, 9, 4])),
-            Arc::new(UInt32Array::from_slice(&[100, 200, 300, 400])),
-            Arc::new(UInt32Array::from_slice(&[500, 600, 700, 800])),
+            Arc::new(UInt32Array::from_slice([1, 2, 9, 4])),
+            Arc::new(UInt32Array::from_slice([100, 200, 300, 400])),
+            Arc::new(UInt32Array::from_slice([500, 600, 700, 800])),
         ],
     )?;
     ctx.register_batch(right_name, t2_data)?;
@@ -350,7 +347,7 @@ fn create_join_context_unbalanced(
     let t1_data = RecordBatch::try_new(
         t1_schema,
         vec![
-            Arc::new(UInt32Array::from_slice(&[11, 22, 33, 44, 77])),
+            Arc::new(UInt32Array::from_slice([11, 22, 33, 44, 77])),
             Arc::new(StringArray::from(vec![
                 Some("a"),
                 Some("b"),
@@ -369,7 +366,7 @@ fn create_join_context_unbalanced(
     let t2_data = RecordBatch::try_new(
         t2_schema,
         vec![
-            Arc::new(UInt32Array::from_slice(&[11, 22, 44, 55])),
+            Arc::new(UInt32Array::from_slice([11, 22, 44, 55])),
             Arc::new(StringArray::from(vec![
                 Some("z"),
                 Some("y"),
@@ -580,7 +577,9 @@ async fn register_tpch_csv_data(
                 DataType::Date32 => {
                     let sb = col.as_any_mut().downcast_mut::<Date32Builder>().unwrap();
                     let dt = NaiveDate::parse_from_str(val.trim(), "%Y-%m-%d").unwrap();
-                    let dt = dt.sub(NaiveDate::from_ymd(1970, 1, 1)).num_days() as i32;
+                    let dt = dt
+                        .sub(NaiveDate::from_ymd_opt(1970, 1, 1).unwrap())
+                        .num_days() as i32;
                     sb.append_value(dt);
                 }
                 DataType::Int32 => {
@@ -869,7 +868,7 @@ fn populate_csv_partitions(
     // generate a partitioned file
     for partition in 0..partition_count {
         let filename = format!("partition-{}.{}", partition, file_extension);
-        let file_path = tmp_dir.path().join(&filename);
+        let file_path = tmp_dir.path().join(filename);
         let mut file = File::create(file_path)?;
 
         // generate some data
@@ -983,14 +982,14 @@ async fn register_alltypes_parquet(ctx: &SessionContext) {
 
 fn make_timestamp_table<A>() -> Result<Arc<MemTable>>
 where
-    A: ArrowTimestampType,
+    A: ArrowTimestampType<Native = i64>,
 {
     make_timestamp_tz_table::<A>(None)
 }
 
 fn make_timestamp_tz_table<A>(tz: Option<String>) -> Result<Arc<MemTable>>
 where
-    A: ArrowTimestampType,
+    A: ArrowTimestampType<Native = i64>,
 {
     let schema = Arc::new(Schema::new(vec![
         Field::new(
@@ -1014,7 +1013,7 @@ where
         1599565349190855000 / divisor,    // 2020-09-08T11:42:29.190855+00:00
     ]; // 2020-09-08T11:42:29.190855+00:00
 
-    let array = PrimitiveArray::<A>::from_vec(timestamps, tz);
+    let array = PrimitiveArray::<A>::from_iter_values(timestamps).with_timezone_opt(tz);
 
     let data = RecordBatch::try_new(
         schema.clone(),
@@ -1152,10 +1151,10 @@ pub fn make_timestamps() -> RecordBatch {
         .map(|(i, _)| format!("Row {}", i))
         .collect::<Vec<_>>();
 
-    let arr_nanos = TimestampNanosecondArray::from_opt_vec(ts_nanos, None);
-    let arr_micros = TimestampMicrosecondArray::from_opt_vec(ts_micros, None);
-    let arr_millis = TimestampMillisecondArray::from_opt_vec(ts_millis, None);
-    let arr_secs = TimestampSecondArray::from_opt_vec(ts_secs, None);
+    let arr_nanos = TimestampNanosecondArray::from(ts_nanos);
+    let arr_micros = TimestampMicrosecondArray::from(ts_micros);
+    let arr_millis = TimestampMillisecondArray::from(ts_millis);
+    let arr_secs = TimestampSecondArray::from(ts_secs);
 
     let names = names.iter().map(|s| s.as_str()).collect::<Vec<_>>();
     let arr_names = StringArray::from(names);

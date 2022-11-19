@@ -20,10 +20,11 @@
 use crate::error::{DataFusionError, Result};
 use crate::logical_expr::JoinType;
 use crate::physical_plan::expressions::Column;
+use crate::physical_plan::SchemaRef;
 use arrow::datatypes::{Field, Schema};
 use arrow::error::ArrowError;
 use datafusion_common::ScalarValue;
-use datafusion_physical_expr::PhysicalExpr;
+use datafusion_physical_expr::{EquivalentClass, PhysicalExpr};
 use futures::future::{BoxFuture, Shared};
 use futures::{ready, FutureExt};
 use parking_lot::Mutex;
@@ -33,7 +34,10 @@ use std::future::Future;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use crate::physical_plan::{ColumnStatistics, ExecutionPlan, Statistics};
+use crate::physical_plan::{
+    ColumnStatistics, EquivalenceProperties, ExecutionPlan, Partitioning, Statistics,
+};
+use datafusion_physical_expr::rewrite::TreeNodeRewritable;
 
 /// The on clause of the join, as vector of (left, right) columns.
 pub type JoinOn = Vec<(Column, Column)>;
@@ -81,6 +85,135 @@ fn check_join_set_is_valid(
     };
 
     Ok(())
+}
+
+/// Calculate the OutputPartitioning for Partitioned Join
+pub fn partitioned_join_output_partitioning(
+    join_type: JoinType,
+    left_partitioning: Partitioning,
+    right_partitioning: Partitioning,
+    left_columns_len: usize,
+) -> Partitioning {
+    match join_type {
+        JoinType::Inner | JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti => {
+            left_partitioning
+        }
+        JoinType::RightSemi | JoinType::RightAnti => right_partitioning,
+        JoinType::Right => {
+            adjust_right_output_partitioning(right_partitioning, left_columns_len)
+        }
+        JoinType::Full => {
+            Partitioning::UnknownPartitioning(right_partitioning.partition_count())
+        }
+    }
+}
+
+/// Adjust the right out partitioning to new Column Index
+pub fn adjust_right_output_partitioning(
+    right_partitioning: Partitioning,
+    left_columns_len: usize,
+) -> Partitioning {
+    match right_partitioning {
+        Partitioning::RoundRobinBatch(size) => Partitioning::RoundRobinBatch(size),
+        Partitioning::UnknownPartitioning(size) => {
+            Partitioning::UnknownPartitioning(size)
+        }
+        Partitioning::Hash(exprs, size) => {
+            let new_exprs = exprs
+                .into_iter()
+                .map(|expr| {
+                    expr.transform_down(&|e| match e.as_any().downcast_ref::<Column>() {
+                        Some(col) => Some(Arc::new(Column::new(
+                            col.name(),
+                            left_columns_len + col.index(),
+                        ))),
+                        None => None,
+                    })
+                    .unwrap()
+                })
+                .collect::<Vec<_>>();
+            Partitioning::Hash(new_exprs, size)
+        }
+    }
+}
+
+/// Combine the Equivalence Properties for Join Node
+pub fn combine_join_equivalence_properties(
+    join_type: JoinType,
+    left_properties: EquivalenceProperties,
+    right_properties: EquivalenceProperties,
+    left_columns_len: usize,
+    on: &[(Column, Column)],
+    schema: SchemaRef,
+) -> EquivalenceProperties {
+    let mut new_properties = EquivalenceProperties::new(schema);
+    match join_type {
+        JoinType::Inner | JoinType::Left | JoinType::Full | JoinType::Right => {
+            new_properties.extend(left_properties.classes().to_vec());
+            let new_right_properties = right_properties
+                .classes()
+                .iter()
+                .map(|prop| {
+                    let new_head = Column::new(
+                        prop.head().name(),
+                        left_columns_len + prop.head().index(),
+                    );
+                    let new_others = prop
+                        .others()
+                        .iter()
+                        .map(|col| {
+                            Column::new(col.name(), left_columns_len + col.index())
+                        })
+                        .collect::<Vec<_>>();
+                    EquivalentClass::new(new_head, new_others)
+                })
+                .collect::<Vec<_>>();
+
+            new_properties.extend(new_right_properties);
+        }
+        JoinType::LeftSemi | JoinType::LeftAnti => {
+            new_properties.extend(left_properties.classes().to_vec())
+        }
+        JoinType::RightSemi | JoinType::RightAnti => {
+            new_properties.extend(right_properties.classes().to_vec())
+        }
+    }
+
+    if join_type == JoinType::Inner {
+        on.iter().for_each(|(column1, column2)| {
+            let new_column2 =
+                Column::new(column2.name(), left_columns_len + column2.index());
+            new_properties.add_equal_conditions((column1, &new_column2))
+        })
+    }
+    new_properties
+}
+
+/// Calculate the Equivalence Properties for CrossJoin Node
+pub fn cross_join_equivalence_properties(
+    left_properties: EquivalenceProperties,
+    right_properties: EquivalenceProperties,
+    left_columns_len: usize,
+    schema: SchemaRef,
+) -> EquivalenceProperties {
+    let mut new_properties = EquivalenceProperties::new(schema);
+    new_properties.extend(left_properties.classes().to_vec());
+    let new_right_properties = right_properties
+        .classes()
+        .iter()
+        .map(|prop| {
+            let new_head =
+                Column::new(prop.head().name(), left_columns_len + prop.head().index());
+            let new_others = prop
+                .others()
+                .iter()
+                .map(|col| Column::new(col.name(), left_columns_len + col.index()))
+                .collect::<Vec<_>>();
+            EquivalentClass::new(new_head, new_others)
+        })
+        .collect::<Vec<_>>();
+    new_properties.extend(new_right_properties);
+    new_properties
 }
 
 /// Used in ColumnIndex to distinguish which side the index is for
@@ -169,8 +302,10 @@ fn output_join_field(old_field: &Field, join_type: &JoinType, is_left: bool) -> 
         JoinType::Left => !is_left, // right input is padded with nulls
         JoinType::Right => is_left, // left input is padded with nulls
         JoinType::Full => true,     // both inputs can be padded with nulls
-        JoinType::Semi => false,    // doesn't introduce nulls
-        JoinType::Anti => false,    // doesn't introduce nulls (or can it??)
+        JoinType::LeftSemi => false, // doesn't introduce nulls
+        JoinType::RightSemi => false, // doesn't introduce nulls
+        JoinType::LeftAnti => false, // doesn't introduce nulls (or can it??)
+        JoinType::RightAnti => false, // doesn't introduce nulls (or can it??)
     };
 
     if force_nullable {
@@ -221,7 +356,7 @@ pub fn build_join_schema(
             // left then right
             left_fields.chain(right_fields).unzip()
         }
-        JoinType::Semi | JoinType::Anti => left
+        JoinType::LeftSemi | JoinType::LeftAnti => left
             .fields()
             .iter()
             .cloned()
@@ -232,6 +367,21 @@ pub fn build_join_schema(
                     ColumnIndex {
                         index,
                         side: JoinSide::Left,
+                    },
+                )
+            })
+            .unzip(),
+        JoinType::RightSemi | JoinType::RightAnti => right
+            .fields()
+            .iter()
+            .cloned()
+            .enumerate()
+            .map(|(index, f)| {
+                (
+                    f,
+                    ColumnIndex {
+                        index,
+                        side: JoinSide::Right,
                     },
                 )
             })
@@ -394,8 +544,10 @@ fn estimate_join_cardinality(
             })
         }
 
-        JoinType::Semi => None,
-        JoinType::Anti => None,
+        JoinType::LeftSemi
+        | JoinType::RightSemi
+        | JoinType::LeftAnti
+        | JoinType::RightAnti => None,
     }
 }
 

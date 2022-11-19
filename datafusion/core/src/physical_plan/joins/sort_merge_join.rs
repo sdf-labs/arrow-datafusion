@@ -43,34 +43,43 @@ use crate::physical_plan::common::combine_batches;
 use crate::physical_plan::expressions::Column;
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::joins::utils::{
-    build_join_schema, check_join_is_valid, JoinOn,
+    build_join_schema, check_join_is_valid, combine_join_equivalence_properties,
+    partitioned_join_output_partitioning, JoinOn,
 };
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use crate::physical_plan::{
-    metrics, DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
-    SendableRecordBatchStream, Statistics,
+    metrics, DisplayFormatType, Distribution, EquivalenceProperties, ExecutionPlan,
+    Partitioning, PhysicalExpr, RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
+
+use datafusion_physical_expr::rewrite::TreeNodeRewritable;
 
 /// join execution plan executes partitions in parallel and combines them into a set of
 /// partitions.
 #[derive(Debug)]
 pub struct SortMergeJoinExec {
     /// Left sorted joining execution plan
-    left: Arc<dyn ExecutionPlan>,
+    pub(crate) left: Arc<dyn ExecutionPlan>,
     /// Right sorting joining execution plan
-    right: Arc<dyn ExecutionPlan>,
+    pub(crate) right: Arc<dyn ExecutionPlan>,
     /// Set of common columns used to join on
-    on: JoinOn,
+    pub(crate) on: JoinOn,
     /// How the join is performed
-    join_type: JoinType,
+    pub(crate) join_type: JoinType,
     /// The schema once the join is applied
     schema: SchemaRef,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
+    /// The left SortExpr
+    left_sort_exprs: Vec<PhysicalSortExpr>,
+    /// The right SortExpr
+    right_sort_exprs: Vec<PhysicalSortExpr>,
+    /// The output ordering
+    output_ordering: Option<Vec<PhysicalSortExpr>>,
     /// Sort options of join columns used in sorting left and right execution plans
-    sort_options: Vec<SortOptions>,
+    pub(crate) sort_options: Vec<SortOptions>,
     /// If null_equals_null is true, null == null else null != null
-    null_equals_null: bool,
+    pub(crate) null_equals_null: bool,
 }
 
 impl SortMergeJoinExec {
@@ -89,6 +98,12 @@ impl SortMergeJoinExec {
         let left_schema = left.schema();
         let right_schema = right.schema();
 
+        if join_type == JoinType::RightSemi {
+            return Err(DataFusionError::NotImplemented(
+                "SortMergeJoinExec does not support JoinType::RightSemi".to_string(),
+            ));
+        }
+
         check_join_is_valid(&left_schema, &right_schema, &on)?;
         if sort_options.len() != on.len() {
             return Err(DataFusionError::Plan(format!(
@@ -97,6 +112,75 @@ impl SortMergeJoinExec {
                 sort_options.len()
             )));
         }
+
+        let (left_expr, right_expr): (Vec<_>, Vec<_>) = on
+            .iter()
+            .map(|(l, r)| {
+                (
+                    Arc::new(l.clone()) as Arc<dyn PhysicalExpr>,
+                    Arc::new(r.clone()) as Arc<dyn PhysicalExpr>,
+                )
+            })
+            .unzip();
+
+        let left_sort_exprs = left_expr
+            .into_iter()
+            .zip(sort_options.iter())
+            .map(|(k, sort_op)| PhysicalSortExpr {
+                expr: k,
+                options: *sort_op,
+            })
+            .collect::<Vec<_>>();
+
+        let right_sort_exprs = right_expr
+            .into_iter()
+            .zip(sort_options.iter())
+            .map(|(k, sort_op)| PhysicalSortExpr {
+                expr: k,
+                options: *sort_op,
+            })
+            .collect::<Vec<_>>();
+
+        let output_ordering = match join_type {
+            JoinType::Inner
+            | JoinType::Left
+            | JoinType::LeftSemi
+            | JoinType::LeftAnti => {
+                left.output_ordering().map(|sort_exprs| sort_exprs.to_vec())
+            }
+            JoinType::RightSemi | JoinType::RightAnti => right
+                .output_ordering()
+                .map(|sort_exprs| sort_exprs.to_vec()),
+            JoinType::Right => {
+                let left_columns_len = left.schema().fields.len();
+                right.output_ordering().map(|sort_exprs| {
+                    sort_exprs
+                        .iter()
+                        .map(|e| {
+                            let new_expr = e
+                                .expr
+                                .clone()
+                                .transform_down(&|e| match e
+                                    .as_any()
+                                    .downcast_ref::<Column>()
+                                {
+                                    Some(col) => Some(Arc::new(Column::new(
+                                        col.name(),
+                                        left_columns_len + col.index(),
+                                    ))),
+                                    None => None,
+                                })
+                                .unwrap();
+                            PhysicalSortExpr {
+                                expr: new_expr,
+                                options: e.options,
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                })
+            }
+            JoinType::Full => None,
+        };
 
         let schema =
             Arc::new(build_join_schema(&left_schema, &right_schema, &join_type).0);
@@ -108,9 +192,17 @@ impl SortMergeJoinExec {
             join_type,
             schema,
             metrics: ExecutionPlanMetricsSet::new(),
+            left_sort_exprs,
+            right_sort_exprs,
+            output_ordering,
             sort_options,
             null_equals_null,
         })
+    }
+
+    /// Set of common columns used to join on
+    pub fn on(&self) -> &[(Column, Column)] {
+        &self.on
     }
 }
 
@@ -123,22 +215,51 @@ impl ExecutionPlan for SortMergeJoinExec {
         self.schema.clone()
     }
 
+    fn required_input_distribution(&self) -> Vec<Distribution> {
+        let (left_expr, right_expr) = self
+            .on
+            .iter()
+            .map(|(l, r)| {
+                (
+                    Arc::new(l.clone()) as Arc<dyn PhysicalExpr>,
+                    Arc::new(r.clone()) as Arc<dyn PhysicalExpr>,
+                )
+            })
+            .unzip();
+        vec![
+            Distribution::HashPartitioned(left_expr),
+            Distribution::HashPartitioned(right_expr),
+        ]
+    }
+
+    fn required_input_ordering(&self) -> Vec<Option<&[PhysicalSortExpr]>> {
+        vec![Some(&self.left_sort_exprs), Some(&self.right_sort_exprs)]
+    }
+
     fn output_partitioning(&self) -> Partitioning {
-        self.right.output_partitioning()
+        let left_columns_len = self.left.schema().fields.len();
+        partitioned_join_output_partitioning(
+            self.join_type,
+            self.left.output_partitioning(),
+            self.right.output_partitioning(),
+            left_columns_len,
+        )
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        match self.join_type {
-            JoinType::Inner | JoinType::Left | JoinType::Semi | JoinType::Anti => {
-                self.left.output_ordering()
-            }
-            JoinType::Right => self.right.output_ordering(),
-            JoinType::Full => None,
-        }
+        self.output_ordering.as_deref()
     }
 
-    fn relies_on_input_order(&self) -> bool {
-        true
+    fn equivalence_properties(&self) -> EquivalenceProperties {
+        let left_columns_len = self.left.schema().fields.len();
+        combine_join_equivalence_properties(
+            self.join_type,
+            self.left.equivalence_properties(),
+            self.right.equivalence_properties(),
+            left_columns_len,
+            self.on(),
+            self.schema(),
+        )
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -173,14 +294,14 @@ impl ExecutionPlan for SortMergeJoinExec {
             JoinType::Inner
             | JoinType::Left
             | JoinType::Full
-            | JoinType::Anti
-            | JoinType::Semi => (
+            | JoinType::LeftAnti
+            | JoinType::LeftSemi => (
                 self.left.clone(),
                 self.right.clone(),
                 self.on.iter().map(|on| on.0.clone()).collect(),
                 self.on.iter().map(|on| on.1.clone()).collect(),
             ),
-            JoinType::Right => (
+            JoinType::Right | JoinType::RightSemi | JoinType::RightAnti => (
                 self.right.clone(),
                 self.left.clone(),
                 self.on.iter().map(|on| on.1.clone()).collect(),
@@ -219,8 +340,8 @@ impl ExecutionPlan for SortMergeJoinExec {
             DisplayFormatType::Default => {
                 write!(
                     f,
-                    "SortMergeJoin: join_type={:?}, on={:?}, schema={:?}",
-                    self.join_type, self.on, &self.schema
+                    "SortMergeJoin: join_type={:?}, on={:?}",
+                    self.join_type, self.on
                 )
             }
         }
@@ -767,13 +888,17 @@ impl SMJStream {
             Ordering::Less => {
                 if matches!(
                     self.join_type,
-                    JoinType::Left | JoinType::Right | JoinType::Full | JoinType::Anti
+                    JoinType::Left
+                        | JoinType::Right
+                        | JoinType::RightSemi
+                        | JoinType::Full
+                        | JoinType::LeftAnti
                 ) {
                     join_streamed = !self.streamed_joined;
                 }
             }
             Ordering::Equal => {
-                if matches!(self.join_type, JoinType::Semi) {
+                if matches!(self.join_type, JoinType::LeftSemi) {
                     join_streamed = !self.streamed_joined;
                 }
                 if matches!(
@@ -915,7 +1040,7 @@ impl SMJStream {
             let buffered_indices: UInt64Array = chunk.buffered_indices.finish();
 
             let mut buffered_columns =
-                if matches!(self.join_type, JoinType::Semi | JoinType::Anti) {
+                if matches!(self.join_type, JoinType::LeftSemi | JoinType::LeftAnti) {
                     vec![]
                 } else if let Some(buffered_idx) = chunk.buffered_batch_idx {
                     self.buffered_data.batches[buffered_idx]
@@ -1732,7 +1857,7 @@ mod tests {
             Column::new_with_schema("b1", &right.schema())?,
         )];
 
-        let (_, batches) = join_collect(left, right, on, JoinType::Anti).await?;
+        let (_, batches) = join_collect(left, right, on, JoinType::LeftAnti).await?;
         let expected = vec![
             "+----+----+----+",
             "| a1 | b1 | c1 |",
@@ -1763,7 +1888,7 @@ mod tests {
             Column::new_with_schema("b1", &right.schema())?,
         )];
 
-        let (_, batches) = join_collect(left, right, on, JoinType::Semi).await?;
+        let (_, batches) = join_collect(left, right, on, JoinType::LeftSemi).await?;
         let expected = vec![
             "+----+----+----+",
             "| a1 | b1 | c1 |",

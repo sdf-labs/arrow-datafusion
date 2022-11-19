@@ -98,8 +98,12 @@ pub fn coerce_types(
         | Operator::BitwiseShiftRight
         | Operator::BitwiseShiftLeft => bitwise_coercion(lhs_type, rhs_type),
         Operator::And | Operator::Or => match (lhs_type, rhs_type) {
-            // logical binary boolean operators can only be evaluated in bools
+            // logical binary boolean operators can only be evaluated in bools or nulls
             (DataType::Boolean, DataType::Boolean) => Some(DataType::Boolean),
+            (DataType::Null, DataType::Null) => Some(DataType::Null),
+            (DataType::Boolean, DataType::Null) | (DataType::Null, DataType::Boolean) => {
+                Some(DataType::Boolean)
+            }
             _ => None,
         },
         // logical comparison operators have their own rules, and always return a boolean
@@ -333,6 +337,8 @@ fn mathematics_numerical_coercion(
         (Null, dec_type @ Decimal128(_, _)) | (dec_type @ Decimal128(_, _), Null) => {
             Some(dec_type.clone())
         }
+        (Decimal128(_, _), Float32 | Float64) => Some(Float64),
+        (Float32 | Float64, Decimal128(_, _)) => Some(Float64),
         (Decimal128(_, _), _) => {
             let converted_decimal_type = coerce_numeric_type_to_decimal(rhs_type);
             match converted_decimal_type {
@@ -1016,6 +1022,42 @@ mod tests {
 
         test_coercion_binary_rule!(
             DataType::Boolean,
+            DataType::Boolean,
+            Operator::Or,
+            DataType::Boolean
+        );
+        test_coercion_binary_rule!(
+            DataType::Boolean,
+            DataType::Null,
+            Operator::And,
+            DataType::Boolean
+        );
+        test_coercion_binary_rule!(
+            DataType::Boolean,
+            DataType::Null,
+            Operator::Or,
+            DataType::Boolean
+        );
+        test_coercion_binary_rule!(
+            DataType::Null,
+            DataType::Null,
+            Operator::Or,
+            DataType::Null
+        );
+        test_coercion_binary_rule!(
+            DataType::Null,
+            DataType::Null,
+            Operator::And,
+            DataType::Null
+        );
+        test_coercion_binary_rule!(
+            DataType::Null,
+            DataType::Boolean,
+            Operator::And,
+            DataType::Boolean
+        );
+        test_coercion_binary_rule!(
+            DataType::Null,
             DataType::Boolean,
             Operator::Or,
             DataType::Boolean

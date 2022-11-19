@@ -16,11 +16,12 @@
 // under the License.
 
 use arrow::array::{Array, BooleanArray};
-use arrow::datatypes::{DataType, Field, Schema};
+use arrow::datatypes::{DataType, Schema};
 use arrow::error::{ArrowError, Result as ArrowResult};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{Column, DataFusionError, Result, ScalarValue, ToDFSchema};
 use datafusion_expr::expr_rewriter::{ExprRewritable, ExprRewriter, RewriteRecursion};
+use std::collections::BTreeSet;
 
 use datafusion_expr::Expr;
 use datafusion_optimizer::utils::split_conjunction_owned;
@@ -30,6 +31,10 @@ use parquet::arrow::arrow_reader::{ArrowPredicate, RowFilter};
 use parquet::arrow::ProjectionMask;
 use parquet::file::metadata::ParquetMetaData;
 use std::sync::Arc;
+
+use crate::physical_plan::metrics;
+
+use super::ParquetFileMetrics;
 
 /// This module contains utilities for enabling the pushdown of DataFusion filter predicates (which
 /// can be any DataFusion `Expr` that evaluates to a `BooleanArray`) to the parquet decoder level in `arrow-rs`.
@@ -65,7 +70,12 @@ use std::sync::Arc;
 #[derive(Debug)]
 pub(crate) struct DatafusionArrowPredicate {
     physical_expr: Arc<dyn PhysicalExpr>,
-    projection: ProjectionMask,
+    projection_mask: ProjectionMask,
+    projection: Vec<usize>,
+    /// how many rows were filtered out by this predicate
+    rows_filtered: metrics::Count,
+    /// how long was spent evaluating this predicate
+    time: metrics::Time,
 }
 
 impl DatafusionArrowPredicate {
@@ -73,6 +83,8 @@ impl DatafusionArrowPredicate {
         candidate: FilterCandidate,
         schema: &Schema,
         metadata: &ParquetMetaData,
+        rows_filtered: metrics::Count,
+        time: metrics::Time,
     ) -> Result<Self> {
         let props = ExecutionProps::default();
 
@@ -82,22 +94,40 @@ impl DatafusionArrowPredicate {
         let physical_expr =
             create_physical_expr(&candidate.expr, &df_schema, &schema, &props)?;
 
+        // ArrowPredicate::evaluate is passed columns in the order they appear in the file
+        // If the predicate has multiple columns, we therefore must project the columns based
+        // on the order they appear in the file
+        let projection = match candidate.projection.len() {
+            0 | 1 => vec![],
+            _ => remap_projection(&candidate.projection),
+        };
+
         Ok(Self {
             physical_expr,
-            projection: ProjectionMask::roots(
+            projection,
+            projection_mask: ProjectionMask::roots(
                 metadata.file_metadata().schema_descr(),
                 candidate.projection,
             ),
+            rows_filtered,
+            time,
         })
     }
 }
 
 impl ArrowPredicate for DatafusionArrowPredicate {
     fn projection(&self) -> &ProjectionMask {
-        &self.projection
+        &self.projection_mask
     }
 
     fn evaluate(&mut self, batch: RecordBatch) -> ArrowResult<BooleanArray> {
+        let batch = match self.projection.is_empty() {
+            true => batch,
+            false => batch.project(&self.projection)?,
+        };
+
+        // scoped timer updates on drop
+        let mut timer = self.time.timer();
         match self
             .physical_expr
             .evaluate(&batch)
@@ -105,7 +135,11 @@ impl ArrowPredicate for DatafusionArrowPredicate {
         {
             Ok(array) => {
                 if let Some(mask) = array.as_any().downcast_ref::<BooleanArray>() {
-                    Ok(BooleanArray::from(mask.data().clone()))
+                    let bool_arr = BooleanArray::from(mask.data().clone());
+                    let num_filtered = bool_arr.len() - bool_arr.true_count();
+                    self.rows_filtered.add(num_filtered);
+                    timer.stop();
+                    Ok(bool_arr)
                 } else {
                     Err(ArrowError::ComputeError(
                         "Unexpected result of predicate evaluation, expected BooleanArray".to_owned(),
@@ -141,7 +175,7 @@ struct FilterCandidateBuilder<'a> {
     expr: Expr,
     file_schema: &'a Schema,
     table_schema: &'a Schema,
-    required_column_indices: Vec<usize>,
+    required_column_indices: BTreeSet<usize>,
     non_primitive_columns: bool,
     projected_columns: bool,
 }
@@ -152,7 +186,7 @@ impl<'a> FilterCandidateBuilder<'a> {
             expr,
             file_schema,
             table_schema,
-            required_column_indices: vec![],
+            required_column_indices: BTreeSet::default(),
             non_primitive_columns: false,
             projected_columns: false,
         }
@@ -176,7 +210,7 @@ impl<'a> FilterCandidateBuilder<'a> {
                 expr,
                 required_bytes,
                 can_use_index,
-                projection: self.required_column_indices,
+                projection: self.required_column_indices.into_iter().collect(),
             }))
         }
     }
@@ -186,9 +220,9 @@ impl<'a> ExprRewriter for FilterCandidateBuilder<'a> {
     fn pre_visit(&mut self, expr: &Expr) -> Result<RewriteRecursion> {
         if let Expr::Column(column) = expr {
             if let Ok(idx) = self.file_schema.index_of(&column.name) {
-                self.required_column_indices.push(idx);
+                self.required_column_indices.insert(idx);
 
-                if !is_primitive_field(self.file_schema.field(idx)) {
+                if DataType::is_nested(self.file_schema.field(idx).data_type()) {
                     self.non_primitive_columns = true;
                 }
             } else if self.table_schema.index_of(&column.name).is_err() {
@@ -222,10 +256,39 @@ impl<'a> ExprRewriter for FilterCandidateBuilder<'a> {
     }
 }
 
+/// Computes the projection required to go from the file's schema order to the projected
+/// order expected by this filter
+///
+/// Effectively this computes the rank of each element in `src`
+fn remap_projection(src: &[usize]) -> Vec<usize> {
+    let len = src.len();
+
+    // Compute the column mapping from projected order to file order
+    // i.e. the indices required to sort projected schema into the file schema
+    //
+    // e.g. projection: [5, 9, 0] -> [2, 0, 1]
+    let mut sorted_indexes: Vec<_> = (0..len).collect();
+    sorted_indexes.sort_unstable_by_key(|x| src[*x]);
+
+    // Compute the mapping from schema order to projected order
+    // i.e. the indices required to sort file schema into the projected schema
+    //
+    // Above we computed the order of the projected schema according to the file
+    // schema, and so we can use this as the comparator
+    //
+    // e.g. sorted_indexes [2, 0, 1] -> [1, 2, 0]
+    let mut projection: Vec<_> = (0..len).collect();
+    projection.sort_unstable_by_key(|x| sorted_indexes[*x]);
+    projection
+}
+
 /// Calculate the total compressed size of all `Column's required for
 /// predicate `Expr`. This should represent the total amount of file IO
 /// required to evaluate the predicate.
-fn size_of_columns(columns: &[usize], metadata: &ParquetMetaData) -> Result<usize> {
+fn size_of_columns(
+    columns: &BTreeSet<usize>,
+    metadata: &ParquetMetaData,
+) -> Result<usize> {
     let mut total_size = 0;
     let row_groups = metadata.row_groups();
     for idx in columns {
@@ -240,7 +303,10 @@ fn size_of_columns(columns: &[usize], metadata: &ParquetMetaData) -> Result<usiz
 /// For a given set of `Column`s required for predicate `Expr` determine whether all
 /// columns are sorted. Sorted columns may be queried more efficiently in the presence of
 /// a PageIndex.
-fn columns_sorted(_columns: &[usize], _metadata: &ParquetMetaData) -> Result<bool> {
+fn columns_sorted(
+    _columns: &BTreeSet<usize>,
+    _metadata: &ParquetMetaData,
+) -> Result<bool> {
     // TODO How do we know this?
     Ok(false)
 }
@@ -252,7 +318,11 @@ pub fn build_row_filter(
     table_schema: &Schema,
     metadata: &ParquetMetaData,
     reorder_predicates: bool,
+    file_metrics: &ParquetFileMetrics,
 ) -> Result<Option<RowFilter>> {
+    let rows_filtered = &file_metrics.pushdown_rows_filtered;
+    let time = &file_metrics.pushdown_eval_time;
+
     let predicates = split_conjunction_owned(expr);
 
     let mut candidates: Vec<FilterCandidate> = predicates
@@ -280,15 +350,25 @@ pub fn build_row_filter(
         let mut filters: Vec<Box<dyn ArrowPredicate>> = vec![];
 
         for candidate in indexed_candidates {
-            let filter =
-                DatafusionArrowPredicate::try_new(candidate, file_schema, metadata)?;
+            let filter = DatafusionArrowPredicate::try_new(
+                candidate,
+                file_schema,
+                metadata,
+                rows_filtered.clone(),
+                time.clone(),
+            )?;
 
             filters.push(Box::new(filter));
         }
 
         for candidate in other_candidates {
-            let filter =
-                DatafusionArrowPredicate::try_new(candidate, file_schema, metadata)?;
+            let filter = DatafusionArrowPredicate::try_new(
+                candidate,
+                file_schema,
+                metadata,
+                rows_filtered.clone(),
+                time.clone(),
+            )?;
 
             filters.push(Box::new(filter));
         }
@@ -297,8 +377,13 @@ pub fn build_row_filter(
     } else {
         let mut filters: Vec<Box<dyn ArrowPredicate>> = vec![];
         for candidate in candidates {
-            let filter =
-                DatafusionArrowPredicate::try_new(candidate, file_schema, metadata)?;
+            let filter = DatafusionArrowPredicate::try_new(
+                candidate,
+                file_schema,
+                metadata,
+                rows_filtered.clone(),
+                time.clone(),
+            )?;
 
             filters.push(Box::new(filter));
         }
@@ -307,35 +392,21 @@ pub fn build_row_filter(
     }
 }
 
-/// return true if this is a non nested type.
-// TODO remove after https://github.com/apache/arrow-rs/issues/2704 is done
-fn is_primitive_field(field: &Field) -> bool {
-    !matches!(
-        field.data_type(),
-        DataType::List(_)
-            | DataType::FixedSizeList(_, _)
-            | DataType::LargeList(_)
-            | DataType::Struct(_)
-            | DataType::Union(_, _, _)
-            | DataType::Map(_, _)
-    )
-}
-
 #[cfg(test)]
 mod test {
-    use crate::physical_plan::file_format::row_filter::FilterCandidateBuilder;
-    use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::ScalarValue;
+    use super::*;
+    use arrow::datatypes::Field;
     use datafusion_expr::{cast, col, lit};
     use parquet::arrow::parquet_to_arrow_schema;
     use parquet::file::reader::{FileReader, SerializedFileReader};
+    use rand::prelude::*;
 
     // Assume a column expression for a column not in the table schema is a projected column and ignore it
     #[test]
     #[should_panic(expected = "building candidate failed")]
     fn test_filter_candidate_builder_ignore_projected_columns() {
         let testdata = crate::test_util::parquet_test_data();
-        let file = std::fs::File::open(&format!("{}/alltypes_plain.parquet", testdata))
+        let file = std::fs::File::open(format!("{}/alltypes_plain.parquet", testdata))
             .expect("opening file");
 
         let reader = SerializedFileReader::new(file).expect("creating reader");
@@ -359,7 +430,7 @@ mod test {
     #[test]
     fn test_filter_candidate_builder_ignore_complex_types() {
         let testdata = crate::test_util::parquet_test_data();
-        let file = std::fs::File::open(&format!("{}/list_columns.parquet", testdata))
+        let file = std::fs::File::open(format!("{}/list_columns.parquet", testdata))
             .expect("opening file");
 
         let reader = SerializedFileReader::new(file).expect("creating reader");
@@ -383,7 +454,7 @@ mod test {
     #[test]
     fn test_filter_candidate_builder_rewrite_missing_column() {
         let testdata = crate::test_util::parquet_test_data();
-        let file = std::fs::File::open(&format!("{}/alltypes_plain.parquet", testdata))
+        let file = std::fs::File::open(format!("{}/alltypes_plain.parquet", testdata))
             .expect("opening file");
 
         let reader = SerializedFileReader::new(file).expect("creating reader");
@@ -411,5 +482,23 @@ mod test {
         assert!(candidate.is_some());
 
         assert_eq!(candidate.unwrap().expr, expected_candidate_expr);
+    }
+
+    #[test]
+    fn test_remap_projection() {
+        let mut rng = thread_rng();
+        for _ in 0..100 {
+            // A random selection of column indexes in arbitrary order
+            let projection: Vec<_> = (0..100).map(|_| rng.gen()).collect();
+
+            // File order is the projection sorted
+            let mut file_order = projection.clone();
+            file_order.sort_unstable();
+
+            let remap = remap_projection(&projection);
+            // Applying the remapped projection to the file order should yield the original
+            let remapped: Vec<_> = remap.iter().map(|r| file_order[*r]).collect();
+            assert_eq!(projection, remapped)
+        }
     }
 }

@@ -21,7 +21,8 @@ use std::any::Any;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion_expr::LogicalPlan;
+use datafusion_common::Statistics;
+use datafusion_expr::{CreateExternalTable, LogicalPlan};
 pub use datafusion_expr::{TableProviderFilterPushDown, TableType};
 
 use crate::arrow::datatypes::SchemaRef;
@@ -77,6 +78,11 @@ pub trait TableProvider: Sync + Send {
     ) -> Result<TableProviderFilterPushDown> {
         Ok(TableProviderFilterPushDown::Unsupported)
     }
+
+    /// Get statistics for this table, if available
+    fn statistics(&self) -> Option<Statistics> {
+        None
+    }
 }
 
 /// A factory which creates [`TableProvider`]s at runtime given a URL.
@@ -86,5 +92,9 @@ pub trait TableProvider: Sync + Send {
 #[async_trait]
 pub trait TableProviderFactory: Sync + Send {
     /// Create a TableProvider with the given url
-    async fn create(&self, url: &str) -> Result<Arc<dyn TableProvider>>;
+    async fn create(
+        &self,
+        ctx: &SessionState,
+        cmd: &CreateExternalTable,
+    ) -> Result<Arc<dyn TableProvider>>;
 }

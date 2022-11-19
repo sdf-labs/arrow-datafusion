@@ -55,7 +55,7 @@ pub mod window_function;
 pub use accumulator::{Accumulator, AggregateState};
 pub use aggregate_function::AggregateFunction;
 pub use built_in_function::BuiltinScalarFunction;
-pub use columnar_value::{ColumnarValue, NullColumnarValue};
+pub use columnar_value::ColumnarValue;
 pub use expr::{
     Between, BinaryExpr, Case, Cast, Expr, GetIndexedField, GroupingSet, Like,
 };
@@ -67,12 +67,12 @@ pub use function::{
 };
 pub use literal::{lit, lit_timestamp_nano, Literal, TimestampLiteral};
 pub use logical_plan::{
-    builder::{build_join_schema, union_with_alias, UNNAMED_TABLE},
+    builder::{build_join_schema, union, UNNAMED_TABLE},
     Aggregate, CreateCatalog, CreateCatalogSchema, CreateExternalTable,
     CreateMemoryTable, CreateView, CrossJoin, Distinct, DropTable, DropView,
     EmptyRelation, Explain, Extension, Filter, Join, JoinConstraint, JoinType, Limit,
     LogicalPlan, LogicalPlanBuilder, Partitioning, PlanType, PlanVisitor, Projection,
-    Repartition, Sort, StringifiedPlan, Subquery, SubqueryAlias, TableScan,
+    Repartition, SetVariable, Sort, StringifiedPlan, Subquery, SubqueryAlias, TableScan,
     ToStringifiedPlan, Union, UserDefinedLogicalNode, Values, Window,
 };
 pub use nullif::SUPPORTED_NULLIF_TYPES;

@@ -15,10 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::physical_expr::down_cast_any_ref;
 use crate::PhysicalExpr;
 use arrow::array::{
-    Array, ArrayRef, Date32Array, Date64Array, TimestampMicrosecondArray,
-    TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
+    Array, ArrayRef, Date64Array, TimestampMicrosecondArray, TimestampMillisecondArray,
+    TimestampNanosecondArray, TimestampSecondArray,
 };
 use arrow::compute::unary;
 use arrow::datatypes::{
@@ -26,6 +27,7 @@ use arrow::datatypes::{
     TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
 };
 use arrow::record_batch::RecordBatch;
+use datafusion_common::cast::as_date32_array;
 use datafusion_common::scalar::{
     date32_add, date64_add, microseconds_add, milliseconds_add, nanoseconds_add,
     seconds_add,
@@ -43,6 +45,9 @@ pub struct DateTimeIntervalExpr {
     lhs: Arc<dyn PhysicalExpr>,
     op: Operator,
     rhs: Arc<dyn PhysicalExpr>,
+    // TODO: move type checking to the planning phase and not in the physical expr
+    // so we can remove this
+    input_schema: Schema,
 }
 
 impl DateTimeIntervalExpr {
@@ -57,7 +62,12 @@ impl DateTimeIntervalExpr {
             DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _) => {
                 match rhs.data_type(input_schema)? {
                     DataType::Interval(_) => match &op {
-                        Operator::Plus | Operator::Minus => Ok(Self { lhs, op, rhs }),
+                        Operator::Plus | Operator::Minus => Ok(Self {
+                            lhs,
+                            op,
+                            rhs,
+                            input_schema: input_schema.clone(),
+                        }),
                         _ => Err(DataFusionError::Execution(format!(
                             "Invalid operator '{}' for DateIntervalExpr",
                             op
@@ -144,6 +154,31 @@ impl PhysicalExpr for DateTimeIntervalExpr {
             ColumnarValue::Array(array) => evaluate_array(array, sign, intervals),
         }
     }
+
+    fn children(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        vec![self.lhs.clone(), self.rhs.clone()]
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn PhysicalExpr>>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        Ok(Arc::new(DateTimeIntervalExpr::try_new(
+            children[0].clone(),
+            self.op,
+            children[1].clone(),
+            &self.input_schema,
+        )?))
+    }
+}
+
+impl PartialEq<dyn Any> for DateTimeIntervalExpr {
+    fn eq(&self, other: &dyn Any) -> bool {
+        down_cast_any_ref(other)
+            .downcast_ref::<Self>()
+            .map(|x| self.lhs.eq(&x.lhs) && self.op == x.op && self.rhs.eq(&x.rhs))
+            .unwrap_or(false)
+    }
 }
 
 pub fn evaluate_array(
@@ -153,7 +188,7 @@ pub fn evaluate_array(
 ) -> Result<ColumnarValue> {
     let ret = match array.data_type() {
         DataType::Date32 => {
-            let array = array.as_any().downcast_ref::<Date32Array>().unwrap();
+            let array = as_date32_array(&array)?;
             Arc::new(unary::<Date32Type, _, Date32Type>(array, |days| {
                 date32_add(days, scalar, sign).unwrap()
             })) as ArrayRef
@@ -233,42 +268,42 @@ mod tests {
 
     #[test]
     fn add_11_months() {
-        let prior = NaiveDate::from_ymd(2000, 1, 1);
+        let prior = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
         let actual = shift_months(prior, 11);
         assert_eq!(format!("{:?}", actual).as_str(), "2000-12-01");
     }
 
     #[test]
     fn add_12_months() {
-        let prior = NaiveDate::from_ymd(2000, 1, 1);
+        let prior = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
         let actual = shift_months(prior, 12);
         assert_eq!(format!("{:?}", actual).as_str(), "2001-01-01");
     }
 
     #[test]
     fn add_13_months() {
-        let prior = NaiveDate::from_ymd(2000, 1, 1);
+        let prior = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
         let actual = shift_months(prior, 13);
         assert_eq!(format!("{:?}", actual).as_str(), "2001-02-01");
     }
 
     #[test]
     fn sub_11_months() {
-        let prior = NaiveDate::from_ymd(2000, 1, 1);
+        let prior = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
         let actual = shift_months(prior, -11);
         assert_eq!(format!("{:?}", actual).as_str(), "1999-02-01");
     }
 
     #[test]
     fn sub_12_months() {
-        let prior = NaiveDate::from_ymd(2000, 1, 1);
+        let prior = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
         let actual = shift_months(prior, -12);
         assert_eq!(format!("{:?}", actual).as_str(), "1999-01-01");
     }
 
     #[test]
     fn sub_13_months() {
-        let prior = NaiveDate::from_ymd(2000, 1, 1);
+        let prior = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
         let actual = shift_months(prior, -13);
         assert_eq!(format!("{:?}", actual).as_str(), "1998-12-01");
     }
@@ -286,7 +321,7 @@ mod tests {
         // assert
         match res {
             ColumnarValue::Scalar(ScalarValue::Date32(Some(d))) => {
-                let epoch = NaiveDate::from_ymd(1970, 1, 1);
+                let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
                 let res = epoch.add(Duration::days(d as i64));
                 assert_eq!(format!("{:?}", res).as_str(), "1970-01-02");
             }
@@ -311,7 +346,7 @@ mod tests {
         // assert
         match res {
             ColumnarValue::Scalar(ScalarValue::Date32(Some(d))) => {
-                let epoch = NaiveDate::from_ymd(1970, 1, 1);
+                let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
                 let res = epoch.add(Duration::days(d as i64));
                 assert_eq!(format!("{:?}", res).as_str(), "1968-12-01");
             }
@@ -337,8 +372,8 @@ mod tests {
         // assert
         match res {
             ColumnarValue::Scalar(ScalarValue::Date64(Some(d))) => {
-                let epoch = NaiveDate::from_ymd(1970, 1, 1);
-                let res = epoch.add(Duration::milliseconds(d as i64));
+                let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+                let res = epoch.add(Duration::milliseconds(d));
                 assert_eq!(format!("{:?}", res).as_str(), "1969-12-16");
             }
             _ => Err(DataFusionError::NotImplemented(
@@ -362,7 +397,7 @@ mod tests {
         // assert
         match res {
             ColumnarValue::Scalar(ScalarValue::Date32(Some(d))) => {
-                let epoch = NaiveDate::from_ymd(1970, 1, 1);
+                let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
                 let res = epoch.add(Duration::days(d as i64));
                 assert_eq!(format!("{:?}", res).as_str(), "1970-02-01");
             }
@@ -387,7 +422,7 @@ mod tests {
         // assert
         match res {
             ColumnarValue::Scalar(ScalarValue::Date32(Some(d))) => {
-                let epoch = NaiveDate::from_ymd(1970, 1, 1);
+                let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
                 let res = epoch.add(Duration::days(d as i64));
                 assert_eq!(format!("{:?}", res).as_str(), "1968-12-17");
             }

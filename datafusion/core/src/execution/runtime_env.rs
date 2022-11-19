@@ -28,6 +28,7 @@ use crate::{
 use std::collections::HashMap;
 
 use crate::datasource::datasource::TableProviderFactory;
+use crate::datasource::listing_table_factory::ListingTableFactory;
 use crate::datasource::object_store::ObjectStoreRegistry;
 use datafusion_common::DataFusionError;
 use object_store::ObjectStore;
@@ -93,10 +94,15 @@ impl RuntimeEnv {
         self.memory_manager.shrink_tracker_usage(delta)
     }
 
-    /// Registers an object store with scheme using a custom `ObjectStore` so that
-    /// an external file system or object storage system could be used against this context.
+    /// Registers a custom `ObjectStore` to be used when accessing a
+    /// specific scheme and host. This allows DataFusion to create
+    /// external tables from urls that do not have built in support
+    /// such as `hdfs://...`.
     ///
-    /// Returns the `ObjectStore` previously registered for this scheme, if any
+    /// Returns the [`ObjectStore`] previously registered for this
+    /// scheme, if any.
+    ///
+    /// See [`ObjectStoreRegistry`] for more details
     pub fn register_object_store(
         &self,
         scheme: impl AsRef<str>,
@@ -115,7 +121,9 @@ impl RuntimeEnv {
         self.table_factories.extend(table_factories)
     }
 
-    /// Retrieves a `ObjectStore` instance for a url
+    /// Retrieves a `ObjectStore` instance for a url by consulting the
+    /// registery. See [`ObjectStoreRegistry::get_by_url`] for more
+    /// details.
     pub fn object_store(&self, url: impl AsRef<Url>) -> Result<Arc<dyn ObjectStore>> {
         self.object_store_registry
             .get_by_url(url)
@@ -145,7 +153,17 @@ pub struct RuntimeConfig {
 impl RuntimeConfig {
     /// New with default values
     pub fn new() -> Self {
-        Default::default()
+        let mut table_factories: HashMap<String, Arc<dyn TableProviderFactory>> =
+            HashMap::new();
+        table_factories.insert("PARQUET".into(), Arc::new(ListingTableFactory::new()));
+        table_factories.insert("CSV".into(), Arc::new(ListingTableFactory::new()));
+        table_factories.insert("JSON".into(), Arc::new(ListingTableFactory::new()));
+        table_factories.insert("NDJSON".into(), Arc::new(ListingTableFactory::new()));
+        table_factories.insert("AVRO".into(), Arc::new(ListingTableFactory::new()));
+        Self {
+            table_factories,
+            ..Default::default()
+        }
     }
 
     /// Customize disk manager

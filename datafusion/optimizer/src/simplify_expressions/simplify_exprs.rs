@@ -51,13 +51,12 @@ impl OptimizerRule for SimplifyExpressions {
         let mut execution_props = ExecutionProps::new();
         execution_props.query_execution_start_time =
             optimizer_config.query_execution_start_time();
-        self.optimize_internal(plan, &execution_props)
+        Self::optimize_internal(plan, &execution_props)
     }
 }
 
 impl SimplifyExpressions {
     fn optimize_internal(
-        &self,
         plan: &LogicalPlan,
         execution_props: &ExecutionProps,
     ) -> Result<LogicalPlan> {
@@ -78,7 +77,7 @@ impl SimplifyExpressions {
         let new_inputs = plan
             .inputs()
             .iter()
-            .map(|input| self.optimize_internal(input, execution_props))
+            .map(|input| Self::optimize_internal(input, execution_props))
             .collect::<Result<Vec<_>>>()?;
 
         let expr = plan
@@ -517,7 +516,7 @@ mod tests {
         // expect the same timestamp appears in both exprs
         let actual = get_optimized_plan_formatted(&plan, &time);
         let expected = format!(
-            "Projection: TimestampNanosecond({}, Some(\"UTC\")) AS now(), TimestampNanosecond({}, Some(\"UTC\")) AS t2\
+            "Projection: TimestampNanosecond({}, Some(\"+00:00\")) AS now(), TimestampNanosecond({}, Some(\"+00:00\")) AS t2\
             \n  TableScan: test",
             time.timestamp_nanos(),
             time.timestamp_nanos()
@@ -553,7 +552,7 @@ mod tests {
         let table_scan = test_table_scan();
 
         let ts_string = "2020-09-08T12:05:00+00:00";
-        let time = chrono::Utc.timestamp_nanos(1599566400000000000i64);
+        let time = Utc.timestamp_nanos(1599566400000000000i64);
 
         //  cast(now() as int) < cast(to_timestamp(...) as int) + 50000_i64
         let plan =
@@ -581,7 +580,7 @@ mod tests {
         let table_scan = test_table_scan();
 
         let ts_string = "2020-09-08T12:05:00+00:00";
-        let time = chrono::Utc.timestamp_nanos(1599566400000000000i64);
+        let time = Utc.timestamp_nanos(1599566400000000000i64);
 
         //  now() < cast(to_timestamp(...) as int) + 5000000000
         let schema = table_scan.schema();
@@ -596,8 +595,6 @@ mod tests {
             .unwrap()
             .build()
             .unwrap();
-
-        println!("{:?}", plan);
 
         // Note that constant folder runs and folds the entire
         // expression down to a single constant (true)
@@ -707,7 +704,8 @@ mod tests {
             .unwrap()
             .build()
             .unwrap();
-        let expected = "Filter: test.d NOT IN ([Int32(1), Int32(2), Int32(3)])\
+        let expected =
+            "Filter: test.d != Int32(3) AND test.d != Int32(2) AND test.d != Int32(1)\
         \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -722,7 +720,8 @@ mod tests {
             .unwrap()
             .build()
             .unwrap();
-        let expected = "Filter: test.d IN ([Int32(1), Int32(2), Int32(3)])\
+        let expected =
+            "Filter: test.d = Int32(3) OR test.d = Int32(2) OR test.d = Int32(1)\
         \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);

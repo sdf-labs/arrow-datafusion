@@ -19,10 +19,12 @@
 use crate::logical_plan::{AsLogicalPlan, LogicalExtensionCodec};
 use crate::{from_proto::parse_expr, protobuf};
 use arrow::datatypes::SchemaRef;
-use async_trait::async_trait;
 use datafusion::datasource::TableProvider;
+use datafusion::physical_plan::functions::make_scalar_function;
 use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::{Expr, Extension, LogicalPlan};
+use datafusion_expr::{
+    create_udaf, create_udf, Expr, Extension, LogicalPlan, Volatility,
+};
 use prost::{
     bytes::{Bytes, BytesMut},
     Message,
@@ -84,7 +86,45 @@ impl Serializeable for Expr {
             DataFusionError::Plan(format!("Error encoding protobuf as bytes: {}", e))
         })?;
 
-        Ok(buffer.into())
+        let bytes: Bytes = buffer.into();
+
+        // the produced byte stream may lead to "recursion limit" errors, see
+        // https://github.com/apache/arrow-datafusion/issues/3968
+        // Until the underlying prost issue ( https://github.com/tokio-rs/prost/issues/736 ) is fixed, we try to
+        // deserialize the data here and check for errors.
+        //
+        // Need to provide some placeholder registry because the stream may contain UDFs
+        struct PlaceHolderRegistry;
+
+        impl FunctionRegistry for PlaceHolderRegistry {
+            fn udfs(&self) -> std::collections::HashSet<String> {
+                std::collections::HashSet::default()
+            }
+
+            fn udf(&self, name: &str) -> Result<Arc<datafusion_expr::ScalarUDF>> {
+                Ok(Arc::new(create_udf(
+                    name,
+                    vec![],
+                    Arc::new(arrow::datatypes::DataType::Null),
+                    Volatility::Immutable,
+                    make_scalar_function(|_| unimplemented!()),
+                )))
+            }
+
+            fn udaf(&self, name: &str) -> Result<Arc<datafusion_expr::AggregateUDF>> {
+                Ok(Arc::new(create_udaf(
+                    name,
+                    arrow::datatypes::DataType::Null,
+                    Arc::new(arrow::datatypes::DataType::Null),
+                    Volatility::Immutable,
+                    Arc::new(|_| unimplemented!()),
+                    Arc::new(vec![]),
+                )))
+            }
+        }
+        Expr::from_bytes_with_registry(&bytes, &PlaceHolderRegistry)?;
+
+        Ok(bytes)
     }
 
     fn from_bytes_with_registry(
@@ -136,27 +176,24 @@ pub fn logical_plan_to_bytes_with_extension_codec(
 
 /// Deserialize a LogicalPlan from json
 #[cfg(feature = "json")]
-pub async fn logical_plan_from_json(
-    json: &str,
-    ctx: &SessionContext,
-) -> Result<LogicalPlan> {
+pub fn logical_plan_from_json(json: &str, ctx: &SessionContext) -> Result<LogicalPlan> {
     let back: protobuf::LogicalPlanNode = serde_json::from_str(json)
         .map_err(|e| DataFusionError::Plan(format!("Error serializing plan: {}", e)))?;
     let extension_codec = DefaultExtensionCodec {};
-    back.try_into_logical_plan(ctx, &extension_codec).await
+    back.try_into_logical_plan(ctx, &extension_codec)
 }
 
 /// Deserialize a LogicalPlan from bytes
-pub async fn logical_plan_from_bytes(
+pub fn logical_plan_from_bytes(
     bytes: &[u8],
     ctx: &SessionContext,
 ) -> Result<LogicalPlan> {
     let extension_codec = DefaultExtensionCodec {};
-    logical_plan_from_bytes_with_extension_codec(bytes, ctx, &extension_codec).await
+    logical_plan_from_bytes_with_extension_codec(bytes, ctx, &extension_codec)
 }
 
 /// Deserialize a LogicalPlan from bytes
-pub async fn logical_plan_from_bytes_with_extension_codec(
+pub fn logical_plan_from_bytes_with_extension_codec(
     bytes: &[u8],
     ctx: &SessionContext,
     extension_codec: &dyn LogicalExtensionCodec,
@@ -164,13 +201,12 @@ pub async fn logical_plan_from_bytes_with_extension_codec(
     let protobuf = protobuf::LogicalPlanNode::decode(bytes).map_err(|e| {
         DataFusionError::Plan(format!("Error decoding expr as protobuf: {}", e))
     })?;
-    protobuf.try_into_logical_plan(ctx, extension_codec).await
+    protobuf.try_into_logical_plan(ctx, extension_codec)
 }
 
 #[derive(Debug)]
 struct DefaultExtensionCodec {}
 
-#[async_trait]
 impl LogicalExtensionCodec for DefaultExtensionCodec {
     fn try_decode(
         &self,
@@ -189,7 +225,7 @@ impl LogicalExtensionCodec for DefaultExtensionCodec {
         ))
     }
 
-    async fn try_decode_table_provider(
+    fn try_decode_table_provider(
         &self,
         _buf: &[u8],
         _schema: SchemaRef,
@@ -217,7 +253,7 @@ mod test {
     use arrow::{array::ArrayRef, datatypes::DataType};
     use datafusion::physical_plan::functions::make_scalar_function;
     use datafusion::prelude::SessionContext;
-    use datafusion_expr::{create_udf, lit, Volatility};
+    use datafusion_expr::{col, create_udf, lit, Volatility};
     use std::sync::Arc;
 
     #[test]
@@ -243,12 +279,12 @@ mod test {
         assert_eq!(actual, expected);
     }
 
-    #[tokio::test]
+    #[test]
     #[cfg(feature = "json")]
-    async fn json_to_plan() {
+    fn json_to_plan() {
         let input = r#"{"emptyRelation":{}}"#.to_string();
         let ctx = SessionContext::new();
-        let actual = logical_plan_from_json(&input, &ctx).await.unwrap();
+        let actual = logical_plan_from_json(&input, &ctx).unwrap();
         let result = matches!(actual, LogicalPlan::EmptyRelation(_));
         assert!(result, "Should parse empty relation");
     }
@@ -283,6 +319,130 @@ mod test {
         let bytes = expr.to_bytes().unwrap();
         // should explode
         Expr::from_bytes(&bytes).unwrap();
+    }
+
+    fn roundtrip_expr(expr: &Expr) -> Expr {
+        let bytes = expr.to_bytes().unwrap();
+        Expr::from_bytes(&bytes).unwrap()
+    }
+
+    #[test]
+    fn exact_roundtrip_linearized_binary_expr() {
+        // (((A AND B) AND C) AND D)
+        let expr_ordered = col("A").and(col("B")).and(col("C")).and(col("D"));
+        assert_eq!(expr_ordered, roundtrip_expr(&expr_ordered));
+
+        // Ensure that no other variation becomes equal
+        let other_variants = vec![
+            // (((B AND A) AND C) AND D)
+            col("B").and(col("A")).and(col("C")).and(col("D")),
+            // (((A AND C) AND B) AND D)
+            col("A").and(col("C")).and(col("B")).and(col("D")),
+            // (((A AND B) AND D) AND C)
+            col("A").and(col("B")).and(col("D")).and(col("C")),
+            // A AND (B AND (C AND D)))
+            col("A").and(col("B").and(col("C").and(col("D")))),
+        ];
+        for case in other_variants {
+            // Each variant is still equal to itself
+            assert_eq!(case, roundtrip_expr(&case));
+
+            // But non of them is equal to the original
+            assert_ne!(expr_ordered, roundtrip_expr(&case));
+            assert_ne!(roundtrip_expr(&expr_ordered), roundtrip_expr(&case));
+        }
+    }
+
+    #[test]
+    fn roundtrip_deeply_nested_binary_expr() {
+        // We need more stack space so this doesn't overflow in dev builds
+        std::thread::Builder::new()
+            .stack_size(10_000_000)
+            .spawn(|| {
+                let n = 100;
+                // a < 5
+                let basic_expr = col("a").lt(lit(5i32));
+                // (a < 5) OR (a < 5) OR (a < 5) OR ...
+                let or_chain = (0..n)
+                    .fold(basic_expr.clone(), |expr, _| expr.or(basic_expr.clone()));
+                // (a < 5) OR (a < 5) AND (a < 5) OR (a < 5) AND (a < 5) AND (a < 5) OR ...
+                let expr =
+                    (0..n).fold(or_chain.clone(), |expr, _| expr.and(or_chain.clone()));
+
+                // Should work fine.
+                let bytes = expr.to_bytes().unwrap();
+
+                let decoded_expr = Expr::from_bytes(&bytes).expect(
+                    "serialization worked, so deserialization should work as well",
+                );
+                assert_eq!(decoded_expr, expr);
+            })
+            .expect("spawning thread")
+            .join()
+            .expect("joining thread");
+    }
+
+    #[test]
+    fn roundtrip_deeply_nested_binary_expr_reverse_order() {
+        // We need more stack space so this doesn't overflow in dev builds
+        std::thread::Builder::new()
+            .stack_size(10_000_000)
+            .spawn(|| {
+                let n = 100;
+
+                // a < 5
+                let expr_base = col("a").lt(lit(5i32));
+
+                // ((a < 5 AND a < 5) AND a < 5) AND ...
+                let and_chain =
+                    (0..n).fold(expr_base.clone(), |expr, _| expr.and(expr_base.clone()));
+
+                // a < 5 AND (a < 5 AND (a < 5 AND ...))
+                let expr = expr_base.and(and_chain);
+
+                // Should work fine.
+                let bytes = expr.to_bytes().unwrap();
+
+                let decoded_expr = Expr::from_bytes(&bytes).expect(
+                    "serialization worked, so deserialization should work as well",
+                );
+                assert_eq!(decoded_expr, expr);
+            })
+            .expect("spawning thread")
+            .join()
+            .expect("joining thread");
+    }
+
+    #[test]
+    fn roundtrip_deeply_nested() {
+        // we need more stack space so this doesn't overflow in dev builds
+        std::thread::Builder::new().stack_size(10_000_000).spawn(|| {
+            // don't know what "too much" is, so let's slowly try to increase complexity
+            let n_max = 100;
+
+            for n in 1..n_max {
+                println!("testing: {n}");
+
+                let expr_base = col("a").lt(lit(5i32));
+                // Generate a tree of AND and OR expressions (no subsequent ANDs or ORs).
+                let expr = (0..n).fold(expr_base.clone(), |expr, n| if n % 2 == 0 { expr.and(expr_base.clone()) } else { expr.or(expr_base.clone()) });
+
+                // Convert it to an opaque form
+                let bytes = match expr.to_bytes() {
+                    Ok(bytes) => bytes,
+                    Err(_) => {
+                        // found expression that is too deeply nested
+                        return;
+                    }
+                };
+
+                // Decode bytes from somewhere (over network, etc.
+                let decoded_expr = Expr::from_bytes(&bytes).expect("serialization worked, so deserialization should work as well");
+                assert_eq!(expr, decoded_expr);
+            }
+
+            panic!("did not find a 'too deeply nested' expression, tested up to a depth of {n_max}")
+        }).expect("spawning thread").join().expect("joining thread");
     }
 
     /// return a `SessionContext` with a `dummy` function registered as a UDF

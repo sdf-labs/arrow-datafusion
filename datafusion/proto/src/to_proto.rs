@@ -455,11 +455,36 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                 }
             }
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
-                let binary_expr = Box::new(protobuf::BinaryExprNode {
-                    l: Some(Box::new(left.as_ref().try_into()?)),
-                    r: Some(Box::new(right.as_ref().try_into()?)),
+                // Try to linerize a nested binary expression tree of the same operator
+                // into a flat vector of expressions.
+                let mut exprs = vec![right.as_ref()];
+                let mut current_expr = left.as_ref();
+                while let Expr::BinaryExpr(BinaryExpr {
+                    left,
+                    op: current_op,
+                    right,
+                }) = current_expr
+                {
+                    if current_op == op {
+                        exprs.push(right.as_ref());
+                        current_expr = left.as_ref();
+                    } else {
+                        break;
+                    }
+                }
+                exprs.push(current_expr);
+
+                let binary_expr = protobuf::BinaryExprNode {
+                    // We need to reverse exprs since operands are expected to be
+                    // linearized from left innermost to right outermost (but while
+                    // traversing the chain we do the exact opposite).
+                    operands: exprs
+                    .into_iter()
+                    .rev()
+                    .map(|expr| expr.try_into())
+                    .collect::<Result<Vec<_>, Error>>()?,
                     op: format!("{:?}", op),
-                });
+                };
                 Self {
                     expr_type: Some(ExprType::BinaryExpr(binary_expr)),
                 }
@@ -471,7 +496,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     pattern: Some(Box::new(pattern.as_ref().try_into()?)),
                     escape_char: escape_char
                         .map(|ch| ch.to_string())
-                        .unwrap_or_else(|| "".to_string()),
+                        .unwrap_or_default()
                 });
                 Self {
                     expr_type: Some(ExprType::Like(pb)),
@@ -484,7 +509,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     pattern: Some(Box::new(pattern.as_ref().try_into()?)),
                     escape_char: escape_char
                         .map(|ch| ch.to_string())
-                        .unwrap_or_else(|| "".to_string()),
+                        .unwrap_or_default(),
                 });
                 Self {
                     expr_type: Some(ExprType::Ilike(pb)),
@@ -497,7 +522,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     pattern: Some(Box::new(pattern.as_ref().try_into()?)),
                     escape_char: escape_char
                         .map(|ch| ch.to_string())
-                        .unwrap_or_else(|| "".to_string()),
+                        .unwrap_or_default(),
                 });
                 Self {
                     expr_type: Some(ExprType::SimilarTo(pb)),
@@ -1164,6 +1189,7 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::Left => Self::Left,
             BuiltinScalarFunction::Lpad => Self::Lpad,
             BuiltinScalarFunction::Random => Self::Random,
+            BuiltinScalarFunction::Uuid => Self::Uuid,
             BuiltinScalarFunction::RegexpReplace => Self::RegexpReplace,
             BuiltinScalarFunction::Repeat => Self::Repeat,
             BuiltinScalarFunction::Replace => Self::Replace,
@@ -1178,6 +1204,8 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::ToTimestampMicros => Self::ToTimestampMicros,
             BuiltinScalarFunction::ToTimestampSeconds => Self::ToTimestampSeconds,
             BuiltinScalarFunction::Now => Self::Now,
+            BuiltinScalarFunction::CurrentDate => Self::CurrentDate,
+            BuiltinScalarFunction::CurrentTime => Self::CurrentTime,
             BuiltinScalarFunction::Translate => Self::Translate,
             BuiltinScalarFunction::RegexpMatch => Self::RegexpMatch,
             BuiltinScalarFunction::Coalesce => Self::Coalesce,

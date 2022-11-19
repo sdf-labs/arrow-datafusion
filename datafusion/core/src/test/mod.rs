@@ -53,8 +53,8 @@ pub fn create_table_dual() -> Arc<dyn TableProvider> {
     let batch = RecordBatch::try_new(
         dual_schema.clone(),
         vec![
-            Arc::new(array::Int32Array::from_slice(&[1])),
-            Arc::new(array::StringArray::from_slice(&["a"])),
+            Arc::new(array::Int32Array::from_slice([1])),
+            Arc::new(array::StringArray::from_slice(["a"])),
         ],
     )
     .unwrap();
@@ -106,7 +106,7 @@ pub fn partitioned_file_groups(
                 .get_ext_with_compression(file_compression_type.to_owned())
                 .unwrap()
         );
-        let filename = tmp_dir.join(&filename);
+        let filename = tmp_dir.join(filename);
 
         let file = File::create(&filename).unwrap();
 
@@ -125,7 +125,7 @@ pub fn partitioned_file_groups(
         files.push(filename);
     }
 
-    let f = File::open(&path)?;
+    let f = File::open(path)?;
     let f = BufReader::new(f);
     for (i, line) in f.lines().enumerate() {
         let line = line.unwrap();
@@ -167,6 +167,7 @@ pub fn partitioned_csv_config(
         limit: None,
         table_partition_cols: vec![],
         config_options: ConfigOptions::new().into_shareable(),
+        output_ordering: None,
     })
 }
 
@@ -282,7 +283,7 @@ pub fn create_vec_batches(schema: &Schema, n: usize) -> Vec<RecordBatch> {
 fn create_batch(schema: &Schema) -> RecordBatch {
     RecordBatch::try_new(
         Arc::new(schema.clone()),
-        vec![Arc::new(UInt32Array::from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]))],
+        vec![Arc::new(UInt32Array::from_slice([1, 2, 3, 4, 5, 6, 7, 8]))],
     )
     .unwrap()
 }
