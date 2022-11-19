@@ -27,7 +27,7 @@ use sqlparser::{
     tokenizer::{Token, Tokenizer},
 };
 use std::{
-    collections::{HashSet, VecDeque},
+    collections::{HashSet, VecDeque, HashMap},
     fmt, fs,
     path::{Path, PathBuf},
 };

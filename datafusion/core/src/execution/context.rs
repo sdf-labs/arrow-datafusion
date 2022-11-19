@@ -68,7 +68,7 @@ use datafusion_sql::{ResolvedTableReference, TableReference};
 
 use crate::physical_optimizer::coalesce_batches::CoalesceBatches;
 use crate::physical_optimizer::repartition::Repartition;
-use datafusion_sql::{ResolvedTableReference, TableReference}; 
+//use datafusion_sql::{ResolvedTableReference, TableReference}; 
 
 use crate::config::{
     ConfigOptions, OPT_BATCH_SIZE, OPT_COALESCE_BATCHES, OPT_COALESCE_TARGET_BATCH_SIZE,
@@ -371,23 +371,23 @@ impl SessionContext {
             LogicalPlan::CreateExternalTable(cmd) => {
                 self.create_external_table(&cmd).await
             }
-            LogicalPlan::CreateExternalTable(cmd) => {
-                let name = self.qualify_table_name(&cmd.name); 
-                let result = match cmd.file_type.as_str() {
-                    "PARQUET" | "CSV" | "JSON" | "AVRO" => {
+            // LogicalPlan::CreateExternalTable(cmd) => {
+            //     let name = self.qualify_table_name(&cmd.name); 
+            //     let result = match cmd.file_type.as_str() {
+            //         "PARQUET" | "CSV" | "JSON" | "AVRO" => {
                        
-                        println!("-- CREATE EXTERNAL TABLE {};", name);
-                        self.create_listing_table(&cmd).await
-                    }
-                    _ => {
-                        println!("-- CREATE CUSTOM TABLE {};", name);
-                        self.create_custom_table(&cmd).await
-                    }
-                };
-                let tr = TableReference::from(name.as_str());
-                let state = self.state();
-                update_def_use_and_return(tr, state, result)
-            }
+            //             println!("-- CREATE EXTERNAL TABLE {};", name);
+            //             self.create_listing_table(&cmd).await
+            //         }
+            //         _ => {
+            //             println!("-- CREATE CUSTOM TABLE {};", name);
+            //             self.create_custom_table(&cmd).await
+            //         }
+            //     };
+            //     let tr = TableReference::from(name.as_str());
+            //     let state = self.state();
+            //     update_def_use_and_return(tr, state, result)
+            // }
 
             LogicalPlan::CreateMemoryTable(CreateMemoryTable {
                 name,
