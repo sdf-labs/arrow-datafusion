@@ -26,7 +26,7 @@ pub struct PrintOptions {
     pub quiet: bool,
 }
 
-fn print_timing_info(row_count: usize, now: Instant) {
+pub fn print_timing_info(row_count: usize, now: Instant) {
     println!(
         "{} {} in set. Query took {:.3} seconds.",
         row_count,

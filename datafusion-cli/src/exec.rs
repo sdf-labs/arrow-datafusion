@@ -159,7 +159,7 @@ pub async fn exec_from_repl(
     rl.save_history(".history")
 }
 
-async fn exec_and_print(
+pub async fn exec_and_print(
     ctx: &mut SessionContext,
     print_options: &PrintOptions,
     sql: String,

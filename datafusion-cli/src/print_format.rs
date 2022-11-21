@@ -55,18 +55,22 @@ macro_rules! batches_to_json {
 
 fn print_batches_with_sep(batches: &[RecordBatch], delimiter: u8) -> Result<String> {
     let mut bytes = vec![];
-    {
-        let builder = WriterBuilder::new()
-            .has_headers(true)
-            .with_delimiter(delimiter);
-        let mut writer = builder.build(&mut bytes);
-        for batch in batches {
-            writer.write(batch)?;
+    if batches.len() > 0 {
+        {
+            let builder = WriterBuilder::new()
+                .has_headers(true)
+                .with_delimiter(delimiter);
+            let mut writer = builder.build(&mut bytes);
+            for batch in batches {
+                writer.write(batch)?;
+            }
         }
+        let formatted = String::from_utf8(bytes)
+            .map_err(|e| DataFusionError::Execution(e.to_string()))?;
+        Ok(formatted)
+    } else {
+        Ok("".to_owned())
     }
-    let formatted = String::from_utf8(bytes)
-        .map_err(|e| DataFusionError::Execution(e.to_string()))?;
-    Ok(formatted)
 }
 
 impl PrintFormat {
@@ -75,13 +79,23 @@ impl PrintFormat {
         match self {
             Self::Csv => println!("{}", print_batches_with_sep(batches, b',')?),
             Self::Tsv => println!("{}", print_batches_with_sep(batches, b'\t')?),
-            Self::Table => pretty::print_batches(batches)?,
+            Self::Table => print_batches(batches)?,
             Self::Json => println!("{}", batches_to_json!(ArrayWriter, batches)),
             Self::NdJson => {
                 println!("{}", batches_to_json!(LineDelimitedWriter, batches))
             }
         }
         Ok(())
+    }
+}
+
+pub fn print_batches(results: &[RecordBatch]) -> Result<()> {
+    if results.len() == 0 {
+        return Ok(());
+    }
+    match pretty::print_batches(results) {
+        Ok(res) => Ok(res),
+        Err(err) => Err(DataFusionError::Execution(format!("{}", err))),
     }
 }
 

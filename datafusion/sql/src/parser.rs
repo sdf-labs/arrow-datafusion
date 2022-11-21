@@ -19,15 +19,17 @@
 //!
 //! Declares a SQL parser based on sqlparser that handles custom formats that we need.
 
-use regex::Regex;
 use sqlparser::{
-    ast::{ColumnDef, ColumnOptionDef, Statement as SQLStatement, TableConstraint},
+    ast::{
+        ColumnDef, ColumnOptionDef, HiveDistributionStyle, Ident, ObjectName,
+        Statement as SQLStatement, TableConstraint,
+    },
     dialect::{keywords::Keyword, Dialect, GenericDialect},
     parser::{Parser, ParserError},
     tokenizer::{Token, Tokenizer},
 };
 use std::{
-    collections::{HashSet, VecDeque, HashMap},
+    collections::{HashMap, HashSet, VecDeque},
     fmt, fs,
     path::{Path, PathBuf},
 };
@@ -41,22 +43,23 @@ lazy_static! {
     /// collects all files that have been visited so far
     pub static ref VISITED_FILES: Mutex<HashSet<String>> = Mutex::new(HashSet::new());
     // collects all packages that have been visited so far
-    static ref VISITED_CATALOGS: Mutex<HashSet<String>> = Mutex::new(HashSet::new());
+    pub static ref VISITED_CATALOGS: Mutex<HashSet<String>> = Mutex::new(HashSet::new());
+    // collects all external table locations, catalog.schema.table -> relative
+    pub static ref VISITED_SCHEMAS: Mutex<HashSet<String>> = Mutex::new(HashSet::new());
     // collects all external table locations, catalog.schema.table -> relative path
     pub static ref LOCATIONS: Mutex<HashSet<String>> = Mutex::new(HashSet::new());
 }
+pub static CATALOG: &str = "catalog.yml";
+pub static WORKSPACE: &str = "workspace.yml";
+pub static DATA_DIR: &str = ".data";
 
-static CATALOG_ROOT: &str = "sdf.pkg.yml";
-
-pub fn init_visited(target_filename: &String, package_name: &String) {
-    VISITED_FILES
+pub fn visit(filename: &str, catalog: &str, schema: &str) {
+    VISITED_FILES.lock().unwrap().insert(filename.to_owned());
+    VISITED_CATALOGS.lock().unwrap().insert(catalog.to_owned());
+    VISITED_SCHEMAS
         .lock()
         .unwrap()
-        .insert(target_filename.clone());
-    VISITED_CATALOGS
-        .lock()
-        .unwrap()
-        .insert(package_name.clone());
+        .insert(format!("{}.{}", catalog, schema));
 }
 
 // Removes directory path and returns the file name; like path.filename, but for strings
@@ -66,10 +69,23 @@ pub fn basename(path: &str) -> String {
         None => path.to_owned(),
     }
 }
+// Removes basename from directory path
+pub fn parent(path: &str) -> String {
+    match path.rfind('/') {
+        Some(i) => path[0..i].to_owned(),
+        None => "".to_owned(),
+    }
+}
+pub fn extension(path: &str) -> String {
+    match path.rfind('.') {
+        Some(i) => path[i + 1..].to_owned(),
+        None => "".to_owned(),
+    }
+}
 
 pub fn find_package_file(starting_directory: &Path) -> Option<PathBuf> {
     let mut path: PathBuf = starting_directory.into();
-    let root_filename = Path::new(CATALOG_ROOT);
+    let root_filename = Path::new(CATALOG);
 
     loop {
         path.push(root_filename);
@@ -169,9 +185,10 @@ pub enum Statement {
 /// SDF StatementMeta
 ///
 /// The location at which the statement is defined.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StatementMeta {
     pub catalog: String,
-    pub schema_path: String,
+    pub schema: String,
     pub table: String,
     pub line_number: i32,
 }
@@ -181,34 +198,34 @@ impl StatementMeta {
     pub fn empty() -> Self {
         StatementMeta {
             catalog: String::new(),
-            schema_path: String::new(),
+            schema: String::new(),
             table: String::new(),
             line_number: 0,
         }
     }
     /// An statement definition location without line number
     //   That's' what Datafusion gives us today
-    pub fn new(catalog: String, schema_path: String) -> Self {
+    pub fn new(catalog: String, schema: String) -> Self {
         StatementMeta {
             catalog,
-            schema_path,
+            schema: schema,
             table: String::new(),
             line_number: 0,
         }
     }
     /// An statement definition location without line number
     //   That's' what Datafusion gives us today
-    pub fn new_with_table(catalog: String, schema_path: String, table: String)  -> Self {
+    pub fn new_with_table(catalog: String, schema: String, table: String) -> Self {
         StatementMeta {
             catalog,
-            schema_path,
+            schema: schema,
             table,
             line_number: 0,
         }
     }
     /// Return schema_file name, which is relative to workspace
     pub fn schema_filename(&self) -> String {
-        format!("{},{}.sql", self.catalog, self.schema_path)
+        format!("{},{}.sql", self.catalog, self.schema)
     }
 }
 
@@ -218,6 +235,7 @@ pub struct DFParser<'a> {
     parser: Parser<'a>,
     catalog: String,
     schema: String,
+    table: String,
     workspace_path: String,
 }
 
@@ -240,6 +258,7 @@ impl<'a> DFParser<'a> {
             parser: Parser::new(tokens, dialect),
             catalog: String::new(),
             schema: String::new(),
+            table: String::new(),
             workspace_path: String::new(),
         })
     }
@@ -250,6 +269,7 @@ impl<'a> DFParser<'a> {
         _filename: String,
         catalog: String,
         schema: String,
+        table: String,
         workspace_path: String,
     ) -> Result<Self, ParserError> {
         let mut tokenizer = Tokenizer::new(dialect, sql);
@@ -260,6 +280,7 @@ impl<'a> DFParser<'a> {
             ),
             catalog,
             schema,
+            table,
             workspace_path,
         })
     }
@@ -276,6 +297,7 @@ impl<'a> DFParser<'a> {
         _filename: String,
         catalog: String,
         schema: String,
+        table: String,
         workspace_path: String,
     ) -> Result<VecDeque<(Statement, StatementMeta)>, ParserError> {
         let dialect = &GenericDialect {};
@@ -285,6 +307,7 @@ impl<'a> DFParser<'a> {
             _filename,
             catalog,
             schema,
+            table,
             workspace_path,
         )
     }
@@ -305,6 +328,7 @@ impl<'a> DFParser<'a> {
         _filename: String,
         catalog: String,
         schema: String,
+        table: String,
         workspace_path: String,
     ) -> Result<VecDeque<(Statement, StatementMeta)>, ParserError> {
         let parser = DFParser::new_with_dialect_and_scope(
@@ -313,6 +337,7 @@ impl<'a> DFParser<'a> {
             _filename,
             catalog,
             schema,
+            table,
             workspace_path,
         )?;
         Self::parse_statements(parser)
@@ -360,67 +385,56 @@ impl<'a> DFParser<'a> {
         parser_err!(format!("Expected {}, found: {}", expected, found))
     }
 
-    /// Report wrong use
-    fn wrong_use<T>(&self, msg: &str, _at: Token) -> Result<T, ParserError> {
-        Err(ParserError::ParserError(msg.to_owned()))
-    }
-
     fn parse_use(
         parser: &mut DFParser,
     ) -> Result<VecDeque<(Statement, StatementMeta)>, ParserError> {
         let next = parser.parser.next_token();
-        if parser.catalog == "" {
-            return parser.wrong_use(
-                &format!("Use statement can only be used in a catalog contexts; did you a miss to add a {} file", CATALOG_ROOT),
-                next,
-            );
-        }
         let workspace_path = parser.workspace_path.clone();
         match next.clone() {
-            Token::SingleQuotedString(schema_path) => {
-                // we are staying in the same catalog -- we are reusing parser.catalog
+            // Token::SingleQuotedString(schema_path) => {
+            //     // we are staying in the same catalog -- we are reusing parser.catalog
 
-                // compute filename
-                let schema = basename(&schema_path);
-                let schema_filename = format!(
-                    "{}/{}/{}.sql",
-                    parser.workspace_path, parser.catalog, schema_path
-                );
+            //     // compute filename
+            //     let schema = basename(&schema_path);
+            //     let schema_filename = format!(
+            //         "{}/{}/{}.sql",
+            //         parser.workspace_path, parser.catalog, schema_path
+            //     );
 
-                // avoid duplicate uses
-                if VISITED_FILES.lock().unwrap().contains(&schema_filename) {
-                    return Ok(VecDeque::new());
-                }
-                VISITED_FILES
-                    .lock()
-                    .unwrap()
-                    .insert(schema_filename.clone());
+            //     // avoid duplicate uses
+            //     if VISITED_FILES.lock().unwrap().contains(&schema_filename) {
+            //         return Ok(VecDeque::new());
+            //     }
+            //     VISITED_FILES
+            //         .lock()
+            //         .unwrap()
+            //         .insert(schema_filename.clone());
 
-                let regex = Regex::new(r"^[/a-z0-9_]*$").unwrap();
-                if !regex.is_match(&schema_path) {
-                    return parser.wrong_use(&format!("Schema path must consist only of lowercase chars, digits or '_' separated by '/', found {}",next), next );
-                }
-                if !Path::new(&schema_filename).is_file() {
-                    return parser.wrong_use(
-                        &format!("Missing schema file {}", schema_filename),
-                        next,
-                    );
-                };
+            //     let regex = Regex::new(r"^[/a-z0-9_]*$").unwrap();
+            //     if !regex.is_match(&schema_path) {
+            //         return parser.wrong_use(&format!("Schema path must consist only of lowercase chars, digits or '_' separated by '/', found {}",next), next );
+            //     }
+            //     if !Path::new(&schema_filename).is_file() {
+            //         return parser.wrong_use(
+            //             &format!("Missing schema file {}", schema_filename),
+            //             next,
+            //         );
+            //     };
 
-                // create scopes
-                let created_schema =
-                    format!("CREATE SCHEMA {}.{};\n", &parser.catalog, &schema);
+            //     // create scopes
+            //     let created_schema =
+            //         format!("CREATE SCHEMA {}.{};\n", &parser.catalog, &schema);
 
-                // continue parsing
-                Self::parse_sql_file(
-                    &GenericDialect {},
-                    schema_filename,
-                    parser.catalog.to_owned(),
-                    schema_path.to_owned(),
-                    created_schema,
-                    workspace_path,
-                )
-            }
+            //     // continue parsing
+            //     Self::parse_sql_file(
+            //         &GenericDialect {},
+            //         schema_filename,
+            //         parser.catalog.to_owned(),
+            //         schema_path.to_owned(),
+            //         created_schema,
+            //         workspace_path,
+            //     )
+            // }
             Token::Word(w) => {
                 // switch to a possibly new catalog
 
@@ -431,70 +445,76 @@ impl<'a> DFParser<'a> {
                     Ok(id) => id.value,
                     Err(_) => "".to_owned(),
                 };
+                let _ = parser.parser.expect_token(&Token::Period);
+                let table = match parser.parser.parse_identifier() {
+                    Ok(id) => id.value,
+                    Err(_) => "".to_owned(),
+                };
                 // check catalog/schema naming
-                let regex = Regex::new(r"^[a-z0-9_]+$").unwrap();
-                if !regex.is_match(&catalog) {
-                    return parser.wrong_use(&format!("Catalog names must only be lowercase, digits or '_', found {}",catalog), next );
-                }
-                if !regex.is_match(&schema) {
-                    return parser.wrong_use(&format!("Schema names must only be lowercase, digits or '_', found {}",catalog), next );
+                // let regex = Regex::new(r"^[a-z0-9_]*$").unwrap();
+                // if !regex.is_match(&catalog)
+                //     || !regex.is_match(&schema)
+                //     || !regex.is_match(&table)
+                // {
+                //     return parser.wrong_use(&format!("Catalog, schema, and table names must only be lowercase, digits or '_', found {}",catalog), next );
+                // }
+
+                if parser.catalog == "" {
+                    println!(
+                        "Source not under workspace -- skipping 'use {}.{}.{}' statement",
+                        catalog, schema, table
+                    );
+                    return Ok(VecDeque::new());
                 }
 
                 // check whether new catalog exists
-                let catalog_file =
-                    format!("{}/{}/{}", parser.workspace_path, catalog, CATALOG_ROOT);
-                if !Path::new(&catalog_file).is_file() {
-                    if w.quote_style == None {
-                        return parser.wrong_use(
-                            &format!("Missing catalog file {}", catalog_file),
-                            next,
-                        );
-                    } else {
-                        return parser.wrong_use(&format!("Missing catalog file {}, did you use double quotes instead of single quotes",catalog_file), next );
-                    }
+                let schema_filename = format!("{}/{}.sql", catalog, schema);
+                let table_filename = format!("{}/{}/{}.sql", catalog, schema, table);
+                let (is_table, filename) = if Path::new(&table_filename).is_file() {
+                    (true, table_filename)
+                } else if Path::new(&schema_filename).is_file() {
+                    (false, schema_filename)
+                } else {
+                    return Err(ParserError::ParserError(
+                        format!(
+                            "Missing schema file {} or table file {} ",
+                            schema_filename, table_filename
+                        )
+                        .to_owned(),
+                    ));
                 };
-
-                let schema_filename =
-                    format!("{}/{}/{}.sql", &parser.workspace_path, catalog, schema);
-
+                println!("use: {}.{}.{} from {}", catalog, schema, table, filename);
                 // avoid duplicate uses
-                if VISITED_FILES.lock().unwrap().contains(&schema_filename) {
+                if VISITED_FILES.lock().unwrap().contains(&filename) {
                     return Ok(VecDeque::new());
                 }
-                VISITED_FILES
-                    .lock()
-                    .unwrap()
-                    .insert(schema_filename.clone());
-
-                // check schema file
-                if !Path::new(&schema_filename).is_file() {
-                    return parser.wrong_use(
-                        &format!("Missing schema file {}", schema_filename),
-                        next,
-                    );
-                };
+                VISITED_FILES.lock().unwrap().insert(filename.to_owned());
 
                 // create scopes
                 let mut created_catalog = String::new();
-                let has_already_been_created =
-                    VISITED_CATALOGS.lock().unwrap().contains(&catalog);
-                if !has_already_been_created {
-                    VISITED_CATALOGS.lock().unwrap().insert(catalog.clone());
+                let mut created_schema = String::new();
+                if !VISITED_CATALOGS.lock().unwrap().contains(&catalog) {
+                    VISITED_CATALOGS.lock().unwrap().insert(catalog.to_owned());
                     created_catalog = format!("CREATE DATABASE {};\n", &catalog)
                 };
-                let created_schema = format!("CREATE SCHEMA {}.{};\n", &catalog, &schema);
+                let schema_id = format!("{}.{}", catalog, schema);
+                if !VISITED_SCHEMAS.lock().unwrap().contains(&schema_id) {
+                    VISITED_SCHEMAS.lock().unwrap().insert(schema_id);
+                    created_schema = format!("CREATE SCHEMA {}.{};\n", &catalog, &schema);
+                };
 
                 // continue parsing
                 Self::parse_sql_file(
                     &GenericDialect {},
-                    schema_filename,
+                    filename,
                     catalog,
                     schema,
+                    if is_table { table } else { String::new() },
                     created_catalog + &created_schema,
                     workspace_path,
                 )
             }
-            unexpected => parser.expected("Module identifier", unexpected)?,
+            unexpected => parser.expected("Object identifier", unexpected)?,
         }
         // }
     }
@@ -505,6 +525,7 @@ impl<'a> DFParser<'a> {
         filename: String,
         catalog: String,
         schema: String,
+        table: String,
         prefix: String,
         workspace_path: String,
     ) -> Result<VecDeque<(Statement, StatementMeta)>, ParserError> {
@@ -520,6 +541,7 @@ impl<'a> DFParser<'a> {
             filename,
             catalog,
             schema,
+            table,
             workspace_path,
         ) {
             Ok(it) => it,
@@ -547,13 +569,62 @@ impl<'a> DFParser<'a> {
                         // use custom parsing
                         self.parse_describe()
                     }
+                    Keyword::SELECT | Keyword::WITH | Keyword::VALUES => {
+                        // self.parser.prev_token();
+                        let base_query = self.parser.parse_query()?;
+                        let boxed_query = Box::new(base_query.to_owned());
+                        // println!("SELECT {:?} ; {} {} {}", base_query, self.catalog, self.schema, self.table);
+                        if self.table != "" {
+                            // this is a select of of table definition
+                            let c = Ident::new(&self.catalog);
+                            let s = Ident::new(&self.schema);
+                            let t = Ident::new(&self.table);
+                            let create_table_statement =
+                                sqlparser::ast::Statement::CreateTable {
+                                    or_replace: false,
+                                    temporary: false,
+                                    external: false,
+                                    global: None,
+                                    if_not_exists: false,
+                                    /// Table name
+                                    name: ObjectName(vec![c, s, t]), // vec of ident
+                                    /// Optional schema
+                                    columns: vec![],
+                                    constraints: vec![],
+                                    hive_distribution: HiveDistributionStyle::NONE,
+                                    hive_formats: None,
+                                    table_properties: vec![],
+                                    with_options: vec![],
+                                    file_format: None,
+                                    location: None,
+                                    query: Some(boxed_query),
+                                    without_rowid: false,
+                                    like: None,
+                                    clone: None,
+                                    engine: None,
+                                    default_charset: None,
+                                    collation: None,
+                                    on_commit: None,
+                                    /// Click house "ON CLUSTER" clause:
+                                    /// <https://clickhouse.com/docs/en/sql-reference/distributed-ddl/>
+                                    on_cluster: None,
+                                };
+                            Ok((
+                                Statement::Statement(Box::from(create_table_statement)),
+                                self.with_meta("".to_owned()),
+                            ))
+                        } else {
+                            // a usual select
+                            let query_statement =
+                                sqlparser::ast::Statement::Query(boxed_query);
+                            Ok((
+                                Statement::Statement(Box::from(query_statement)),
+                                self.with_meta("".to_owned()),
+                            ))
+                        }
+                    }
                     _ => {
-                        // use the native parser
                         let stm = self.parser.parse_statement()?;
-                        // let stm = match stm {
-                        //     SQLStatement::Query(query) => SQLStatement::CreateTable { temporary: true, name: ObjectName(vec![]), query: Some(query)},
-                        //     s => s
-                        // };
                         Ok((
                             Statement::Statement(Box::from(stm)),
                             self.with_meta("".to_owned()),
@@ -564,7 +635,10 @@ impl<'a> DFParser<'a> {
             _ => {
                 // use the native parser
                 let stm = self.parser.parse_statement()?;
-                Ok((Statement::Statement(Box::from(stm)), self.with_meta("".to_owned())))
+                Ok((
+                    Statement::Statement(Box::from(stm)),
+                    self.with_meta("".to_owned()),
+                ))
             }
         }
     }
@@ -575,7 +649,10 @@ impl<'a> DFParser<'a> {
         let des = DescribeTable {
             table_name: table_name.to_string(),
         };
-        Ok((Statement::DescribeTable(des), self.with_meta( table_name.to_string())))
+        Ok((
+            Statement::DescribeTable(des),
+            self.with_meta(table_name.to_string()),
+        ))
     }
 
     /// Parse a SQL CREATE statement
@@ -584,12 +661,12 @@ impl<'a> DFParser<'a> {
             self.parse_create_external_table()
         } else {
             let stm = self.parser.parse_create()?;
-            let table = match  &stm {
-                SQLStatement::CreateView { name, ..} 
-                | SQLStatement::CreateTable { name, .. } 
-                | SQLStatement::CreateVirtualTable { name, ..} => name.to_owned(),
-                _ => { sqlparser::ast::ObjectName(vec![])}
-               };
+            let table = match &stm {
+                SQLStatement::CreateView { name, .. }
+                | SQLStatement::CreateTable { name, .. }
+                | SQLStatement::CreateVirtualTable { name, .. } => name.to_owned(),
+                _ => sqlparser::ast::ObjectName(vec![]),
+            };
             Ok((
                 Statement::Statement(Box::from(stm)),
                 self.with_meta(table.to_string()),
@@ -598,7 +675,11 @@ impl<'a> DFParser<'a> {
     }
 
     fn with_meta(&mut self, table: String) -> StatementMeta {
-        StatementMeta::new_with_table(self.catalog.to_owned(), self.schema.to_owned(), table)
+        StatementMeta::new_with_table(
+            self.catalog.to_owned(),
+            self.schema.to_owned(),
+            table,
+        )
     }
 
     fn parse_partitions(&mut self) -> Result<Vec<String>, ParserError> {
@@ -746,7 +827,8 @@ impl<'a> DFParser<'a> {
 
         self.parser.expect_keyword(Keyword::LOCATION)?;
         let location = self.parser.parse_literal_string()?;
-
+        let location2 = location.to_owned();
+        let file_type2 = file_type.to_owned();
         let create = CreateExternalTable {
             name: table_name.to_string(),
             columns,
@@ -760,10 +842,16 @@ impl<'a> DFParser<'a> {
             options,
         };
 
+        LOCATIONS.lock().unwrap().insert(format!(
+            "{}::{}",
+            location2.to_ascii_lowercase(),
+            file_type2.to_ascii_lowercase()
+        ));
+
         Ok((
             Statement::CreateExternalTable(create),
-            self.with_meta(table_name.to_string().to_owned())),
-        )
+            self.with_meta(table_name.to_string().to_owned()),
+        ))
     }
 
     /// Parses the set of valid formats
