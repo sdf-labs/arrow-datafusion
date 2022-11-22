@@ -68,7 +68,7 @@ use datafusion_sql::{ResolvedTableReference, TableReference};
 
 use crate::physical_optimizer::coalesce_batches::CoalesceBatches;
 use crate::physical_optimizer::repartition::Repartition;
-//use datafusion_sql::{ResolvedTableReference, TableReference}; 
+//use datafusion_sql::{ResolvedTableReference, TableReference};
 
 use crate::config::{
     ConfigOptions, OPT_BATCH_SIZE, OPT_COALESCE_BATCHES, OPT_COALESCE_TARGET_BATCH_SIZE,
@@ -102,9 +102,9 @@ use super::options::{
 };
 
 /// The default catalog name - this impacts what SQL queries use if not specified
-const DEFAULT_CATALOG: &str = "datafusion";
+pub const DEFAULT_CATALOG: &str = "sdf";
 /// The default schema name - this impacts what SQL queries use if not specified
-const DEFAULT_SCHEMA: &str = "public";
+pub const DEFAULT_SCHEMA: &str = "public";
 
 /// SessionContext is the main interface for executing queries with DataFusion. It stands for
 /// the connection between user and DataFusion/Ballista cluster.
@@ -315,8 +315,9 @@ impl SessionContext {
         table_name: &str,
         batch: RecordBatch,
     ) -> Result<Option<Arc<dyn TableProvider>>> {
-        // TODO TBD Qualified or not? let table_name = self.qualify_table_name(&table_name);
-        let table_name = table_name.to_owned();
+        // TODO TBD Qualified or not? 
+        let table_name = self.qualify_table_name(&table_name);
+        // let table_name = table_name.to_owned();
         let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
         self.register_table(table_name.as_str(), Arc::new(table))
     }
@@ -343,7 +344,6 @@ impl SessionContext {
         catalog: String,
         schema: String,
     ) -> Result<Arc<DataFrame>> {
-
         if catalog != "" {
             let state = self.state();
             Self::with_state_and_scope(state, catalog, schema)
@@ -371,24 +371,6 @@ impl SessionContext {
             LogicalPlan::CreateExternalTable(cmd) => {
                 self.create_external_table(&cmd).await
             }
-            // LogicalPlan::CreateExternalTable(cmd) => {
-            //     let name = self.qualify_table_name(&cmd.name); 
-            //     let result = match cmd.file_type.as_str() {
-            //         "PARQUET" | "CSV" | "JSON" | "AVRO" => {
-                       
-            //             println!("-- CREATE EXTERNAL TABLE {};", name);
-            //             self.create_listing_table(&cmd).await
-            //         }
-            //         _ => {
-            //             println!("-- CREATE CUSTOM TABLE {};", name);
-            //             self.create_custom_table(&cmd).await
-            //         }
-            //     };
-            //     let tr = TableReference::from(name.as_str());
-            //     let state = self.state();
-            //     update_def_use_and_return(tr, state, result)
-            // }
-
             LogicalPlan::CreateMemoryTable(CreateMemoryTable {
                 name,
                 input,
@@ -566,7 +548,7 @@ impl SessionContext {
                 if_not_exists,
                 ..
             }) => {
-                // sqlparser doesnt accept database / catalog as parameter to CREATE SCHEMA
+                // sqlparser doesn't accept database / catalog as parameter to CREATE SCHEMA
                 // so for now, we default to default catalog
                 let tokens: Vec<&str> = schema_name.split('.').collect();
                 let (catalog, schema_name) = match tokens.len() {
@@ -642,8 +624,14 @@ impl SessionContext {
         let table_provider: Arc<dyn TableProvider> =
             self.create_custom_table(cmd).await?;
 
-        let table = self.table(cmd.name.as_str());
-        match (cmd.if_not_exists, table) {
+        let name = self.qualify_table_name(&cmd.name.as_str());
+        println!("-- CREATE EXTERNAL TABLE {};", name);
+        let tr = TableReference::from(cmd.name.as_str());
+
+        let table = self.table(tr);
+        // OR
+        // let table = self.table(cmd.name.as_str());
+        let result = match (cmd.if_not_exists, table) {
             (true, Ok(_)) => self.return_empty_dataframe(),
             (_, Err(_)) => {
                 self.register_table(cmd.name.as_str(), table_provider)?;
@@ -653,7 +641,9 @@ impl SessionContext {
                 "Table '{:?}' already exists",
                 cmd.name
             ))),
-        }
+        };
+        let state = self.state();
+        update_def_use_and_return(tr, state, result)
     }
 
     async fn create_custom_table(
@@ -1925,9 +1915,7 @@ impl ContextProvider for SessionState {
                 })?;
                 Ok(provider_as_source(provider))
             }
-            Err(e) => {
-                Err(e)
-            }
+            Err(e) => Err(e),
         }
     }
 

@@ -39,6 +39,12 @@ use lazy_static::lazy_static;
 use std::sync::Mutex;
 // use crate::{dialect::Dialect, parser::{Parser, ParserError}, ast::Statement, tokenizer::Token, keywords::Keyword};
 
+
+use once_cell::sync::OnceCell;
+
+pub static VERBOSE_FLAG: OnceCell<i8> = OnceCell::new();
+
+
 lazy_static! {
     /// collects all files that have been visited so far
     pub static ref VISITED_FILES: Mutex<HashSet<String>> = Mutex::new(HashSet::new());
@@ -80,6 +86,13 @@ pub fn extension(path: &str) -> String {
     match path.rfind('.') {
         Some(i) => path[i + 1..].to_owned(),
         None => "".to_owned(),
+    }
+}
+
+pub fn strip_extension(path: &str, ext: &str) -> String {
+    match path.strip_suffix(ext) {
+        Some(base) => base.to_owned(),
+        None => path.to_owned(),
     }
 }
 
@@ -573,7 +586,7 @@ impl<'a> DFParser<'a> {
                         // self.parser.prev_token();
                         let base_query = self.parser.parse_query()?;
                         let boxed_query = Box::new(base_query.to_owned());
-                        // println!("SELECT {:?} ; {} {} {}", base_query, self.catalog, self.schema, self.table);
+                        // println!("SELECT:: {} ; catalog {} schema {} table {}", base_query, self.catalog, self.schema, self.table);
                         if self.table != "" {
                             // this is a select of of table definition
                             let c = Ident::new(&self.catalog);
