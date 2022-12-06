@@ -378,7 +378,7 @@ impl SessionContext {
                 or_replace,
             }) => {
                 let name = self.qualify_table_name(&name);
-                println!("-- CREATE MEMORY TABLE {};", name);
+                // println!("-- CREATE MEMORY TABLE {};", name);
                 let tr = TableReference::from(name.as_str());
 
                 let table = self.table(tr);
@@ -559,7 +559,7 @@ impl SessionContext {
                         schema_name
                     ))),
                 }?;
-                println!("-- CREATE SCHEMA {}.{};", catalog, schema_name);
+                // println!("-- CREATE SCHEMA {}.{};", catalog, schema_name);
                 let catalog = self.catalog(catalog).ok_or_else(|| {
                     DataFusionError::Execution(format!(
                         "Missing '{}' catalog",
@@ -587,7 +587,7 @@ impl SessionContext {
                 if_not_exists,
                 ..
             }) => {
-                println!("-- CREATE DATABASE {};", catalog_name);
+                // println!("-- CREATE DATABASE {};", catalog_name);
                 let catalog = self.catalog(catalog_name.as_str());
 
                 match (if_not_exists, catalog) {
@@ -624,8 +624,8 @@ impl SessionContext {
         let table_provider: Arc<dyn TableProvider> =
             self.create_custom_table(cmd).await?;
 
-        let name = self.qualify_table_name(&cmd.name.as_str());
-        println!("-- CREATE EXTERNAL TABLE {};", name);
+        // let name = self.qualify_table_name(&cmd.name.as_str());
+        // println!("-- CREATE EXTERNAL TABLE {};", name);
         let tr = TableReference::from(cmd.name.as_str());
 
         let table = self.table(tr);

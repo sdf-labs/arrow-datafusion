@@ -58,6 +58,8 @@ lazy_static! {
 pub static CATALOG: &str = "catalog.yml";
 pub static WORKSPACE: &str = "workspace.yml";
 pub static DATA_DIR: &str = ".data";
+pub const SOURCE_CACHE:&str = "source_cache.csv";
+pub const DATA_CACHE: &str = "data_cache.csv";
 
 pub fn visit(filename: &str, catalog: &str, schema: &str) {
     VISITED_FILES.lock().unwrap().insert(filename.to_owned());
@@ -204,6 +206,7 @@ pub struct StatementMeta {
     pub schema: String,
     pub table: String,
     pub line_number: i32,
+    pub filename: String,
 }
 
 impl StatementMeta {
@@ -214,6 +217,7 @@ impl StatementMeta {
             schema: String::new(),
             table: String::new(),
             line_number: 0,
+            filename: String::new(),
         }
     }
     /// An statement definition location without line number
@@ -221,19 +225,20 @@ impl StatementMeta {
     pub fn new(catalog: String, schema: String) -> Self {
         StatementMeta {
             catalog,
-            schema: schema,
+            schema,
             table: String::new(),
             line_number: 0,
+            filename: String::new(),    
         }
     }
     /// An statement definition location without line number
-    //   That's' what Datafusion gives us today
-    pub fn new_with_table(catalog: String, schema: String, table: String) -> Self {
+    pub fn new_with_table(catalog: String, schema: String, table: String, filename: String) -> Self {
         StatementMeta {
             catalog,
-            schema: schema,
+            schema,
             table,
             line_number: 0,
+            filename,
         }
     }
     /// Return schema_file name, which is relative to workspace
@@ -249,7 +254,7 @@ pub struct DFParser<'a> {
     catalog: String,
     schema: String,
     table: String,
-    workspace_path: String,
+    filename: String,
 }
 
 impl<'a> DFParser<'a> {
@@ -272,18 +277,17 @@ impl<'a> DFParser<'a> {
             catalog: String::new(),
             schema: String::new(),
             table: String::new(),
-            workspace_path: String::new(),
+            filename: String::new(),
         })
     }
 
     pub fn new_with_dialect_and_scope(
         sql: &str,
         dialect: &'a dyn Dialect,
-        _filename: String,
+        filename: String,
         catalog: String,
         schema: String,
-        table: String,
-        workspace_path: String,
+        table: String
     ) -> Result<Self, ParserError> {
         let mut tokenizer = Tokenizer::new(dialect, sql);
         let tokens = tokenizer.tokenize()?;
@@ -294,7 +298,7 @@ impl<'a> DFParser<'a> {
             catalog,
             schema,
             table,
-            workspace_path,
+            filename,
         })
     }
 
@@ -307,21 +311,19 @@ impl<'a> DFParser<'a> {
     /// Parse a SQL statement and produce a set of statements with dialect
     pub fn parse_sql_with_scope(
         sql: &str,
-        _filename: String,
+        filename: String,
         catalog: String,
         schema: String,
         table: String,
-        workspace_path: String,
     ) -> Result<VecDeque<(Statement, StatementMeta)>, ParserError> {
         let dialect = &GenericDialect {};
         DFParser::parse_sql_with_dialect_and_scope(
             sql,
             dialect,
-            _filename,
+            filename,
             catalog,
             schema,
             table,
-            workspace_path,
         )
     }
     /// Parse a SQL statement and produce a set of statements
@@ -338,20 +340,18 @@ impl<'a> DFParser<'a> {
         sql: &str,
         dialect: &dyn Dialect,
 
-        _filename: String,
+        filename: String,
         catalog: String,
         schema: String,
         table: String,
-        workspace_path: String,
     ) -> Result<VecDeque<(Statement, StatementMeta)>, ParserError> {
         let parser = DFParser::new_with_dialect_and_scope(
             sql,
             dialect,
-            _filename,
+            filename,
             catalog,
             schema,
             table,
-            workspace_path,
         )?;
         Self::parse_statements(parser)
     }
@@ -402,7 +402,6 @@ impl<'a> DFParser<'a> {
         parser: &mut DFParser,
     ) -> Result<VecDeque<(Statement, StatementMeta)>, ParserError> {
         let next = parser.parser.next_token();
-        let workspace_path = parser.workspace_path.clone();
         match next.clone() {
             // Token::SingleQuotedString(schema_path) => {
             //     // we are staying in the same catalog -- we are reusing parser.catalog
@@ -496,7 +495,7 @@ impl<'a> DFParser<'a> {
                         .to_owned(),
                     ));
                 };
-                println!("use: {}.{}.{} from {}", catalog, schema, table, filename);
+                info!("-- USE {}.{}.{} from {}", catalog, schema, table, filename);
                 // avoid duplicate uses
                 if VISITED_FILES.lock().unwrap().contains(&filename) {
                     return Ok(VecDeque::new());
@@ -508,13 +507,18 @@ impl<'a> DFParser<'a> {
                 let mut created_schema = String::new();
                 if !VISITED_CATALOGS.lock().unwrap().contains(&catalog) {
                     VISITED_CATALOGS.lock().unwrap().insert(catalog.to_owned());
-                    created_catalog = format!("CREATE DATABASE {};\n", &catalog)
+                    created_catalog = format!("CREATE DATABASE {};\n", &catalog);
+                    info!("{}",created_catalog);
+
                 };
                 let schema_id = format!("{}.{}", catalog, schema);
                 if !VISITED_SCHEMAS.lock().unwrap().contains(&schema_id) {
                     VISITED_SCHEMAS.lock().unwrap().insert(schema_id);
                     created_schema = format!("CREATE SCHEMA {}.{};\n", &catalog, &schema);
+                    info!("{}",created_schema);
+
                 };
+
 
                 // continue parsing
                 Self::parse_sql_file(
@@ -524,7 +528,6 @@ impl<'a> DFParser<'a> {
                     schema,
                     if is_table { table } else { String::new() },
                     created_catalog + &created_schema,
-                    workspace_path,
                 )
             }
             unexpected => parser.expected("Object identifier", unexpected)?,
@@ -540,7 +543,6 @@ impl<'a> DFParser<'a> {
         schema: String,
         table: String,
         prefix: String,
-        workspace_path: String,
     ) -> Result<VecDeque<(Statement, StatementMeta)>, ParserError> {
         let contents = fs::read_to_string(&filename)
             .unwrap_or_else(|_| panic!("Unable to read the file {}", &filename));
@@ -555,7 +557,6 @@ impl<'a> DFParser<'a> {
             catalog,
             schema,
             table,
-            workspace_path,
         ) {
             Ok(it) => it,
             Err(err) => return Err(err),
@@ -692,6 +693,7 @@ impl<'a> DFParser<'a> {
             self.catalog.to_owned(),
             self.schema.to_owned(),
             table,
+            self.filename.to_owned()
         )
     }
 
