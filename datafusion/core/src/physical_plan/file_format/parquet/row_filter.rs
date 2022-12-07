@@ -19,12 +19,13 @@ use arrow::array::{Array, BooleanArray};
 use arrow::datatypes::{DataType, Schema};
 use arrow::error::{ArrowError, Result as ArrowResult};
 use arrow::record_batch::RecordBatch;
+use datafusion_common::cast::as_boolean_array;
 use datafusion_common::{Column, DataFusionError, Result, ScalarValue, ToDFSchema};
 use datafusion_expr::expr_rewriter::{ExprRewritable, ExprRewriter, RewriteRecursion};
 use std::collections::BTreeSet;
 
 use datafusion_expr::Expr;
-use datafusion_optimizer::utils::split_conjunction_owned;
+use datafusion_optimizer::utils::split_conjunction;
 use datafusion_physical_expr::execution_props::ExecutionProps;
 use datafusion_physical_expr::{create_physical_expr, PhysicalExpr};
 use parquet::arrow::arrow_reader::{ArrowPredicate, RowFilter};
@@ -134,17 +135,12 @@ impl ArrowPredicate for DatafusionArrowPredicate {
             .map(|v| v.into_array(batch.num_rows()))
         {
             Ok(array) => {
-                if let Some(mask) = array.as_any().downcast_ref::<BooleanArray>() {
-                    let bool_arr = BooleanArray::from(mask.data().clone());
-                    let num_filtered = bool_arr.len() - bool_arr.true_count();
-                    self.rows_filtered.add(num_filtered);
-                    timer.stop();
-                    Ok(bool_arr)
-                } else {
-                    Err(ArrowError::ComputeError(
-                        "Unexpected result of predicate evaluation, expected BooleanArray".to_owned(),
-                    ))
-                }
+                let mask = as_boolean_array(&array)?;
+                let bool_arr = BooleanArray::from(mask.data().clone());
+                let num_filtered = bool_arr.len() - bool_arr.true_count();
+                self.rows_filtered.add(num_filtered);
+                timer.stop();
+                Ok(bool_arr)
             }
             Err(e) => Err(ArrowError::ComputeError(format!(
                 "Error evaluating filter predicate: {:?}",
@@ -313,7 +309,7 @@ fn columns_sorted(
 
 /// Build a [`RowFilter`] from the given predicate `Expr`
 pub fn build_row_filter(
-    expr: Expr,
+    expr: &Expr,
     file_schema: &Schema,
     table_schema: &Schema,
     metadata: &ParquetMetaData,
@@ -323,13 +319,13 @@ pub fn build_row_filter(
     let rows_filtered = &file_metrics.pushdown_rows_filtered;
     let time = &file_metrics.pushdown_eval_time;
 
-    let predicates = split_conjunction_owned(expr);
+    let predicates = split_conjunction(expr);
 
     let mut candidates: Vec<FilterCandidate> = predicates
         .into_iter()
         .flat_map(|expr| {
             if let Ok(candidate) =
-                FilterCandidateBuilder::new(expr, file_schema, table_schema)
+                FilterCandidateBuilder::new(expr.clone(), file_schema, table_schema)
                     .build(metadata)
             {
                 candidate

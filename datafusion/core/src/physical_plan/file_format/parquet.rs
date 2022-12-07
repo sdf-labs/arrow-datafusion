@@ -17,7 +17,7 @@
 
 //! Execution plan for reading Parquet files
 
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{DataType, SchemaRef};
 use fmt::Debug;
 use std::any::Any;
 use std::fmt;
@@ -55,8 +55,10 @@ use object_store::{ObjectMeta, ObjectStore};
 use parquet::arrow::arrow_reader::ArrowReaderOptions;
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::{ArrowWriter, ParquetRecordBatchStreamBuilder, ProjectionMask};
+use parquet::basic::{ConvertedType, LogicalType};
 use parquet::errors::ParquetError;
 use parquet::file::{metadata::ParquetMetaData, properties::WriterProperties};
+use parquet::schema::types::ColumnDescriptor;
 
 mod metrics;
 mod page_filter;
@@ -70,13 +72,25 @@ use super::get_output_ordering;
 /// Execution plan for scanning one or more Parquet partitions
 #[derive(Debug, Clone)]
 pub struct ParquetExec {
+    /// Override for `Self::with_pushdown_filters`. If None, uses
+    /// values from base_config
+    pushdown_filters: Option<bool>,
+    /// Override for `Self::with_reorder_filters`. If None, uses
+    /// values from base_config
+    reorder_filters: Option<bool>,
+    /// Override for `Self::with_enable_page_index`. If None, uses
+    /// values from base_config
+    enable_page_index: Option<bool>,
+    /// Base configuraton for this scan
     base_config: FileScanConfig,
     projected_statistics: Statistics,
     projected_schema: SchemaRef,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
+    /// Optional predicate for row filtering during parquet scan
+    predicate: Option<Arc<Expr>>,
     /// Optional predicate for pruning row groups
-    pruning_predicate: Option<PruningPredicate>,
+    pruning_predicate: Option<Arc<PruningPredicate>>,
     /// Optional hint for the size of the parquet metadata
     metadata_size_hint: Option<usize>,
     /// Optional user defined parquet file reader factory
@@ -98,12 +112,13 @@ impl ParquetExec {
             MetricBuilder::new(&metrics).global_counter("num_predicate_creation_errors");
 
         let pruning_predicate = predicate
+            .clone()
             .and_then(|predicate_expr| {
                 match PruningPredicate::try_new(
                     predicate_expr,
                     base_config.file_schema.clone(),
                 ) {
-                    Ok(pruning_predicate) => Some(pruning_predicate),
+                    Ok(pruning_predicate) => Some(Arc::new(pruning_predicate)),
                     Err(e) => {
                         debug!("Could not create pruning predicate for: {}", e);
                         predicate_creation_errors.add(1);
@@ -120,13 +135,20 @@ impl ParquetExec {
                 }
             });
 
+        // Save original predicate
+        let predicate = predicate.map(Arc::new);
+
         let (projected_schema, projected_statistics) = base_config.project();
 
         Self {
+            pushdown_filters: None,
+            reorder_filters: None,
+            enable_page_index: None,
             base_config,
             projected_schema,
             projected_statistics,
             metrics,
+            predicate,
             pruning_predicate,
             metadata_size_hint,
             parquet_file_reader_factory: None,
@@ -139,7 +161,7 @@ impl ParquetExec {
     }
 
     /// Optional reference to this parquet scan's pruning predicate
-    pub fn pruning_predicate(&self) -> Option<&PruningPredicate> {
+    pub fn pruning_predicate(&self) -> Option<&Arc<PruningPredicate>> {
         self.pruning_predicate.as_ref()
     }
 
@@ -163,20 +185,20 @@ impl ParquetExec {
     /// `ParquetRecordBatchStream`. These filters are applied by the
     /// parquet decoder to skip unecessairly decoding other columns
     /// which would not pass the predicate. Defaults to false
-    pub fn with_pushdown_filters(self, pushdown_filters: bool) -> Self {
-        self.base_config
-            .config_options
-            .write()
-            .set_bool(OPT_PARQUET_PUSHDOWN_FILTERS, pushdown_filters);
+    pub fn with_pushdown_filters(mut self, pushdown_filters: bool) -> Self {
+        self.pushdown_filters = Some(pushdown_filters);
         self
     }
 
     /// Return the value described in [`Self::with_pushdown_filters`]
     pub fn pushdown_filters(&self) -> bool {
-        self.base_config
-            .config_options
-            .read()
-            .get_bool(OPT_PARQUET_PUSHDOWN_FILTERS)
+        self.pushdown_filters
+            .or_else(|| {
+                self.base_config
+                    .config_options
+                    .read()
+                    .get_bool(OPT_PARQUET_PUSHDOWN_FILTERS)
+            })
             // default to false
             .unwrap_or_default()
     }
@@ -185,20 +207,20 @@ impl ParquetExec {
     /// minimize the cost of filter evaluation by reordering the
     /// predicate [`Expr`]s. If false, the predicates are applied in
     /// the same order as specified in the query. Defaults to false.
-    pub fn with_reorder_filters(self, reorder_filters: bool) -> Self {
-        self.base_config
-            .config_options
-            .write()
-            .set_bool(OPT_PARQUET_REORDER_FILTERS, reorder_filters);
+    pub fn with_reorder_filters(mut self, reorder_filters: bool) -> Self {
+        self.reorder_filters = Some(reorder_filters);
         self
     }
 
     /// Return the value described in [`Self::with_reorder_filters`]
     pub fn reorder_filters(&self) -> bool {
-        self.base_config
-            .config_options
-            .read()
-            .get_bool(OPT_PARQUET_REORDER_FILTERS)
+        self.reorder_filters
+            .or_else(|| {
+                self.base_config
+                    .config_options
+                    .read()
+                    .get_bool(OPT_PARQUET_REORDER_FILTERS)
+            })
             // default to false
             .unwrap_or_default()
     }
@@ -207,20 +229,20 @@ impl ParquetExec {
     /// This is used to optimise filter pushdown
     /// via `RowSelector` and `RowFilter` by
     /// eliminating unnecessary IO and decoding
-    pub fn with_enable_page_index(self, enable_page_index: bool) -> Self {
-        self.base_config
-            .config_options
-            .write()
-            .set_bool(OPT_PARQUET_ENABLE_PAGE_INDEX, enable_page_index);
+    pub fn with_enable_page_index(mut self, enable_page_index: bool) -> Self {
+        self.enable_page_index = Some(enable_page_index);
         self
     }
 
     /// Return the value described in [`Self::with_enable_page_index`]
     pub fn enable_page_index(&self) -> bool {
-        self.base_config
-            .config_options
-            .read()
-            .get_bool(OPT_PARQUET_ENABLE_PAGE_INDEX)
+        self.enable_page_index
+            .or_else(|| {
+                self.base_config
+                    .config_options
+                    .read()
+                    .get_bool(OPT_PARQUET_ENABLE_PAGE_INDEX)
+            })
             // default to false
             .unwrap_or_default()
     }
@@ -284,6 +306,7 @@ impl ExecutionPlan for ParquetExec {
             partition_index,
             projection: Arc::from(projection),
             batch_size: ctx.session_config().batch_size(),
+            predicate: self.predicate.clone(),
             pruning_predicate: self.pruning_predicate.clone(),
             table_schema: self.base_config.file_schema.clone(),
             metadata_size_hint: self.metadata_size_hint,
@@ -312,6 +335,12 @@ impl ExecutionPlan for ParquetExec {
     ) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default => {
+                let predicate_string = self
+                    .predicate
+                    .as_ref()
+                    .map(|p| format!(", predicate={}", p))
+                    .unwrap_or_default();
+
                 let pruning_predicate_string = self
                     .pruning_predicate
                     .as_ref()
@@ -325,9 +354,10 @@ impl ExecutionPlan for ParquetExec {
 
                 write!(
                     f,
-                    "ParquetExec: limit={:?}, partitions={}{}{}, projection={}",
+                    "ParquetExec: limit={:?}, partitions={}{}{}{}, projection={}",
                     self.base_config.limit,
                     super::FileGroupsDisplay(&self.base_config.file_groups),
+                    predicate_string,
                     pruning_predicate_string,
                     output_ordering_string,
                     super::ProjectSchemaDisplay(&self.projected_schema),
@@ -364,7 +394,8 @@ struct ParquetOpener {
     partition_index: usize,
     projection: Arc<[usize]>,
     batch_size: usize,
-    pruning_predicate: Option<PruningPredicate>,
+    predicate: Option<Arc<Expr>>,
+    pruning_predicate: Option<Arc<PruningPredicate>>,
     table_schema: SchemaRef,
     metadata_size_hint: Option<usize>,
     metrics: ExecutionPlanMetricsSet,
@@ -399,6 +430,7 @@ impl FileOpener for ParquetOpener {
         let schema_adapter = SchemaAdapter::new(self.table_schema.clone());
         let batch_size = self.batch_size;
         let projection = self.projection.clone();
+        let predicate = self.predicate.clone();
         let pruning_predicate = self.pruning_predicate.clone();
         let table_schema = self.table_schema.clone();
         let reorder_predicates = self.reorder_filters;
@@ -418,13 +450,10 @@ impl FileOpener for ParquetOpener {
                 adapted_projections.iter().cloned(),
             );
 
-            // Filter pushdown: evlauate predicates during scan
-            if let Some(predicate) = pushdown_filters
-                .then(|| pruning_predicate.as_ref().map(|p| p.logical_expr()))
-                .flatten()
-            {
+            // Filter pushdown: evaluate predicates during scan
+            if let Some(predicate) = pushdown_filters.then_some(predicate).flatten() {
                 let row_filter = row_filter::build_row_filter(
-                    predicate.clone(),
+                    predicate.as_ref(),
                     builder.schema().as_ref(),
                     table_schema.as_ref(),
                     builder.metadata(),
@@ -452,7 +481,7 @@ impl FileOpener for ParquetOpener {
             let row_groups = row_groups::prune_row_groups(
                 file_metadata.row_groups(),
                 file_range,
-                pruning_predicate.clone(),
+                pruning_predicate.as_ref().map(|p| p.as_ref()),
                 &file_metrics,
             );
 
@@ -462,7 +491,7 @@ impl FileOpener for ParquetOpener {
             if let Some(row_selection) = (enable_page_index && !row_groups.is_empty())
                 .then(|| {
                     page_filter::build_page_filter(
-                        pruning_predicate.as_ref(),
+                        pruning_predicate.as_ref().map(|p| p.as_ref()),
                         builder.schema().clone(),
                         &row_groups,
                         file_metadata.as_ref(),
@@ -660,6 +689,43 @@ pub async fn plan_to_parquet(
     }
 }
 
+// TODO: consolidate code with arrow-rs
+// Convert the bytes array to i128.
+// The endian of the input bytes array must be big-endian.
+// Copy from the arrow-rs
+pub(crate) fn from_bytes_to_i128(b: &[u8]) -> i128 {
+    assert!(b.len() <= 16, "Decimal128Array supports only up to size 16");
+    let first_bit = b[0] & 128u8 == 128u8;
+    let mut result = if first_bit { [255u8; 16] } else { [0u8; 16] };
+    for (i, v) in b.iter().enumerate() {
+        result[i + (16 - b.len())] = *v;
+    }
+    // The bytes array are from parquet file and must be the big-endian.
+    // The endian is defined by parquet format, and the reference document
+    // https://github.com/apache/parquet-format/blob/54e53e5d7794d383529dd30746378f19a12afd58/src/main/thrift/parquet.thrift#L66
+    i128::from_be_bytes(result)
+}
+
+// Convert parquet column schema to arrow data type, and just consider the
+// decimal data type.
+pub(crate) fn parquet_to_arrow_decimal_type(
+    parquet_column: &ColumnDescriptor,
+) -> Option<DataType> {
+    let type_ptr = parquet_column.self_type_ptr();
+    match type_ptr.get_basic_info().logical_type() {
+        Some(LogicalType::Decimal { scale, precision }) => {
+            Some(DataType::Decimal128(precision as u8, scale as i8))
+        }
+        _ => match type_ptr.get_basic_info().converted_type() {
+            ConvertedType::DECIMAL => Some(DataType::Decimal128(
+                type_ptr.get_precision() as u8,
+                type_ptr.get_scale() as i8,
+            )),
+            _ => None,
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     // See also `parquet_exec` integration test
@@ -672,6 +738,7 @@ mod tests {
     use crate::datasource::object_store::ObjectStoreUrl;
     use crate::execution::options::CsvReadOptions;
     use crate::physical_plan::displayable;
+    use crate::physical_plan::file_format::partition_type_wrap;
     use crate::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
     use crate::test::object_store::local_unpartitioned_file;
     use crate::{
@@ -1232,7 +1299,8 @@ mod tests {
     async fn parquet_exec_with_projection() -> Result<()> {
         let testdata = crate::test_util::parquet_test_data();
         let filename = "alltypes_plain.parquet";
-        let format = ParquetFormat::default();
+        let ctx = SessionContext::new();
+        let format = ParquetFormat::new(ctx.config_options());
         let parquet_exec =
             scan_format(&format, &testdata, filename, Some(vec![0, 1, 2]), None)
                 .await
@@ -1315,7 +1383,7 @@ mod tests {
         let meta = local_unpartitioned_file(filename);
 
         let store = Arc::new(LocalFileSystem::new()) as _;
-        let file_schema = ParquetFormat::default()
+        let file_schema = ParquetFormat::new(session_ctx.config_options())
             .infer_schema(&store, &[meta.clone()])
             .await?;
 
@@ -1362,7 +1430,7 @@ mod tests {
 
         let meta = local_unpartitioned_file(filename);
 
-        let schema = ParquetFormat::default()
+        let schema = ParquetFormat::new(session_ctx.config_options())
             .infer_schema(&store, &[meta.clone()])
             .await
             .unwrap();
@@ -1388,9 +1456,9 @@ mod tests {
                 projection: Some(vec![0, 1, 2, 12]),
                 limit: None,
                 table_partition_cols: vec![
-                    "year".to_owned(),
-                    "month".to_owned(),
-                    "day".to_owned(),
+                    ("year".to_owned(), partition_type_wrap(DataType::Utf8)),
+                    ("month".to_owned(), partition_type_wrap(DataType::Utf8)),
+                    ("day".to_owned(), partition_type_wrap(DataType::Utf8)),
                 ],
                 config_options: ConfigOptions::new().into_shareable(),
                 output_ordering: None,
@@ -1565,6 +1633,9 @@ mod tests {
             &display,
             "pruning_predicate=c1_min@0 != bar OR bar != c1_max@1"
         );
+
+        assert_contains!(&display, r#"predicate=c1 != Utf8("bar")"#);
+
         assert_contains!(&display, "projection=[c1]");
     }
 
@@ -1588,7 +1659,8 @@ mod tests {
             .otherwise(lit(false))
             .unwrap();
 
-        let rt = round_trip(vec![batch1], None, None, Some(filter), true, false).await;
+        let rt =
+            round_trip(vec![batch1], None, None, Some(filter.clone()), true, false).await;
 
         // Should not contain a pruning predicate
         let pruning_predicate = &rt.parquet_exec.pruning_predicate;
@@ -1596,7 +1668,11 @@ mod tests {
             pruning_predicate.is_none(),
             "Still had pruning predicate: {:?}",
             pruning_predicate
-        )
+        );
+
+        // but does still has a pushdown down predicate
+        let predicate = rt.parquet_exec.predicate.as_ref();
+        assert_eq!(predicate.unwrap().as_ref(), &filter);
     }
 
     /// returns the sum of all the metrics with the specified name

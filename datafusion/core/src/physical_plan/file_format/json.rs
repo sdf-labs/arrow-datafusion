@@ -176,13 +176,13 @@ impl FileOpener for JsonOpener {
         Ok(Box::pin(async move {
             match store.get(file_meta.location()).await? {
                 GetResult::File(file, _) => {
-                    let decoder = file_compression_type.convert_read(file);
+                    let decoder = file_compression_type.convert_read(file)?;
                     let reader = json::Reader::new(decoder, schema.clone(), options);
                     Ok(futures::stream::iter(reader).boxed())
                 }
                 GetResult::Stream(s) => {
                     let s = s.map_err(Into::into);
-                    let decoder = file_compression_type.convert_stream(s);
+                    let decoder = file_compression_type.convert_stream(s)?;
 
                     Ok(newline_delimited_stream(decoder)
                         .map_ok(move |bytes| {
@@ -261,6 +261,7 @@ mod tests {
     use crate::prelude::NdJsonReadOptions;
     use crate::prelude::*;
     use crate::test::partitioned_file_groups;
+    use datafusion_common::cast::{as_int32_array, as_int64_array};
     use rstest::*;
     use tempfile::TempDir;
     use url::Url;
@@ -305,7 +306,8 @@ mod tests {
         file_compression_type,
         case(FileCompressionType::UNCOMPRESSED),
         case(FileCompressionType::GZIP),
-        case(FileCompressionType::BZIP2)
+        case(FileCompressionType::BZIP2),
+        case(FileCompressionType::XZ)
     )]
     #[tokio::test]
     async fn nd_json_exec_file_without_projection(
@@ -361,11 +363,7 @@ mod tests {
         let batch = it.next().await.unwrap()?;
 
         assert_eq!(batch.num_rows(), 3);
-        let values = batch
-            .column(0)
-            .as_any()
-            .downcast_ref::<arrow::array::Int64Array>()
-            .unwrap();
+        let values = as_int64_array(batch.column(0))?;
         assert_eq!(values.value(0), 1);
         assert_eq!(values.value(1), -10);
         assert_eq!(values.value(2), 2);
@@ -377,7 +375,8 @@ mod tests {
         file_compression_type,
         case(FileCompressionType::UNCOMPRESSED),
         case(FileCompressionType::GZIP),
-        case(FileCompressionType::BZIP2)
+        case(FileCompressionType::BZIP2),
+        case(FileCompressionType::XZ)
     )]
     #[tokio::test]
     async fn nd_json_exec_file_with_missing_column(
@@ -414,11 +413,7 @@ mod tests {
         let batch = it.next().await.unwrap()?;
 
         assert_eq!(batch.num_rows(), 3);
-        let values = batch
-            .column(missing_field_idx)
-            .as_any()
-            .downcast_ref::<arrow::array::Int32Array>()
-            .unwrap();
+        let values = as_int32_array(batch.column(missing_field_idx))?;
         assert_eq!(values.len(), 3);
         assert!(values.is_null(0));
         assert!(values.is_null(1));
@@ -431,7 +426,8 @@ mod tests {
         file_compression_type,
         case(FileCompressionType::UNCOMPRESSED),
         case(FileCompressionType::GZIP),
-        case(FileCompressionType::BZIP2)
+        case(FileCompressionType::BZIP2),
+        case(FileCompressionType::XZ)
     )]
     #[tokio::test]
     async fn nd_json_exec_file_projection(
@@ -468,11 +464,7 @@ mod tests {
         let batch = it.next().await.unwrap()?;
 
         assert_eq!(batch.num_rows(), 4);
-        let values = batch
-            .column(0)
-            .as_any()
-            .downcast_ref::<arrow::array::Int64Array>()
-            .unwrap();
+        let values = as_int64_array(batch.column(0))?;
         assert_eq!(values.value(0), 1);
         assert_eq!(values.value(1), -10);
         assert_eq!(values.value(2), 2);
@@ -531,7 +523,8 @@ mod tests {
         file_compression_type,
         case(FileCompressionType::UNCOMPRESSED),
         case(FileCompressionType::GZIP),
-        case(FileCompressionType::BZIP2)
+        case(FileCompressionType::BZIP2),
+        case(FileCompressionType::XZ)
     )]
     #[tokio::test]
     async fn test_chunked(file_compression_type: FileCompressionType) {

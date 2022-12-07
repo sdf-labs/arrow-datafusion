@@ -159,7 +159,7 @@ pub struct CreateExternalTable {
     pub table_partition_cols: Vec<String>,
     /// Option to not error if table already exists
     pub if_not_exists: bool,
-    /// File compression type (GZIP, BZIP2)
+    /// File compression type (GZIP, BZIP2, XZ)
     pub file_compression_type: String,
     /// Table(provider) specific options
     pub options: HashMap<String, String>,
@@ -181,7 +181,7 @@ impl fmt::Display for CreateExternalTable {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DescribeTable {
     /// Table name
-    pub table_name: String,
+    pub table_name: ObjectName,
 }
 
 /// DataFusion Statement representations.
@@ -881,7 +881,7 @@ impl<'a> DFParser<'a> {
     fn parse_file_compression_type(&mut self) -> Result<String, ParserError> {
         match self.parser.next_token() {
             Token::Word(w) => parse_file_compression_type(&w.value),
-            unexpected => self.expected("one of GZIP, BZIP2", unexpected),
+            unexpected => self.expected("one of GZIP, BZIP2, XZ", unexpected),
         }
     }
 
@@ -922,15 +922,15 @@ impl<'a> DFParser<'a> {
             false
         }
     }
+
     fn parse_has_file_compression_type(&mut self) -> bool {
         self.consume_token(&Token::make_keyword("COMPRESSION"))
             & self.consume_token(&Token::make_keyword("TYPE"))
     }
 
     fn parse_csv_has_header(&mut self) -> bool {
-        self.consume_token(&Token::make_keyword("WITH"))
-            & self.consume_token(&Token::make_keyword("HEADER"))
-            & self.consume_token(&Token::make_keyword("ROW"))
+        self.parser
+            .parse_keywords(&[Keyword::WITH, Keyword::HEADER, Keyword::ROW])
     }
 
     fn parse_has_delimiter(&mut self) -> bool {
@@ -948,8 +948,8 @@ impl<'a> DFParser<'a> {
     }
 
     fn parse_has_partition(&mut self) -> bool {
-        self.consume_token(&Token::make_keyword("PARTITIONED"))
-            & self.consume_token(&Token::make_keyword("BY"))
+        self.parser
+            .parse_keywords(&[Keyword::PARTITIONED, Keyword::BY])
     }
 }
 
@@ -1080,6 +1080,7 @@ mod tests {
         let sqls = vec![
             ("CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV COMPRESSION TYPE GZIP LOCATION 'foo.csv'", "GZIP"),
             ("CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV COMPRESSION TYPE BZIP2 LOCATION 'foo.csv'", "BZIP2"),
+            ("CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV COMPRESSION TYPE XZ LOCATION 'foo.csv'", "XZ"),
         ];
         for (sql, file_compression_type) in sqls {
             let expected = Statement::CreateExternalTable(CreateExternalTable {
@@ -1208,6 +1209,17 @@ mod tests {
         let sql =
             "CREATE EXTERNAL TABLE t STORED AS x OPTIONS ('k1' 'v1', k2 v2, k3) LOCATION 'blahblah'";
         expect_parse_error(sql, "sql parser error: Expected literal string, found: )");
+
+        // Error case: `with header` is an invalid syntax
+        let sql = "CREATE EXTERNAL TABLE t STORED AS CSV WITH HEADER LOCATION 'abc'";
+        expect_parse_error(sql, "sql parser error: Expected LOCATION, found: WITH");
+
+        // Error case: `partitioned` is an invalid syntax
+        let sql = "CREATE EXTERNAL TABLE t STORED AS CSV PARTITIONED LOCATION 'abc'";
+        expect_parse_error(
+            sql,
+            "sql parser error: Expected LOCATION, found: PARTITIONED",
+        );
 
         Ok(())
     }

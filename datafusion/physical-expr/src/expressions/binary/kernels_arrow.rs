@@ -118,132 +118,6 @@ pub(crate) fn is_not_distinct_from_utf8<OffsetSize: OffsetSizeTrait>(
         .collect())
 }
 
-// TODO move decimal kernels to to arrow-rs
-// https://github.com/apache/arrow-rs/issues/1200
-
-/// Creates an BooleanArray the same size as `left`,
-/// applying `op` to all non-null elements of left
-pub(crate) fn compare_decimal_scalar<F>(
-    left: &Decimal128Array,
-    right: i128,
-    op: F,
-) -> Result<BooleanArray>
-where
-    F: Fn(i128, i128) -> bool,
-{
-    Ok(left
-        .iter()
-        .map(|left| left.map(|left| op(left, right)))
-        .collect())
-}
-
-/// Creates an BooleanArray the same size as `left`,
-/// by applying `op` to all non-null elements of left and right
-pub(crate) fn compare_decimal<F>(
-    left: &Decimal128Array,
-    right: &Decimal128Array,
-    op: F,
-) -> Result<BooleanArray>
-where
-    F: Fn(i128, i128) -> bool,
-{
-    Ok(left
-        .iter()
-        .zip(right.iter())
-        .map(|(left, right)| {
-            if let (Some(left), Some(right)) = (left, right) {
-                Some(op(left, right))
-            } else {
-                None
-            }
-        })
-        .collect())
-}
-
-pub(crate) fn eq_decimal_scalar(
-    left: &Decimal128Array,
-    right: i128,
-) -> Result<BooleanArray> {
-    compare_decimal_scalar(left, right, |left, right| left == right)
-}
-
-pub(crate) fn eq_decimal(
-    left: &Decimal128Array,
-    right: &Decimal128Array,
-) -> Result<BooleanArray> {
-    compare_decimal(left, right, |left, right| left == right)
-}
-
-pub(crate) fn neq_decimal_scalar(
-    left: &Decimal128Array,
-    right: i128,
-) -> Result<BooleanArray> {
-    compare_decimal_scalar(left, right, |left, right| left != right)
-}
-
-pub(crate) fn neq_decimal(
-    left: &Decimal128Array,
-    right: &Decimal128Array,
-) -> Result<BooleanArray> {
-    compare_decimal(left, right, |left, right| left != right)
-}
-
-pub(crate) fn lt_decimal_scalar(
-    left: &Decimal128Array,
-    right: i128,
-) -> Result<BooleanArray> {
-    compare_decimal_scalar(left, right, |left, right| left < right)
-}
-
-pub(crate) fn lt_decimal(
-    left: &Decimal128Array,
-    right: &Decimal128Array,
-) -> Result<BooleanArray> {
-    compare_decimal(left, right, |left, right| left < right)
-}
-
-pub(crate) fn lt_eq_decimal_scalar(
-    left: &Decimal128Array,
-    right: i128,
-) -> Result<BooleanArray> {
-    compare_decimal_scalar(left, right, |left, right| left <= right)
-}
-
-pub(crate) fn lt_eq_decimal(
-    left: &Decimal128Array,
-    right: &Decimal128Array,
-) -> Result<BooleanArray> {
-    compare_decimal(left, right, |left, right| left <= right)
-}
-
-pub(crate) fn gt_decimal_scalar(
-    left: &Decimal128Array,
-    right: i128,
-) -> Result<BooleanArray> {
-    compare_decimal_scalar(left, right, |left, right| left > right)
-}
-
-pub(crate) fn gt_decimal(
-    left: &Decimal128Array,
-    right: &Decimal128Array,
-) -> Result<BooleanArray> {
-    compare_decimal(left, right, |left, right| left > right)
-}
-
-pub(crate) fn gt_eq_decimal_scalar(
-    left: &Decimal128Array,
-    right: i128,
-) -> Result<BooleanArray> {
-    compare_decimal_scalar(left, right, |left, right| left >= right)
-}
-
-pub(crate) fn gt_eq_decimal(
-    left: &Decimal128Array,
-    right: &Decimal128Array,
-) -> Result<BooleanArray> {
-    compare_decimal(left, right, |left, right| left >= right)
-}
-
 pub(crate) fn is_distinct_from_decimal(
     left: &Decimal128Array,
     right: &Decimal128Array,
@@ -442,7 +316,7 @@ mod tests {
     fn create_decimal_array(
         array: &[Option<i128>],
         precision: u8,
-        scale: u8,
+        scale: i8,
     ) -> Decimal128Array {
         let mut decimal_builder = Decimal128Builder::with_capacity(array.len());
 
@@ -468,43 +342,6 @@ mod tests {
             25,
             3,
         );
-        // eq: array = i128
-        let result = eq_decimal_scalar(&decimal_array, value_i128)?;
-        assert_eq!(
-            BooleanArray::from(vec![Some(true), None, Some(false), Some(false)]),
-            result
-        );
-        // neq: array != i128
-        let result = neq_decimal_scalar(&decimal_array, value_i128)?;
-        assert_eq!(
-            BooleanArray::from(vec![Some(false), None, Some(true), Some(true)]),
-            result
-        );
-        // lt: array < i128
-        let result = lt_decimal_scalar(&decimal_array, value_i128)?;
-        assert_eq!(
-            BooleanArray::from(vec![Some(false), None, Some(true), Some(false)]),
-            result
-        );
-        // lt_eq: array <= i128
-        let result = lt_eq_decimal_scalar(&decimal_array, value_i128)?;
-        assert_eq!(
-            BooleanArray::from(vec![Some(true), None, Some(true), Some(false)]),
-            result
-        );
-        // gt: array > i128
-        let result = gt_decimal_scalar(&decimal_array, value_i128)?;
-        assert_eq!(
-            BooleanArray::from(vec![Some(false), None, Some(false), Some(true)]),
-            result
-        );
-        // gt_eq: array >= i128
-        let result = gt_eq_decimal_scalar(&decimal_array, value_i128)?;
-        assert_eq!(
-            BooleanArray::from(vec![Some(true), None, Some(false), Some(true)]),
-            result
-        );
-
         let left_decimal_array = decimal_array;
         let right_decimal_array = create_decimal_array(
             &[
@@ -516,42 +353,7 @@ mod tests {
             25,
             3,
         );
-        // eq: left == right
-        let result = eq_decimal(&left_decimal_array, &right_decimal_array)?;
-        assert_eq!(
-            BooleanArray::from(vec![Some(false), None, Some(false), Some(true)]),
-            result
-        );
-        // neq: left != right
-        let result = neq_decimal(&left_decimal_array, &right_decimal_array)?;
-        assert_eq!(
-            BooleanArray::from(vec![Some(true), None, Some(true), Some(false)]),
-            result
-        );
-        // lt: left < right
-        let result = lt_decimal(&left_decimal_array, &right_decimal_array)?;
-        assert_eq!(
-            BooleanArray::from(vec![Some(false), None, Some(true), Some(false)]),
-            result
-        );
-        // lt_eq: left <= right
-        let result = lt_eq_decimal(&left_decimal_array, &right_decimal_array)?;
-        assert_eq!(
-            BooleanArray::from(vec![Some(false), None, Some(true), Some(true)]),
-            result
-        );
-        // gt: left > right
-        let result = gt_decimal(&left_decimal_array, &right_decimal_array)?;
-        assert_eq!(
-            BooleanArray::from(vec![Some(true), None, Some(false), Some(false)]),
-            result
-        );
-        // gt_eq: left >= right
-        let result = gt_eq_decimal(&left_decimal_array, &right_decimal_array)?;
-        assert_eq!(
-            BooleanArray::from(vec![Some(true), None, Some(false), Some(true)]),
-            result
-        );
+
         // is_distinct: left distinct right
         let result = is_distinct_from_decimal(&left_decimal_array, &right_decimal_array)?;
         assert_eq!(

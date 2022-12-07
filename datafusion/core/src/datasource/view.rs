@@ -61,8 +61,8 @@ impl ViewTable {
     }
 
     /// Get definition ref
-    pub fn definition(&self) -> &Option<String> {
-        &self.definition
+    pub fn definition(&self) -> Option<&String> {
+        self.definition.as_ref()
     }
 
     /// Get logical_plan ref
@@ -104,7 +104,7 @@ impl TableProvider for ViewTable {
     async fn scan(
         &self,
         state: &SessionState,
-        projection: &Option<Vec<usize>>,
+        projection: Option<&Vec<usize>>,
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -445,7 +445,7 @@ mod tests {
         let formatted = arrow::util::pretty::pretty_format_batches(&plan)
             .unwrap()
             .to_string();
-        assert!(formatted.contains("predicate=id_min@0 <= 1 AND 1 <= id_max@1"));
+        assert!(formatted.contains("FilterExec: id@0 = 1"));
         Ok(())
     }
 

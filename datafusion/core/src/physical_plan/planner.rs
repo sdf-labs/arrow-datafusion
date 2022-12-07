@@ -23,7 +23,9 @@ use super::{
     aggregates, empty::EmptyExec, joins::PartitionMode, udaf, union::UnionExec,
     values::ValuesExec, windows,
 };
-use crate::config::{OPT_EXPLAIN_LOGICAL_PLAN_ONLY, OPT_EXPLAIN_PHYSICAL_PLAN_ONLY};
+use crate::config::{
+    OPT_EXPLAIN_LOGICAL_PLAN_ONLY, OPT_EXPLAIN_PHYSICAL_PLAN_ONLY, OPT_PREFER_HASH_JOIN,
+};
 use crate::datasource::source_as_provider;
 use crate::execution::context::{ExecutionProps, SessionState};
 use crate::logical_expr::utils::generate_sort_key;
@@ -44,6 +46,7 @@ use crate::physical_plan::expressions::{Column, PhysicalSortExpr};
 use crate::physical_plan::filter::FilterExec;
 use crate::physical_plan::joins::CrossJoinExec;
 use crate::physical_plan::joins::HashJoinExec;
+use crate::physical_plan::joins::SortMergeJoinExec;
 use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::repartition::RepartitionExec;
@@ -477,7 +480,7 @@ impl DefaultPhysicalPlanner {
                     // referred to in the query
                     let filters = unnormalize_cols(filters.iter().cloned());
                     let unaliased: Vec<Expr> = filters.into_iter().map(unalias).collect();
-                    source.scan(session_state, projection, &unaliased, *fetch).await
+                    source.scan(session_state, projection.as_ref(), &unaliased, *fetch).await
                 }
                 LogicalPlan::Values(Values {
                     values,
@@ -519,8 +522,8 @@ impl DefaultPhysicalPlanner {
                     let partition_keys = window_expr_common_partition_keys(window_expr)?;
 
                     let can_repartition = !partition_keys.is_empty()
-                        && session_state.config.target_partitions > 1
-                        && session_state.config.repartition_windows;
+                        && session_state.config.target_partitions() > 1
+                        && session_state.config.repartition_window_functions();
 
                     let physical_partition_keys = if can_repartition
                     {
@@ -658,8 +661,8 @@ impl DefaultPhysicalPlanner {
                     let final_group: Vec<Arc<dyn PhysicalExpr>> = initial_aggr.output_group_expr();
 
                     let can_repartition = !groups.is_empty()
-                        && session_state.config.target_partitions > 1
-                        && session_state.config.repartition_aggregations;
+                        && session_state.config.target_partitions() > 1
+                        && session_state.config.repartition_aggregations();
 
                     let (initial_aggr, next_partition_mode): (
                         Arc<dyn ExecutionPlan>,
@@ -833,7 +836,7 @@ impl DefaultPhysicalPlanner {
                         })
                         .collect::<Result<Vec<_>>>()?;
                     // If we have a `LIMIT` can run sort/limts in parallel (similar to TopK)
-                    Ok(if fetch.is_some() && session_state.config.target_partitions > 1 {
+                    Ok(if fetch.is_some() && session_state.config.target_partitions() > 1 {
                         let sort = SortExec::new_with_partitioning(
                             sort_expr,
                             physical_input,
@@ -930,17 +933,47 @@ impl DefaultPhysicalPlanner {
                         _ => None
                     };
 
-                    if session_state.config.target_partitions > 1
-                        && session_state.config.repartition_joins
+                    let prefer_hash_join = session_state.config.config_options()
+                        .read()
+                        .get_bool(OPT_PREFER_HASH_JOIN)
+                        .unwrap_or_default();
+                    if session_state.config.target_partitions() > 1
+                        && session_state.config.repartition_joins()
+                        && !prefer_hash_join
                     {
-                        // Use hash partition by default to parallelize hash joins
+                        // Use SortMergeJoin if hash join is not preferred
+                        // Sort-Merge join support currently is experimental
+                        if join_filter.is_some() {
+                            // TODO SortMergeJoinExec need to support join filter
+                            Err(DataFusionError::NotImplemented("SortMergeJoinExec does not support join_filter now.".to_string()))
+                        } else {
+                            let join_on_len = join_on.len();
+                            Ok(Arc::new(SortMergeJoinExec::try_new(
+                                physical_left,
+                                physical_right,
+                                join_on,
+                                *join_type,
+                                vec![SortOptions::default(); join_on_len],
+                                *null_equals_null,
+                            )?))
+                        }
+                    } else if session_state.config.target_partitions() > 1
+                        && session_state.config.repartition_joins()
+                        && prefer_hash_join {
+                         let partition_mode = {
+                            if session_state.config.collect_statistics() {
+                                PartitionMode::Auto
+                            } else {
+                                PartitionMode::Partitioned
+                            }
+                         };
                         Ok(Arc::new(HashJoinExec::try_new(
                             physical_left,
                             physical_right,
                             join_on,
                             join_filter,
                             join_type,
-                            PartitionMode::Partitioned,
+                            partition_mode,
                             null_equals_null,
                         )?))
                     } else {
@@ -969,12 +1002,7 @@ impl DefaultPhysicalPlanner {
                     SchemaRef::new(schema.as_ref().to_owned().into()),
                 ))),
                 LogicalPlan::SubqueryAlias(SubqueryAlias { input, .. }) => {
-                    match input.as_ref() {
-                        LogicalPlan::TableScan(..) => {
-                            self.create_initial_plan(input, session_state).await
-                        }
-                        _ => Err(DataFusionError::Plan("SubqueryAlias should only wrap TableScan".to_string()))
-                    }
+                    self.create_initial_plan(input, session_state).await
                 }
                 LogicalPlan::Limit(Limit { input, skip, fetch, .. }) => {
                     let input = self.create_initial_plan(input, session_state).await?;
@@ -1456,15 +1484,14 @@ pub fn create_window_expr_with_name(
                     )),
                 })
                 .collect::<Result<Vec<_>>>()?;
-            if let Some(ref window_frame) = window_frame {
-                if !is_window_valid(window_frame) {
-                    return Err(DataFusionError::Execution(format!(
+            if !is_window_valid(window_frame) {
+                return Err(DataFusionError::Execution(format!(
                         "Invalid window frame: start bound ({}) cannot be larger than end bound ({})",
                         window_frame.start_bound, window_frame.end_bound
                     )));
-                }
             }
-            let window_frame = window_frame.clone().map(Arc::new);
+
+            let window_frame = Arc::new(window_frame.clone());
             windows::create_window_expr(
                 fun,
                 name,
@@ -1679,7 +1706,16 @@ impl DefaultPhysicalPlanner {
 
         let mut new_plan = plan;
         for optimizer in optimizers {
+            let before_schema = new_plan.schema();
             new_plan = optimizer.optimize(new_plan, &session_state.config)?;
+            if optimizer.schema_check() && new_plan.schema() != before_schema {
+                return Err(DataFusionError::Internal(format!(
+                        "PhysicalOptimizer rule '{}' failed, due to generate a different schema, original schema: {:?}, new schema: {:?}",
+                        optimizer.name(),
+                        before_schema,
+                        new_plan.schema()
+                    )));
+            }
             observer(new_plan.as_ref(), optimizer.as_ref())
         }
         debug!(
@@ -1735,7 +1771,7 @@ mod tests {
 
     async fn plan(logical_plan: &LogicalPlan) -> Result<Arc<dyn ExecutionPlan>> {
         let mut session_state = make_session_state();
-        session_state.config.target_partitions = 4;
+        session_state.config = session_state.config.with_target_partitions(4);
         // optimize the logical plan
         let logical_plan = session_state.optimize(logical_plan)?;
         let planner = DefaultPhysicalPlanner::default();
@@ -1960,7 +1996,7 @@ mod tests {
                 nullable: false, \
                 dict_id: 0, \
                 dict_is_ordered: false, \
-                metadata: None } }\
+                metadata: {} } }\
         ], metadata: {} }, \
         ExecutionPlan schema: Schema { fields: [\
             Field { \
@@ -1969,7 +2005,7 @@ mod tests {
                 nullable: false, \
                 dict_id: 0, \
                 dict_is_ordered: false, \
-                metadata: None }\
+                metadata: {} }\
         ], metadata: {} }";
         match plan {
             Ok(_) => panic!("Expected planning failure"),
@@ -2016,7 +2052,7 @@ mod tests {
             .build()?;
         let e = plan(&logical_plan).await.unwrap_err().to_string();
 
-        assert_contains!(&e, "The data type inlist should be same, the value type is Boolean, one of list expr type is Struct([Field { name: \"foo\", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: None }])");
+        assert_contains!(&e, "The data type inlist should be same, the value type is Boolean, one of list expr type is Struct([Field { name: \"foo\", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }])");
 
         Ok(())
     }

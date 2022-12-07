@@ -49,6 +49,8 @@ use datafusion::datasource::file_format::csv::DEFAULT_CSV_EXTENSION;
 use datafusion::datasource::file_format::parquet::DEFAULT_PARQUET_EXTENSION;
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::execution::context::SessionState;
+use datafusion::scheduler::Scheduler;
+use futures::TryStreamExt;
 use serde::Serialize;
 use structopt::StructOpt;
 
@@ -101,6 +103,10 @@ struct DataFusionBenchmarkOpt {
     /// Whether to disable collection of statistics (and cost based optimizations) or not.
     #[structopt(short = "S", long = "disable-statistics")]
     disable_statistics: bool,
+
+    /// Enable scheduler
+    #[structopt(short = "e", long = "enable-scheduler")]
+    enable_scheduler: bool,
 }
 
 #[derive(Debug, StructOpt)]
@@ -235,14 +241,16 @@ async fn benchmark_query(
         if query_id == 15 {
             for (n, query) in sql.iter().enumerate() {
                 if n == 1 {
-                    result = execute_query(&ctx, query, opt.debug).await?;
+                    result = execute_query(&ctx, query, opt.debug, opt.enable_scheduler)
+                        .await?;
                 } else {
-                    execute_query(&ctx, query, opt.debug).await?;
+                    execute_query(&ctx, query, opt.debug, opt.enable_scheduler).await?;
                 }
             }
         } else {
             for query in sql {
-                result = execute_query(&ctx, query, opt.debug).await?;
+                result =
+                    execute_query(&ctx, query, opt.debug, opt.enable_scheduler).await?;
             }
         }
 
@@ -317,6 +325,7 @@ async fn execute_query(
     ctx: &SessionContext,
     sql: &str,
     debug: bool,
+    enable_scheduler: bool,
 ) -> Result<Vec<RecordBatch>> {
     let plan = ctx.sql(sql).await?;
     let plan = plan.to_unoptimized_plan();
@@ -337,7 +346,13 @@ async fn execute_query(
         );
     }
     let task_ctx = ctx.task_ctx();
-    let result = collect(physical_plan.clone(), task_ctx).await?;
+    let result = if enable_scheduler {
+        let scheduler = Scheduler::new(num_cpus::get());
+        let results = scheduler.schedule(physical_plan.clone(), task_ctx).unwrap();
+        results.stream().try_collect().await?
+    } else {
+        collect(physical_plan.clone(), task_ctx).await?
+    };
     if debug {
         println!(
             "=== Physical plan with metrics ===\n{}\n",
@@ -381,7 +396,8 @@ async fn get_table(
             }
             "parquet" => {
                 let path = format!("{}/{}", path, table);
-                let format = ParquetFormat::default().with_enable_pruning(true);
+                let format = ParquetFormat::new(ctx.config_options())
+                    .with_enable_pruning(Some(true));
 
                 (Arc::new(format), path, DEFAULT_PARQUET_EXTENSION)
             }
@@ -394,7 +410,7 @@ async fn get_table(
     let options = ListingOptions::new(format)
         .with_file_extension(extension)
         .with_target_partitions(target_partitions)
-        .with_collect_stat(ctx.config.collect_statistics);
+        .with_collect_stat(ctx.config.collect_statistics());
 
     let table_path = ListingTableUrl::parse(path)?;
     let config = ListingTableConfig::new(table_path).with_listing_options(options);
@@ -813,7 +829,7 @@ mod tests {
 
         let sql = &get_query_sql(n)?;
         for query in sql {
-            execute_query(&ctx, query, false).await?;
+            execute_query(&ctx, query, false, false).await?;
         }
 
         Ok(())
@@ -841,6 +857,7 @@ mod ci {
             mem_table: false,
             output_path: None,
             disable_statistics: false,
+            enable_scheduler: false,
         };
         register_tables(&opt, &ctx).await?;
         let queries = get_query_sql(query)?;
@@ -1120,21 +1137,17 @@ mod ci {
                                 Box::new(trim(col(Field::name(field)))),
                                 DataType::Float64,
                             )));
-                            Expr::Alias(
-                                Box::new(Expr::Cast(Cast::new(
-                                    inner_cast,
-                                    Field::data_type(field).to_owned(),
-                                ))),
-                                Field::name(field).to_string(),
-                            )
-                        }
-                        _ => Expr::Alias(
-                            Box::new(Expr::Cast(Cast::new(
-                                Box::new(trim(col(Field::name(field)))),
+                            Expr::Cast(Cast::new(
+                                inner_cast,
                                 Field::data_type(field).to_owned(),
-                            ))),
-                            Field::name(field).to_string(),
-                        ),
+                            ))
+                            .alias(Field::name(field))
+                        }
+                        _ => Expr::Cast(Cast::new(
+                            Box::new(trim(col(Field::name(field)))),
+                            Field::data_type(field).to_owned(),
+                        ))
+                        .alias(Field::name(field)),
                     }
                 })
                 .collect::<Vec<Expr>>(),
@@ -1153,6 +1166,7 @@ mod ci {
             mem_table: false,
             output_path: None,
             disable_statistics: false,
+            enable_scheduler: false,
         };
         let mut results = benchmark_datafusion(opt).await?;
         assert_eq!(results.len(), 1);

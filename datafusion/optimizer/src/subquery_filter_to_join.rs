@@ -400,7 +400,8 @@ mod tests {
         let table_scan = test_table_scan()?;
         let plan = LogicalPlanBuilder::from(table_scan)
             .filter(in_subquery(col("c"), test_subquery_with_name("sq_inner")?))?
-            .project_with_alias(vec![col("b"), col("c")], Some("wrapped".to_string()))?
+            .project(vec![col("b"), col("c")])?
+            .alias("wrapped")?
             .filter(or(
                 binary_expr(col("b"), Operator::Lt, lit(30_u32)),
                 in_subquery(col("c"), test_subquery_with_name("sq_outer")?),
@@ -410,13 +411,15 @@ mod tests {
 
         let expected = "Projection: wrapped.b [b:UInt32]\
         \n  Filter: wrapped.b < UInt32(30) OR wrapped.c IN (<subquery>) [b:UInt32, c:UInt32]\
-        \n    Subquery: [c:UInt32]\n      Projection: sq_outer.c [c:UInt32]\
+        \n    Subquery: [c:UInt32]\
+        \n      Projection: sq_outer.c [c:UInt32]\
         \n        TableScan: sq_outer [a:UInt32, b:UInt32, c:UInt32]\
-        \n    Projection: test.b, test.c, alias=wrapped [b:UInt32, c:UInt32]\
-        \n      LeftSemi Join: test.c = sq_inner.c [a:UInt32, b:UInt32, c:UInt32]\
-        \n        TableScan: test [a:UInt32, b:UInt32, c:UInt32]\
-        \n        Projection: sq_inner.c [c:UInt32]\
-        \n          TableScan: sq_inner [a:UInt32, b:UInt32, c:UInt32]";
+        \n    SubqueryAlias: wrapped [b:UInt32, c:UInt32]\
+        \n      Projection: test.b, test.c [b:UInt32, c:UInt32]\
+        \n        LeftSemi Join: test.c = sq_inner.c [a:UInt32, b:UInt32, c:UInt32]\
+        \n          TableScan: test [a:UInt32, b:UInt32, c:UInt32]\
+        \n          Projection: sq_inner.c [c:UInt32]\
+        \n            TableScan: sq_inner [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_optimized_plan_eq(&plan, expected);
         Ok(())

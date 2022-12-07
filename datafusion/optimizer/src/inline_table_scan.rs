@@ -54,10 +54,9 @@ impl OptimizerRule for InlineTableScan {
                     // Recursively apply optimization
                     let plan =
                         utils::optimize_children(self, sub_plan, _optimizer_config)?;
-                    let plan = LogicalPlanBuilder::from(plan).project_with_alias(
-                        vec![Expr::Wildcard],
-                        Some(table_name.to_string()),
-                    )?;
+                    let plan = LogicalPlanBuilder::from(plan)
+                        .project(vec![Expr::Wildcard])?
+                        .alias(table_name)?;
                     plan.build()
                 } else {
                     // No plan available, return with table scan as is
@@ -110,6 +109,7 @@ mod tests {
     pub struct CustomSource {
         plan: LogicalPlan,
     }
+
     impl CustomSource {
         fn new() -> Self {
             Self {
@@ -120,6 +120,7 @@ mod tests {
             }
         }
     }
+
     impl TableSource for CustomSource {
         fn as_any(&self) -> &dyn std::any::Any {
             self
@@ -156,10 +157,10 @@ mod tests {
             .optimize(&plan, &mut OptimizerConfig::new())
             .expect("failed to optimize plan");
         let formatted_plan = format!("{:?}", optimized_plan);
-        let expected = "\
-        Filter: x.a = Int32(1)\
-        \n  Projection: y.a, alias=x\
-        \n    TableScan: y";
+        let expected = "Filter: x.a = Int32(1)\
+        \n  SubqueryAlias: x\
+        \n    Projection: y.a\
+        \n      TableScan: y";
 
         assert_eq!(formatted_plan, expected);
         assert_eq!(plan.schema(), optimized_plan.schema());

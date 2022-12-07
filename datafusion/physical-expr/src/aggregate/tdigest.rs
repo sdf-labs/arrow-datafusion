@@ -187,6 +187,12 @@ impl TDigest {
     pub(crate) fn max_size(&self) -> usize {
         self.max_size
     }
+
+    /// Size in bytes including `Self`.
+    pub(crate) fn size(&self) -> usize {
+        std::mem::size_of_val(self)
+            + (std::mem::size_of::<Centroid>() * self.centroids.capacity())
+    }
 }
 
 impl Default for TDigest {
@@ -231,7 +237,6 @@ impl TDigest {
     }
 
     pub(crate) fn merge_sorted_f64(&self, sorted_values: &[f64]) -> TDigest {
-        dbg!(&sorted_values);
         #[cfg(debug_assertions)]
         debug_assert!(is_sorted(sorted_values), "unsorted input to TDigest");
 
@@ -741,5 +746,13 @@ mod tests {
         assert_error_bounds!(t, quantile = 0.0, want = 1.0);
         assert_error_bounds!(t, quantile = 0.5, want = 500.0);
         assert_state_roundtrip!(t);
+    }
+
+    #[test]
+    fn test_size() {
+        let t = TDigest::new(10);
+        let t = t.merge_unsorted_f64(vec![0.0, 1.0]);
+
+        assert_eq!(t.size(), 96);
     }
 }

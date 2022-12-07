@@ -21,7 +21,7 @@ use crate::logical_plan::builder::validate_unique_names;
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
 use crate::utils::{
-    exprlist_to_fields, grouping_set_expr_count, grouping_set_to_exprlist,
+    exprlist_to_fields, from_plan, grouping_set_expr_count, grouping_set_to_exprlist,
 };
 use crate::{Expr, ExprSchemable, TableProviderFilterPushDown, TableSource};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
@@ -348,6 +348,13 @@ impl LogicalPlan {
         };
         self.accept(&mut visitor)?;
         Ok(visitor.using_columns)
+    }
+
+    pub fn with_new_inputs(
+        &self,
+        inputs: &[LogicalPlan],
+    ) -> Result<LogicalPlan, DataFusionError> {
+        from_plan(self, &self.expressions(), inputs)
     }
 }
 
@@ -781,18 +788,13 @@ impl LogicalPlan {
 
                         Ok(())
                     }
-                    LogicalPlan::Projection(Projection {
-                        ref expr, alias, ..
-                    }) => {
+                    LogicalPlan::Projection(Projection { ref expr, .. }) => {
                         write!(f, "Projection: ")?;
                         for (i, expr_item) in expr.iter().enumerate() {
                             if i > 0 {
                                 write!(f, ", ")?;
                             }
                             write!(f, "{:?}", expr_item)?;
-                        }
-                        if let Some(a) = alias {
-                            write!(f, ", alias={}", a)?;
                         }
                         Ok(())
                     }
@@ -999,6 +1001,12 @@ pub enum JoinType {
     RightAnti,
 }
 
+impl JoinType {
+    pub fn is_outer(self) -> bool {
+        self == JoinType::Left || self == JoinType::Right || self == JoinType::Full
+    }
+}
+
 impl Display for JoinType {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         let join_type = match self {
@@ -1109,8 +1117,6 @@ pub struct Projection {
     pub input: Arc<LogicalPlan>,
     /// The schema description of the output
     pub schema: DFSchemaRef,
-    /// Projection output relation alias
-    pub alias: Option<String>,
 }
 
 impl Projection {
@@ -1118,13 +1124,12 @@ impl Projection {
     pub fn try_new(
         expr: Vec<Expr>,
         input: Arc<LogicalPlan>,
-        alias: Option<String>,
     ) -> Result<Self, DataFusionError> {
         let schema = Arc::new(DFSchema::new_with_metadata(
             exprlist_to_fields(&expr, &input)?,
             input.schema().metadata().clone(),
         )?);
-        Self::try_new_with_schema(expr, input, schema, alias)
+        Self::try_new_with_schema(expr, input, schema)
     }
 
     /// Create a new Projection using the specified output schema
@@ -1132,7 +1137,6 @@ impl Projection {
         expr: Vec<Expr>,
         input: Arc<LogicalPlan>,
         schema: DFSchemaRef,
-        alias: Option<String>,
     ) -> Result<Self, DataFusionError> {
         if expr.len() != schema.fields().len() {
             return Err(DataFusionError::Plan(format!("Projection has mismatch between number of expressions ({}) and number of fields in schema ({})", expr.len(), schema.fields().len())));
@@ -1141,16 +1145,11 @@ impl Projection {
             expr,
             input,
             schema,
-            alias,
         })
     }
 
     /// Create a new Projection using the specified output schema
-    pub fn new_from_schema(
-        input: Arc<LogicalPlan>,
-        schema: DFSchemaRef,
-        alias: Option<String>,
-    ) -> Self {
+    pub fn new_from_schema(input: Arc<LogicalPlan>, schema: DFSchemaRef) -> Self {
         let expr: Vec<Expr> = schema
             .fields()
             .iter()
@@ -1161,7 +1160,6 @@ impl Projection {
             expr,
             input,
             schema,
-            alias,
         }
     }
 
@@ -1354,7 +1352,7 @@ pub struct CreateExternalTable {
     pub if_not_exists: bool,
     /// SQL used to create the table, if available
     pub definition: Option<String>,
-    /// File compression type (GZIP, BZIP2)
+    /// File compression type (GZIP, BZIP2, XZ)
     pub file_compression_type: String,
     /// Table(provider) specific options
     pub options: HashMap<String, String>,
@@ -1990,7 +1988,6 @@ mod tests {
                 schema: empty_schema.clone(),
             })),
             empty_schema,
-            None,
         );
         assert_eq!("Error during planning: Projection has mismatch between number of expressions (1) and number of fields in schema (0)", format!("{}", p.err().unwrap()));
         Ok(())

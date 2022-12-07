@@ -21,14 +21,16 @@ use std::str::FromStr;
 use std::{any::Any, sync::Arc};
 
 use arrow::compute::SortOptions;
-use arrow::datatypes::{Field, Schema, SchemaRef};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use async_trait::async_trait;
 use dashmap::DashMap;
 use datafusion_physical_expr::PhysicalSortExpr;
 use futures::{future, stream, StreamExt, TryStreamExt};
 use object_store::path::Path;
 use object_store::ObjectMeta;
+use parking_lot::RwLock;
 
+use crate::config::ConfigOptions;
 use crate::datasource::file_format::file_type::{FileCompressionType, FileType};
 use crate::datasource::{
     file_format::{
@@ -41,14 +43,14 @@ use crate::datasource::{
 };
 use crate::logical_expr::TableProviderFilterPushDown;
 use crate::physical_plan;
+use crate::physical_plan::file_format::partition_type_wrap;
 use crate::{
     error::{DataFusionError, Result},
     execution::context::SessionState,
     logical_expr::Expr,
     physical_plan::{
-        empty::EmptyExec,
-        file_format::{FileScanConfig, DEFAULT_PARTITION_COLUMN_DATATYPE},
-        project_schema, ExecutionPlan, Statistics,
+        empty::EmptyExec, file_format::FileScanConfig, project_schema, ExecutionPlan,
+        Statistics,
     },
 };
 
@@ -107,7 +109,10 @@ impl ListingTableConfig {
         }
     }
 
-    fn infer_format(path: &str) -> Result<(Arc<dyn FileFormat>, String)> {
+    fn infer_format(
+        config_options: Arc<RwLock<ConfigOptions>>,
+        path: &str,
+    ) -> Result<(Arc<dyn FileFormat>, String)> {
         let err_msg = format!("Unable to infer file type from path: {}", path);
 
         let mut exts = path.rsplit('.');
@@ -136,15 +141,15 @@ impl ListingTableConfig {
             FileType::JSON => Arc::new(
                 JsonFormat::default().with_file_compression_type(file_compression_type),
             ),
-            FileType::PARQUET => Arc::new(ParquetFormat::default()),
+            FileType::PARQUET => Arc::new(ParquetFormat::new(config_options)),
         };
 
         Ok((file_format, ext))
     }
 
     /// Infer `ListingOptions` based on `table_path` suffix.
-    pub async fn infer_options(self, ctx: &SessionState) -> Result<Self> {
-        let store = ctx
+    pub async fn infer_options(self, state: &SessionState) -> Result<Self> {
+        let store = state
             .runtime_env
             .object_store(self.table_paths.get(0).unwrap())?;
 
@@ -157,12 +162,14 @@ impl ListingTableConfig {
             .await
             .ok_or_else(|| DataFusionError::Internal("No files for table".into()))??;
 
-        let (format, file_extension) =
-            ListingTableConfig::infer_format(file.location.as_ref())?;
+        let (format, file_extension) = ListingTableConfig::infer_format(
+            state.config_options(),
+            file.location.as_ref(),
+        )?;
 
         let listing_options = ListingOptions::new(format)
             .with_file_extension(file_extension)
-            .with_target_partitions(ctx.config.target_partitions);
+            .with_target_partitions(state.config.target_partitions());
 
         Ok(Self {
             table_paths: self.table_paths,
@@ -210,9 +217,7 @@ pub struct ListingOptions {
     /// partitioning expected should be named "a" and "b":
     /// - If there is a third level of partitioning it will be ignored.
     /// - Files that don't follow this partitioning will be ignored.
-    /// Note that only `DEFAULT_PARTITION_COLUMN_DATATYPE` is currently
-    /// supported for the column type.
-    pub table_partition_cols: Vec<String>,
+    pub table_partition_cols: Vec<(String, DataType)>,
     /// Set true to try to guess statistics from the files.
     /// This can add a lot of overhead as it will usually require files
     /// to be opened and at least partially parsed.
@@ -253,11 +258,15 @@ impl ListingOptions {
     /// Set file extension on [`ListingOptions`] and returns self.
     ///
     /// ```
-    /// use std::sync::Arc;
-    /// use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
+    /// # use std::sync::Arc;
+    /// # use datafusion::prelude::SessionContext;
+    /// # use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
     ///
-    /// let listing_options = ListingOptions::new(Arc::new(ParquetFormat::default()))
-    ///     .with_file_extension(".parquet");
+    /// let ctx = SessionContext::new();
+    /// let listing_options = ListingOptions::new(Arc::new(
+    ///     ParquetFormat::new(ctx.config_options())
+    ///   ))
+    ///   .with_file_extension(".parquet");
     ///
     /// assert_eq!(listing_options.file_extension, ".parquet");
     /// ```
@@ -269,17 +278,24 @@ impl ListingOptions {
     /// Set table partition column names on [`ListingOptions`] and returns self.
     ///
     /// ```
-    /// use std::sync::Arc;
-    /// use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
+    /// # use std::sync::Arc;
+    /// # use arrow::datatypes::DataType;
+    /// # use datafusion::prelude::{col, SessionContext};
+    /// # use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
     ///
-    /// let listing_options = ListingOptions::new(Arc::new(ParquetFormat::default()))
-    ///     .with_table_partition_cols(vec!["col_a".to_string(), "col_b".to_string()]);
+    /// let ctx = SessionContext::new();
+    /// let listing_options = ListingOptions::new(Arc::new(
+    ///     ParquetFormat::new(ctx.config_options())
+    ///   ))
+    ///   .with_table_partition_cols(vec![("col_a".to_string(), DataType::Utf8),
+    ///       ("col_b".to_string(), DataType::Utf8)]);
     ///
-    /// assert_eq!(listing_options.table_partition_cols, vec!["col_a", "col_b"]);
+    /// assert_eq!(listing_options.table_partition_cols, vec![("col_a".to_string(), DataType::Utf8),
+    ///     ("col_b".to_string(), DataType::Utf8)]);
     /// ```
     pub fn with_table_partition_cols(
         mut self,
-        table_partition_cols: Vec<String>,
+        table_partition_cols: Vec<(String, DataType)>,
     ) -> Self {
         self.table_partition_cols = table_partition_cols;
         self
@@ -288,12 +304,15 @@ impl ListingOptions {
     /// Set stat collection on [`ListingOptions`] and returns self.
     ///
     /// ```
-    /// use std::sync::Arc;
-    /// use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
+    /// # use std::sync::Arc;
+    /// # use datafusion::prelude::SessionContext;
+    /// # use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
     ///
-    /// // Enable stat collection
-    /// let listing_options = ListingOptions::new(Arc::new(ParquetFormat::default()))
-    ///     .with_collect_stat(true);
+    /// let ctx = SessionContext::new();
+    /// let listing_options = ListingOptions::new(Arc::new(
+    ///     ParquetFormat::new(ctx.config_options())
+    ///   ))
+    ///   .with_collect_stat(true);
     ///
     /// assert_eq!(listing_options.collect_stat, true);
     /// ```
@@ -305,11 +324,15 @@ impl ListingOptions {
     /// Set number of target partitions on [`ListingOptions`] and returns self.
     ///
     /// ```
-    /// use std::sync::Arc;
-    /// use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
+    /// # use std::sync::Arc;
+    /// # use datafusion::prelude::SessionContext;
+    /// # use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
     ///
-    /// let listing_options = ListingOptions::new(Arc::new(ParquetFormat::default()))
-    ///     .with_target_partitions(8);
+    /// let ctx = SessionContext::new();
+    /// let listing_options = ListingOptions::new(Arc::new(
+    ///     ParquetFormat::new(ctx.config_options())
+    ///   ))
+    ///   .with_target_partitions(8);
     ///
     /// assert_eq!(listing_options.target_partitions, 8);
     /// ```
@@ -321,18 +344,20 @@ impl ListingOptions {
     /// Set file sort order on [`ListingOptions`] and returns self.
     ///
     /// ```
-    /// use std::sync::Arc;
-    /// use datafusion::prelude::{Expr, col};
-    /// use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
-    ///
+    /// # use std::sync::Arc;
+    /// # use datafusion::prelude::{col, SessionContext};
+    /// # use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
     ///
     ///  // Tell datafusion that the files are sorted by column "a"
     ///  let file_sort_order = Some(vec![
     ///    col("a").sort(true, true)
     ///  ]);
     ///
-    /// let listing_options = ListingOptions::new(Arc::new(ParquetFormat::default()))
-    ///     .with_file_sort_order(file_sort_order.clone());
+    /// let ctx = SessionContext::new();
+    /// let listing_options = ListingOptions::new(Arc::new(
+    ///     ParquetFormat::new(ctx.config_options())
+    ///   ))
+    ///   .with_file_sort_order(file_sort_order.clone());
     ///
     /// assert_eq!(listing_options.file_sort_order, file_sort_order);
     /// ```
@@ -428,10 +453,10 @@ impl ListingTable {
 
         // Add the partition columns to the file schema
         let mut table_fields = file_schema.fields().clone();
-        for part in &options.table_partition_cols {
+        for (part_col_name, part_col_type) in &options.table_partition_cols {
             table_fields.push(Field::new(
-                part,
-                DEFAULT_PARTITION_COLUMN_DATATYPE.clone(),
+                part_col_name,
+                partition_type_wrap(part_col_type.clone()),
                 false,
             ));
         }
@@ -522,7 +547,7 @@ impl TableProvider for ListingTable {
     async fn scan(
         &self,
         ctx: &SessionState,
-        projection: &Option<Vec<usize>>,
+        projection: Option<&Vec<usize>>,
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -532,9 +557,25 @@ impl TableProvider for ListingTable {
         // if no files need to be read, return an `EmptyExec`
         if partitioned_file_lists.is_empty() {
             let schema = self.schema();
-            let projected_schema = project_schema(&schema, projection.as_ref())?;
+            let projected_schema = project_schema(&schema, projection)?;
             return Ok(Arc::new(EmptyExec::new(false, projected_schema)));
         }
+
+        // extract types of partition columns
+        let table_partition_cols = self
+            .options
+            .table_partition_cols
+            .iter()
+            .map(|col| {
+                Ok((
+                    col.0.to_owned(),
+                    self.table_schema
+                        .field_with_name(&col.0)?
+                        .data_type()
+                        .clone(),
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
 
         // create the execution plan
         self.options
@@ -545,10 +586,10 @@ impl TableProvider for ListingTable {
                     file_schema: Arc::clone(&self.file_schema),
                     file_groups: partitioned_file_lists,
                     statistics,
-                    projection: projection.clone(),
+                    projection: projection.cloned(),
                     limit,
                     output_ordering: self.try_create_output_ordering()?,
-                    table_partition_cols: self.options.table_partition_cols.clone(),
+                    table_partition_cols,
                     config_options: ctx.config.config_options(),
                 },
                 filters,
@@ -560,7 +601,15 @@ impl TableProvider for ListingTable {
         &self,
         filter: &Expr,
     ) -> Result<TableProviderFilterPushDown> {
-        if expr_applicable_for_cols(&self.options.table_partition_cols, filter) {
+        if expr_applicable_for_cols(
+            &self
+                .options
+                .table_partition_cols
+                .iter()
+                .map(|x| x.0.clone())
+                .collect::<Vec<_>>(),
+            filter,
+        ) {
             // if filter can be handled by partiton pruning, it is exact
             Ok(TableProviderFilterPushDown::Exact)
         } else {
@@ -661,7 +710,7 @@ mod tests {
         let table = load_table(&ctx, "alltypes_plain.parquet").await?;
         let projection = None;
         let exec = table
-            .scan(&ctx.state(), &projection, &[], None)
+            .scan(&ctx.state(), projection, &[], None)
             .await
             .expect("Scan table");
 
@@ -684,14 +733,14 @@ mod tests {
         let ctx = SessionContext::new();
         let state = ctx.state();
 
-        let opt = ListingOptions::new(Arc::new(ParquetFormat::default()));
+        let opt = ListingOptions::new(Arc::new(ParquetFormat::new(ctx.config_options())));
         let schema = opt.infer_schema(&state, &table_path).await?;
         let config = ListingTableConfig::new(table_path)
             .with_listing_options(opt)
             .with_schema(schema);
         let table = ListingTable::try_new(config)?;
 
-        let exec = table.scan(&state, &None, &[], None).await?;
+        let exec = table.scan(&state, None, &[], None).await?;
         assert_eq!(exec.statistics().num_rows, Some(8));
         assert_eq!(exec.statistics().total_byte_size, Some(671));
 
@@ -706,7 +755,8 @@ mod tests {
 
         let ctx = SessionContext::new();
         let state = ctx.state();
-        let options = ListingOptions::new(Arc::new(ParquetFormat::default()));
+        let options =
+            ListingOptions::new(Arc::new(ParquetFormat::new(ctx.config_options())));
         let schema = options.infer_schema(&state, &table_path).await.unwrap();
 
         use physical_plan::expressions::col as physical_col;
@@ -807,7 +857,10 @@ mod tests {
 
         let opt = ListingOptions::new(Arc::new(AvroFormat {}))
             .with_file_extension(FileType::AVRO.get_ext())
-            .with_table_partition_cols(vec![String::from("p1")])
+            .with_table_partition_cols(vec![(
+                String::from("p1"),
+                partition_type_wrap(DataType::Utf8),
+            )])
             .with_target_partitions(4);
 
         let table_path = ListingTableUrl::parse("test:///table/").unwrap();
@@ -827,7 +880,7 @@ mod tests {
         let filter = Expr::not_eq(col("p1"), lit("v1"));
 
         let scan = table
-            .scan(&ctx.state(), &None, &[filter], None)
+            .scan(&ctx.state(), None, &[filter], None)
             .await
             .expect("Empty execution plan");
 

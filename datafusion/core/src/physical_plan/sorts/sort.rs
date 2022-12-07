@@ -118,6 +118,7 @@ impl ExternalSorter {
     ) -> Result<()> {
         if input.num_rows() > 0 {
             let size = batch_byte_size(&input);
+            debug!("Inserting {} rows of {} bytes", input.num_rows(), size);
             self.try_grow(size).await?;
             self.metrics.mem_used().add(size);
             let mut in_mem_batches = self.in_mem_batches.lock().await;
@@ -272,6 +273,13 @@ impl MemoryConsumer for ExternalSorter {
     }
 
     async fn spill(&self) -> Result<usize> {
+        let partition = self.partition_id();
+        let mut in_mem_batches = self.in_mem_batches.lock().await;
+        // we could always get a chance to free some memory as long as we are holding some
+        if in_mem_batches.len() == 0 {
+            return Ok(0);
+        }
+
         debug!(
             "{}[{}] spilling sort data of {} to disk while inserting ({} time(s) so far)",
             self.name(),
@@ -280,18 +288,11 @@ impl MemoryConsumer for ExternalSorter {
             self.spill_count()
         );
 
-        let partition = self.partition_id();
-        let mut in_mem_batches = self.in_mem_batches.lock().await;
-        // we could always get a chance to free some memory as long as we are holding some
-        if in_mem_batches.len() == 0 {
-            return Ok(0);
-        }
-
         let tracking_metrics = self
             .metrics_set
             .new_intermediate_tracking(partition, self.runtime.clone());
 
-        let spillfile = self.runtime.disk_manager.create_tmp_file()?;
+        let spillfile = self.runtime.disk_manager.create_tmp_file("Sorting")?;
         let stream = in_mem_partial_sort(
             &mut in_mem_batches,
             self.schema.clone(),
@@ -916,7 +917,7 @@ async fn do_sort(
         schema.clone(),
         expr,
         metrics_set,
-        Arc::new(context.session_config()),
+        Arc::new(context.session_config().clone()),
         context.runtime_env(),
         fetch,
     );
@@ -951,9 +952,9 @@ mod tests {
     use arrow::array::*;
     use arrow::compute::SortOptions;
     use arrow::datatypes::*;
-    use datafusion_common::cast::as_string_array;
+    use datafusion_common::cast::{as_primitive_array, as_string_array};
     use futures::FutureExt;
-    use std::collections::{BTreeMap, HashMap};
+    use std::collections::HashMap;
 
     #[tokio::test]
     async fn test_in_mem_sort() -> Result<()> {
@@ -995,11 +996,11 @@ mod tests {
         assert_eq!(c1.value(0), "a");
         assert_eq!(c1.value(c1.len() - 1), "e");
 
-        let c2 = as_primitive_array::<UInt32Type>(&columns[1]);
+        let c2 = as_primitive_array::<UInt32Type>(&columns[1])?;
         assert_eq!(c2.value(0), 1);
         assert_eq!(c2.value(c2.len() - 1), 5,);
 
-        let c7 = as_primitive_array::<UInt8Type>(&columns[6]);
+        let c7 = as_primitive_array::<UInt8Type>(&columns[6])?;
         assert_eq!(c7.value(0), 15);
         assert_eq!(c7.value(c7.len() - 1), 254,);
 
@@ -1067,11 +1068,11 @@ mod tests {
         assert_eq!(c1.value(0), "a");
         assert_eq!(c1.value(c1.len() - 1), "e");
 
-        let c2 = as_primitive_array::<UInt32Type>(&columns[1]);
+        let c2 = as_primitive_array::<UInt32Type>(&columns[1])?;
         assert_eq!(c2.value(0), 1);
         assert_eq!(c2.value(c2.len() - 1), 5,);
 
-        let c7 = as_primitive_array::<UInt8Type>(&columns[6]);
+        let c7 = as_primitive_array::<UInt8Type>(&columns[6])?;
         assert_eq!(c7.value(0), 15);
         assert_eq!(c7.value(c7.len() - 1), 254,);
 
@@ -1150,7 +1151,7 @@ mod tests {
     async fn test_sort_metadata() -> Result<()> {
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
-        let field_metadata: BTreeMap<String, String> =
+        let field_metadata: HashMap<String, String> =
             vec![("foo".to_string(), "bar".to_string())]
                 .into_iter()
                 .collect();
@@ -1160,7 +1161,7 @@ mod tests {
                 .collect();
 
         let mut field = Field::new("field_name", DataType::UInt64, true);
-        field.set_metadata(Some(field_metadata.clone()));
+        field.set_metadata(field_metadata.clone());
         let schema = Schema::new_with_metadata(vec![field], schema_metadata.clone());
         let schema = Arc::new(schema);
 
@@ -1191,10 +1192,7 @@ mod tests {
         assert_eq!(&vec![expected_batch], &result);
 
         // explicitlty ensure the metadata is present
-        assert_eq!(
-            result[0].schema().fields()[0].metadata(),
-            Some(&field_metadata)
-        );
+        assert_eq!(result[0].schema().fields()[0].metadata(), &field_metadata);
         assert_eq!(result[0].schema().metadata(), &schema_metadata);
 
         Ok(())
@@ -1271,8 +1269,8 @@ mod tests {
         assert_eq!(DataType::Float32, *columns[0].data_type());
         assert_eq!(DataType::Float64, *columns[1].data_type());
 
-        let a = as_primitive_array::<Float32Type>(&columns[0]);
-        let b = as_primitive_array::<Float64Type>(&columns[1]);
+        let a = as_primitive_array::<Float32Type>(&columns[0])?;
+        let b = as_primitive_array::<Float64Type>(&columns[1])?;
 
         // convert result to strings to allow comparing to expected result containing NaN
         let result: Vec<(Option<String>, Option<String>)> = (0..result[0].num_rows())
