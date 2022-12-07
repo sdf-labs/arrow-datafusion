@@ -213,7 +213,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     && table_properties.is_empty()
                     && with_options.is_empty() =>
                 {
-                    let plan = self.query_to_plan(*query, &mut HashMap::new())?;
+                    let plan = self.query_to_plan(*query, &mut PlannerContext::new())?;
                     Ok(LogicalPlan::CreateMemoryTable(CreateMemoryTable {
                         name: name.to_string(),
                         input: Arc::new(plan),

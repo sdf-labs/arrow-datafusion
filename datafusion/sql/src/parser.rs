@@ -659,13 +659,13 @@ impl<'a> DFParser<'a> {
 
     pub fn parse_describe(&mut self) -> Result<(Statement, StatementMeta), ParserError> {
         let table_name = self.parser.parse_object_name()?;
-
+        let table_string = table_name.to_owned();
         let des = DescribeTable {
-            table_name: table_name.to_string(),
+            table_name: table_name,
         };
         Ok((
             Statement::DescribeTable(des),
-            self.with_meta(table_name.to_string()),
+            self.with_meta(table_string.to_string()),
         ))
     }
 
