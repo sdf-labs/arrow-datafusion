@@ -32,6 +32,7 @@ use std::{
     collections::{HashMap, HashSet, VecDeque},
     fmt, fs,
     path::{Path, PathBuf},
+    process::exit,
 };
 extern crate regex;
 
@@ -39,11 +40,9 @@ use lazy_static::lazy_static;
 use std::sync::Mutex;
 // use crate::{dialect::Dialect, parser::{Parser, ParserError}, ast::Statement, tokenizer::Token, keywords::Keyword};
 
-
 use once_cell::sync::OnceCell;
 
 pub static VERBOSE_FLAG: OnceCell<i8> = OnceCell::new();
-
 
 lazy_static! {
     /// collects all files that have been visited so far
@@ -57,9 +56,11 @@ lazy_static! {
 }
 pub static CATALOG: &str = "catalog.yml";
 pub static WORKSPACE: &str = "workspace.yml";
+
 pub static DATA_DIR: &str = ".sdfcache";
 pub const SOURCE_CACHE:&str = "source_cache.csv";
 pub const DATA_CACHE: &str = "asset_cache.csv";
+
 
 pub fn visit(filename: &str, catalog: &str, schema: &str) {
     VISITED_FILES.lock().unwrap().insert(filename.to_owned());
@@ -228,11 +229,16 @@ impl StatementMeta {
             schema,
             table: String::new(),
             line_number: 0,
-            filename: String::new(),    
+            filename: String::new(),
         }
     }
     /// An statement definition location without line number
-    pub fn new_with_table(catalog: String, schema: String, table: String, filename: String) -> Self {
+    pub fn new_with_table(
+        catalog: String,
+        schema: String,
+        table: String,
+        filename: String,
+    ) -> Self {
         StatementMeta {
             catalog,
             schema,
@@ -287,7 +293,7 @@ impl<'a> DFParser<'a> {
         filename: String,
         catalog: String,
         schema: String,
-        table: String
+        table: String,
     ) -> Result<Self, ParserError> {
         let mut tokenizer = Tokenizer::new(dialect, sql);
         let tokens = tokenizer.tokenize()?;
@@ -318,12 +324,7 @@ impl<'a> DFParser<'a> {
     ) -> Result<VecDeque<(Statement, StatementMeta)>, ParserError> {
         let dialect = &GenericDialect {};
         DFParser::parse_sql_with_dialect_and_scope(
-            sql,
-            dialect,
-            filename,
-            catalog,
-            schema,
-            table,
+            sql, dialect, filename, catalog, schema, table,
         )
     }
     /// Parse a SQL statement and produce a set of statements
@@ -335,7 +336,8 @@ impl<'a> DFParser<'a> {
         Self::parse_statements(parser)
             .map(|list| list.into_iter().map(|elem| elem.0).collect())
     }
-    /// Parse a SQL statement and produce a set of statements
+
+    /// Parse a SQL statement and produce a set of statements inside a given scope
     pub fn parse_sql_with_dialect_and_scope(
         sql: &str,
         dialect: &dyn Dialect,
@@ -348,12 +350,18 @@ impl<'a> DFParser<'a> {
         let parser = DFParser::new_with_dialect_and_scope(
             sql,
             dialect,
-            filename,
+            filename.to_owned(),
             catalog,
             schema,
             table,
         )?;
-        Self::parse_statements(parser)
+        match Self::parse_statements(parser) {
+            Ok(res) => Ok(res),
+            Err(err) => {
+                error!("{}: {}", &filename, err);
+                exit(1)
+            }
+        }
     }
 
     fn parse_statements(
@@ -508,17 +516,14 @@ impl<'a> DFParser<'a> {
                 if !VISITED_CATALOGS.lock().unwrap().contains(&catalog) {
                     VISITED_CATALOGS.lock().unwrap().insert(catalog.to_owned());
                     created_catalog = format!("CREATE DATABASE {};\n", &catalog);
-                    info!("{}",created_catalog);
-
+                    info!("{}", created_catalog);
                 };
                 let schema_id = format!("{}.{}", catalog, schema);
                 if !VISITED_SCHEMAS.lock().unwrap().contains(&schema_id) {
                     VISITED_SCHEMAS.lock().unwrap().insert(schema_id);
                     created_schema = format!("CREATE SCHEMA {}.{};\n", &catalog, &schema);
-                    info!("{}",created_schema);
-
+                    info!("{}", created_schema);
                 };
-
 
                 // continue parsing
                 Self::parse_sql_file(
@@ -550,18 +555,21 @@ impl<'a> DFParser<'a> {
 
         let dialect: &dyn Dialect = &*dialect;
         let sql: &str = &contents_with_prefix;
-        let parser = match DFParser::new_with_dialect_and_scope(
+        let parser = DFParser::new_with_dialect_and_scope(
             sql,
             dialect,
-            filename,
+            filename.to_owned(),
             catalog,
             schema,
             table,
-        ) {
-            Ok(it) => it,
-            Err(err) => return Err(err),
-        };
-        Self::parse_statements(parser)
+        )?;
+        match Self::parse_statements(parser) {
+            Ok(res) => Ok(res),
+            Err(err) => {
+                error!("{}: {}", &filename, err);
+                exit(1)
+            }
+        }
     }
 
     /// Parse a new expression
@@ -693,7 +701,7 @@ impl<'a> DFParser<'a> {
             self.catalog.to_owned(),
             self.schema.to_owned(),
             table,
-            self.filename.to_owned()
+            self.filename.to_owned(),
         )
     }
 

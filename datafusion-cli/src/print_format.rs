@@ -21,16 +21,34 @@ use arrow::json::{ArrayWriter, LineDelimitedWriter};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::arrow::util::pretty;
 use datafusion::error::{DataFusionError, Result};
+use std::fmt;
 use std::str::FromStr;
 
 /// Allow records to be printed in different formats
-#[derive(Debug, PartialEq, Eq, clap::ArgEnum, Clone)]
+#[derive(Debug, PartialEq, Eq, clap::ArgEnum, Clone, Default)]
 pub enum PrintFormat {
+    #[default]
+    Table,
     Csv,
     Tsv,
-    Table,
     Json,
     NdJson,
+}
+
+impl fmt::Display for PrintFormat {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                PrintFormat::Csv => "csv",
+                PrintFormat::Tsv => "tsv",
+                PrintFormat::Table => "table",
+                PrintFormat::Json => "json",
+                PrintFormat::NdJson => "ndjson",
+            }
+        )
+    }
 }
 
 impl FromStr for PrintFormat {
