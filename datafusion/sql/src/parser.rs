@@ -57,9 +57,9 @@ lazy_static! {
 }
 pub static CATALOG: &str = "catalog.yml";
 pub static WORKSPACE: &str = "workspace.yml";
-pub static DATA_DIR: &str = ".data";
+pub static DATA_DIR: &str = ".sdfcache";
 pub const SOURCE_CACHE:&str = "source_cache.csv";
-pub const DATA_CACHE: &str = "data_cache.csv";
+pub const DATA_CACHE: &str = "asset_cache.csv";
 
 pub fn visit(filename: &str, catalog: &str, schema: &str) {
     VISITED_FILES.lock().unwrap().insert(filename.to_owned());
