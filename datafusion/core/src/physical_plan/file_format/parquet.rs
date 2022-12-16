@@ -641,6 +641,83 @@ impl ParquetFileReaderFactory for DefaultParquetFileReaderFactory {
     }
 }
 
+/// Executes a query and writes the results to a Hive partitioned Parquet file.
+pub async fn plan_to_parquet_partitioned(
+    state: &SessionState,
+    plan: Arc<dyn ExecutionPlan>,
+    path: impl AsRef<str>,
+    writer_properties: Option<WriterProperties>,
+    _partition_columns: Vec<String>, // create id=v1, .. id=vn tables, where n = plan.output_partitioning().partition_count()
+    partition_paths: Vec<String>,
+    _remapper: Vec<usize>,
+) -> Result<()> {
+    // plan_to_parquet(state, plan, path, writer_properties).await
+    let path = path.as_ref();
+    // create directory to contain the Parquet files (one per partition)
+    let fs_path = std::path::Path::new(path);
+    match fs::create_dir(fs_path) {
+        Ok(()) => {
+            let default = partition_paths.get(0).unwrap();
+            let mut tasks = vec![];
+            
+
+
+
+            for i in 0..plan.output_partitioning().partition_count() {
+                let plan = plan.clone();
+
+                let dirname = if i >= partition_paths.len() {
+                    format!("{}__{}", default, i)
+                } else {
+                    partition_paths.get(i).unwrap().to_owned()
+                };
+                let dir = fs_path.join(dirname);
+                match fs::create_dir(dir.to_owned()) {
+                    Ok(()) => {
+                        let filename = format!("part-{}.parquet", i);
+                        let path = dir.join(filename);
+                        let file = fs::File::create(path)?;
+                        let mut writer = ArrowWriter::try_new(
+                            file,
+                            plan.schema(),
+                            writer_properties.clone(),
+                        )?;
+                        let task_ctx = Arc::new(TaskContext::from(state));
+                        let stream = plan.execute(i, task_ctx)?;
+                        let handle: tokio::task::JoinHandle<Result<()>> =
+                            tokio::task::spawn(async move {
+                                stream
+                                    .map(|batch| writer.write(&batch?))
+                                    .try_collect()
+                                    .await
+                                    .map_err(DataFusionError::from)?;
+                                writer.close().map_err(DataFusionError::from).map(|_| ())
+                            });
+                        tasks.push(handle);
+                    }
+                    Err(e) => {
+                        return Err(DataFusionError::Execution(format!(
+                            "Could not create directory {}: {:?}",
+                            path, e
+                        )))
+                    }
+                }
+            }
+            futures::future::join_all(tasks)
+                .await
+                .into_iter()
+                .try_for_each(|result| {
+                    result.map_err(|e| DataFusionError::Execution(format!("{}", e)))?
+                })?;
+            Ok(())
+        }
+        Err(e) => Err(DataFusionError::Execution(format!(
+            "Could not create directory {}: {:?}",
+            path, e
+        ))),
+    }
+}
+
 /// Executes a query and writes the results to a partitioned Parquet file.
 pub async fn plan_to_parquet(
     state: &SessionState,

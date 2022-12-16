@@ -28,8 +28,8 @@ use crate::physical_plan::hash_utils::create_hashes;
 use crate::physical_plan::{
     DisplayFormatType, EquivalenceProperties, ExecutionPlan, Partitioning, Statistics,
 };
-use arrow::array::{ArrayRef, UInt64Builder};
-use arrow::datatypes::SchemaRef;
+use arrow::array::{ArrayRef, UInt64Builder, PrimitiveArray};
+use arrow::datatypes::{SchemaRef, UInt64Type};
 use arrow::error::{ArrowError, Result as ArrowResult};
 use arrow::record_batch::RecordBatch;
 use log::debug;
@@ -80,6 +80,11 @@ enum BatchPartitionerState {
         num_partitions: usize,
         next_idx: usize,
     },
+    HivePartition {
+        next_idx: usize,
+        num_partitions: usize,
+        remapper: Vec<usize>,
+    },
 }
 
 impl BatchPartitioner {
@@ -100,6 +105,13 @@ impl BatchPartitioner {
                 // Use fixed random hash
                 random_state: ahash::RandomState::with_seeds(0, 0, 0, 0),
                 hash_buffer: vec![],
+            },
+            // Partitioning::UnknownPartitioning(_) => todo!(),
+            Partitioning::HivePartitioning(remapper, num_partitions) => 
+            BatchPartitionerState::HivePartition {
+                next_idx: 0,
+                num_partitions,
+                remapper
             },
             other => {
                 return Err(DataFusionError::NotImplemented(format!(
@@ -130,9 +142,69 @@ impl BatchPartitioner {
                 num_partitions,
                 next_idx,
             } => {
+               
                 let idx = *next_idx;
                 *next_idx = (*next_idx + 1) % *num_partitions;
+                println!("ROUND ROBIN idx {}, next_idx {}", idx, *next_idx);
                 f(idx, batch)?;
+            }
+            BatchPartitionerState::HivePartition {
+                next_idx,
+                num_partitions,
+                remapper
+                
+            } => {
+                let mut timer = self.timer.timer();
+
+                // let arrays = exprs
+                //     .iter()
+                //     .map(|expr| Ok(expr.evaluate(&batch)?.into_array(batch.num_rows())))
+                //     .collect::<Result<Vec<_>>>()?;
+
+                // hash_buffer.clear();
+                // hash_buffer.resize(batch.num_rows(), 0);
+
+                // create_hashes(&arrays, random_state, hash_buffer)?;
+                let idx = *next_idx;
+                let num_rows = batch.num_rows();
+                // let slice = remapper[idx..idx+num_rows].iter().map(|i| *i as u64);
+                // let indices: PrimitiveArray<UInt64Type> = PrimitiveArray::from_iter_values(slice);
+                // assert!(num_rows==indices.len());
+                // if indices.is_empty() {
+                //     return Ok(());
+                // }
+                println!("idx {} numrows {} \nbatch {:?}",idx, num_rows, batch.columns());
+
+
+                for i in 0..*num_partitions {
+                    let slice = remapper[idx..idx+num_rows].iter().map(|i| *i as u64)
+                        .zip(0..*num_partitions)
+                        .filter(|(val,_)| *val==i as u64)
+                        .map(|(_,idx)|idx as u64);
+                    let indices: PrimitiveArray<UInt64Type> = PrimitiveArray::from_iter_values(slice);
+                    println!("indices {:?}",idx);
+                    if indices.is_empty() {
+                        continue;
+                    }
+
+                    // Produce batches based on indices
+                    let columns = batch
+                        .columns()
+                        .iter()
+                        .map(|c| {
+                            arrow::compute::take(c.as_ref(), &indices, None)
+                                .map_err(DataFusionError::ArrowError)
+                        })
+                        .collect::<Result<Vec<ArrayRef>>>()?;
+
+                    let batch = RecordBatch::try_new(batch.schema(), columns).unwrap();
+
+                    timer.stop();
+                    f(i, batch)?;
+                    timer.restart();
+                    *next_idx = idx+num_rows;
+                
+                }
             }
             BatchPartitionerState::Hash {
                 random_state,
