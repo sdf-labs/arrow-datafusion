@@ -34,26 +34,22 @@ use crate::logical_expr::{
 use crate::physical_plan::file_format::{
     plan_to_csv, plan_to_json, plan_to_parquet, plan_to_parquet_partitioned,
 };
-use crate::physical_plan::repartition::RepartitionExec;
+
 use crate::physical_plan::SendableRecordBatchStream;
 use crate::physical_plan::{collect, collect_partitioned};
 use crate::physical_plan::{execute_stream, execute_stream_partitioned, ExecutionPlan};
 use crate::prelude::SessionContext;
-use arrow::array::DictionaryArray;
+
 // use arrow::array::GenericByteArray;
 // use arrow::datatypes::GenericStringType;
-use arrow::datatypes::UInt16Type;
+
 use async_trait::async_trait;
-use datafusion_common::cast::as_dictionary_array;
-use datafusion_common::cast::as_primitive_array;
-use datafusion_common::cast::as_string_array;
+
 use datafusion_common::{Column, DFSchema};
 use datafusion_expr::TableProviderFilterPushDown;
 use parking_lot::RwLock;
 use parquet::file::properties::WriterProperties;
 use std::any::Any;
-
-use std::collections::HashSet;
 use std::sync::Arc;
 use std::usize;
 
@@ -656,251 +652,44 @@ impl DataFrame {
         plan_to_parquet(&state, plan, path, writer_properties).await
     }
 
-    /// Write a `DataFrame` to a Parquet file.
+    /// Write a `DataFrame` to a partitioned parquet file.
     pub async fn write_parquet_partitioned(
         &self,
-        root_path: &str,
+        path: &str,
         writer_properties: Option<WriterProperties>,
         partition_columns: Vec<String>,
     ) -> Result<()> {
-        if partition_columns.len() == 0 {
-            return self.write_parquet(root_path, writer_properties).await;
-        }
-
-        let basename = |name: &str| match name.rfind('.') {
-            Some(i) => name[i + 1..].to_owned(),
-            None => name.to_owned(),
-        };
-
-        // partitioning stratgey;
-        let schema = self.schema();
-        let columns = schema.field_names();
-
-        //
-        // create mapper which maps a row-index to a partition index
-        //
-
-        // a `df` with only partition columns
-        let partition_column_addrs: Vec<&str> =
-            partition_columns.iter().map(|e| &**e).collect();
-        // let partition_columns_len = partition_column_addrs.len();
-        println!("partition_columns {:?} ", partition_column_addrs);
-        let batches = self
-            .select_columns(partition_column_addrs.as_slice())?
-            .collect()
-            .await?;
-        let mut total_len = 0 as usize;
-        for batch in &batches {
-            total_len += batch.num_rows();
-        }
-        println!(
-            "batches.len() {:?}, total_len {}",
-            &batches.len(),
-            total_len
-        );
-
-        // partition_paths
-        // -- all unique combinations of partitions values
-        // -- represented as path like  n1=v1/n2=v2/...
-        // -- TODO. Due to perf assumes that we have only <= 50 partitions; otherwise use indexed_maps or so
-        let mut partition_paths: Vec<String> = vec![];
-
-        // partition_mapper
-        // -- maps each row i's values to partition_paths[i]
-        let mut partition_mapper: Vec<usize> = vec![];
-
-        for batch in &batches {
-            for i in 0..batch.num_rows() {
-                let mut atoms = vec![];
-                for j in 0..batch.num_columns() {
-                    let col: &DictionaryArray<UInt16Type> =
-                        as_dictionary_array(batch.column(j))?;
-                    let values_array = as_string_array(col.values())?;
-                    let keys_array = as_primitive_array::<UInt16Type>(col.keys())?;
-                    let value = values_array.value(keys_array.value(i as usize) as usize);
-                    atoms.push(format!(
-                        "{}={}",
-                        partition_columns.get(j).unwrap(),
-                        value
-                    ));
-                }
-                let path = itertools::join(atoms, "/");
-                match partition_paths.iter().position(|r| r == &path) {
-                    None => {
-                        partition_paths.push(path);
-                        partition_mapper.push(partition_paths.len() - 1);
-                    }
-                    Some(pos) => {
-                        partition_mapper.push(pos);
-                    }
-                }
-            }
-        }
-        println!("partition_paths {:?}", &partition_paths);
-        println!("partition_mapper {:?}", &partition_mapper);
-
-        // let mut value_space : Vec<&GenericByteArray<GenericStringType<i32>>> = vec![];
-        // for batch in &batches{
-        //     println!("batch.num_columns() {} == {}", batch.num_columns(), partition_columns_len);
-        //     for i in 0..batch.num_columns(){
-        //         // assume every partition column is represented by a dictionary array
-        //         let col: &DictionaryArray<UInt16Type> = as_dictionary_array(batch.column(i))?;
-        //         let str_array = as_string_array(col.values())?;
-        //         value_space.push(str_array);
-        //         println!("column {} values {:?}", i, str_array);
-        //         println!("whole batch: {:?}", batch.column(i));
-        //     }
-
-        // }
-
-        // // compute all dirpaths in order  n1=v1/n2=v2/...
-        // let mut paths = vec![];
-        // let mut totals: Vec<_> = vec![];
-        // for i in 0.. value_space.len(){
-        //     let value = value_space.get(i).unwrap();
-        //     let mut atoms = vec![];
-        //     let mut  total = 0;
-        //     for val in *value{
-        //         if let Some(v) = val {
-        //             atoms.push(format!("{}={}",partitions.get(i).unwrap(),v));
-        //             total+=1;
-        //         }
-        //     }
-        //     totals.push(total);
-        //     paths.push(itertools::join(atoms,"/"))
-        // }
-        // println!("paths {:?} totals {:?}", paths, totals);
-
-        // // compute multiplication table to map multi-index to flat index, work from innermost to  outermost index
-        // let mut mul_table = vec![1];
-        // let mut offset = 1;
-        // totals.reverse();
-        // for total in totals {
-        //     mul_table.push(offset * total);
-        //     offset *= offset
-        // }
-        // mul_table.reverse();
-        // println!("mul_table {:?}", mul_table);
-
-        // let mut remap : Vec<usize> = vec![];
-        // for batch in &batches{
-        //     for i in 0.. batch.num_rows(){
-        //         let mut index = 0;
-
-        //         for j in 0..batch.num_columns(){
-        //             println!("{:?}", batch.column(i));
-        //             let keys = as_primitive_array::<UInt16Type>(batch.column(i))?;
-        //             assert!(keys.len()==batch.num_rows());
-        //             let cell_ij = keys.value(j);
-        //             index += cell_ij as usize * mul_table[i];
-        //         }
-        //         remap.push(index);
-        //     }
-        // }
-        // println!("remap {:?}", remap);
-
-        // // println!("schema {:?}", df.schema());
-
-        // // // num of partitions and values...
-        // let batches = df
-        //     .select_columns(&[partition_column_name])?
-        //     .collect()
-        //     .await?;
-        // println!("batches length {}", batches.len());
-
-        // let mut unique_partitions: HashSet<String> = HashSet::new();
-        // for batch in &batches {
-        //     println!("batches data_type {:?}", batch.column(0).data_type());
-
-        //     let col: &DictionaryArray<UInt16Type> =
-        //         datafusion::common::cast::as_dictionary_array(batch.column(0))?;
-        //     let vals = as_string_array(col.values())?;
-        //     for val in vals {
-        //         if let Some(v) = val {
-        //             unique_partitions.insert(v.to_owned());
-        //         }
-        //     }
-        // }
-        // println!("unique Partitions {:?}", unique_partitions);
-
-        // let column_set: HashSet<String> = columns.into_iter().collect();
-        // let mut new_columns: Vec<String> = vec![];
-        // for qualified_name in columns {
-        //     let simple_name = basename(&qualified_name);
-        //     if !column_set.contains(&simple_name) {
-        //         new_columns.push(simple_name);
-        //     }
-        // }
-        // let new_columns_addr: Vec<&str> = new_columns.iter().map(|e| &**e).collect();
-
-        // // let n_df = self; //.copy()?;
-
-        // let columns = schema.field_names();
-
-        // let cols: Vec<String> = columns
-        //     .into_iter()
-        //     .filter(|name| basename(name) == partition_column_name)
-        //     .collect();
-        // assert!(cols.len() == 1);
-        // let col_name = cols.get(0).unwrap();
-        // // // repartition if
-
-        // // let x_df = m_df.copy()?;
-        let y_df = self.cache().await?;
-
-        // // let m_df = y_df.repartition(Partitioning::RoundRobinBatch(
-        // //     1,
-        // // ))?;
-        let partition_set: HashSet<String> = partition_columns
-            .clone()
-            .into_iter()
-            .map(|col| basename(&col))
-            .collect();
-        let mut new_columns: Vec<String> = vec![];
-        for qualified_name in columns {
-            let simple_name = basename(&qualified_name);
-            if !partition_set.contains(&simple_name) {
-                new_columns.push(simple_name);
-            }
-        }
-        let new_columns_addr: Vec<&str> = new_columns.iter().map(|e| &**e).collect();
-        let o_df = y_df.select_columns(new_columns_addr.as_slice())?;
-        println!("New Schema {:?}", o_df.schema());
-        // let p_df = o_df.repartition(Partitioning::RoundRobinBatch(1))?;
-
-        // let x = o_df.collect_partitioned().await?;
-
-        let plan = o_df.create_physical_plan().await?;
-        let plan2 = Arc::new(RepartitionExec::try_new(
-            plan,
-            crate::physical_plan::Partitioning::RoundRobinBatch(1),
-        )?);
-
-        let plan3 = Arc::new(RepartitionExec::try_new(
-            plan2,
-            crate::physical_plan::Partitioning::HivePartitioning(
-                partition_mapper.to_vec(),
-                partition_paths.len(),
-            ),
-        )?);
-
-        // println!(
-        //     "Physical plan : {:?}, {} ",
-        //     plan.output_partitioning(),
-        //     plan.output_partitioning().partition_count()
-        // );
-
+        self.check_columns(&partition_columns)?;
+        let plan = self.create_physical_plan().await?;
         let state = self.session_state.read().clone();
         plan_to_parquet_partitioned(
             &state,
-            plan3,
-            root_path,
+            plan,
+            path,
             writer_properties,
             partition_columns,
-            partition_paths,
-            partition_mapper,
         )
         .await
+    }
+
+    fn check_columns(&self, partition_columns: &Vec<String>) -> Result<()> {
+        let is_varchar_rep = |data_type| match data_type {
+            arrow::datatypes::DataType::Utf8 => true,
+            arrow::datatypes::DataType::Dictionary(key_type, value_type) => {
+                key_type.equals_datatype(&arrow::datatypes::DataType::UInt16)
+                    && value_type.equals_datatype(&arrow::datatypes::DataType::Utf8)
+            }
+            _ => false,
+        };
+        Ok(for col in partition_columns {
+            let data_type = self.schema().field_with_unqualified_name(col)?.data_type();
+            if !is_varchar_rep(data_type.to_owned()) {
+                eprintln!(
+                    "partition column '{}' must be of 'varchar' type, found type '{}'",
+                    &col, &data_type
+                )
+            }
+        })
     }
 
     /// Executes a query and writes the results to a partitioned JSON file.

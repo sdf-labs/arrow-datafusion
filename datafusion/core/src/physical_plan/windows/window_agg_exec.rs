@@ -176,7 +176,7 @@ impl ExecutionPlan for WindowAggExec {
                     .collect::<Vec<_>>();
                 Partitioning::Hash(new_exprs, size)
             }
-            Partitioning::HivePartitioning(_, _) => todo!("output_partitioning"),
+            Partitioning::HivePartitioning(..) => todo!("output_partitioning"),
         }
     }
 
