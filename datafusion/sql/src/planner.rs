@@ -196,34 +196,37 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     }
 
     /// Generate a logical plan from a SQL CreateTable statement (special casing)
-    pub fn sql_create_statement_to_plan(&self, statement: Statement) -> Result<LogicalPlan> {
+    pub fn sql_create_statement_to_plan(
+        &self,
+        statement: Statement,
+    ) -> Result<LogicalPlan> {
         match statement {
-                Statement::CreateTable {
-                    query: Some(query),
-                    name,
-                    columns,
-                    constraints,
-                    table_properties,
-                    with_options,
+            Statement::CreateTable {
+                query: Some(query),
+                name,
+                columns,
+                constraints,
+                table_properties,
+                with_options,
+                if_not_exists,
+                or_replace,
+                ..
+            } if columns.is_empty()
+                && constraints.is_empty()
+                && table_properties.is_empty()
+                && with_options.is_empty() =>
+            {
+                let plan = self.query_to_plan(*query, &mut PlannerContext::new())?;
+                Ok(LogicalPlan::CreateMemoryTable(CreateMemoryTable {
+                    name: name.to_string(),
+                    input: Arc::new(plan),
                     if_not_exists,
                     or_replace,
-                    ..
-                } if columns.is_empty()
-                    && constraints.is_empty()
-                    && table_properties.is_empty()
-                    && with_options.is_empty() =>
-                {
-                    let plan = self.query_to_plan(*query, &mut PlannerContext::new())?;
-                    Ok(LogicalPlan::CreateMemoryTable(CreateMemoryTable {
-                        name: name.to_string(),
-                        input: Arc::new(plan),
-                        if_not_exists,
-                        or_replace,
-                    }))
-                }
-        
-                stm =>  self.sql_statement_to_plan(stm)
+                }))
             }
+
+            stm => self.sql_statement_to_plan(stm),
+        }
     }
 
     /// Generate a logical plan from an SQL statement

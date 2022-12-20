@@ -45,6 +45,7 @@ use crate::prelude::SessionContext;
 
 use async_trait::async_trait;
 
+use datafusion_common::DataFusionError;
 use datafusion_common::{Column, DFSchema};
 use datafusion_expr::TableProviderFilterPushDown;
 use parking_lot::RwLock;
@@ -658,6 +659,7 @@ impl DataFrame {
         path: &str,
         writer_properties: Option<WriterProperties>,
         partition_columns: Vec<String>,
+        aka: Option<String>,
     ) -> Result<()> {
         self.check_columns(&partition_columns)?;
         let plan = self.create_physical_plan().await?;
@@ -668,6 +670,7 @@ impl DataFrame {
             path,
             writer_properties,
             partition_columns,
+            aka,
         )
         .await
     }
@@ -681,15 +684,16 @@ impl DataFrame {
             }
             _ => false,
         };
-        Ok(for col in partition_columns {
+        for col in partition_columns {
             let data_type = self.schema().field_with_unqualified_name(col)?.data_type();
             if !is_varchar_rep(data_type.to_owned()) {
-                eprintln!(
-                    "partition column '{}' must be of 'varchar' type, found type '{}'",
+                return Err(DataFusionError::Execution(format!(
+                    "partition column '{}' must be of type 'varchar', got type '{}'",
                     &col, &data_type
-                )
+                )));
             }
-        })
+        }
+        Ok(())
     }
 
     /// Executes a query and writes the results to a partitioned JSON file.

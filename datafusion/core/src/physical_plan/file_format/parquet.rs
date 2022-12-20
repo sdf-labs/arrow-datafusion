@@ -655,6 +655,7 @@ pub async fn plan_to_parquet_partitioned(
     path: impl AsRef<str>,
     writer_properties: Option<WriterProperties>,
     partition_columns: Vec<String>,
+    aka: Option<String>,
 ) -> Result<()> {
     REVERSE_HASH.lock().clear();
 
@@ -703,12 +704,27 @@ pub async fn plan_to_parquet_partitioned(
         seen.insert(*idx);
         let old_name = format!("part-{}.parquet", idx);
         let old_path = fs_path.join(old_name.to_owned());
-        println!("old-path {:?} {}", old_path, old_path.is_file());
+        // println!("old-path {:?} {}", old_path, old_path.is_file());
         if old_path.is_file() {
-            fs::create_dir(fs_path.join(path)).expect("ok");
-            let new_path = fs_path.join(path).join(old_name.to_owned());
-            println!("new-path {:?} {}", new_path, new_path.exists());
-            fs::rename(old_path, new_path)?;
+            match aka.to_owned() {
+                None => {
+                    fs::create_dir_all(&fs_path.join(path))?;
+                    let new_path = fs_path.join(path).join(old_name.to_owned());
+                    // println!("new-path {:?} {}", new_path, new_path.exists());
+                    fs::rename(old_path, new_path)?;
+                }
+                Some(also_name) => {
+                    let part = fs_path
+                        .parent()
+                        .unwrap()
+                        .join(&also_name.to_owned())
+                        .join(path);
+                    fs::create_dir_all(&part)?;
+                    let new_path = part.join(old_name.to_owned());
+                    // println!("new-path {:?} {}", new_path, new_path.exists());
+                    fs::rename(old_path, new_path)?;
+                }
+            }
         }
     }
     // clean
@@ -725,10 +741,11 @@ pub async fn plan_to_parquet_partitioned(
 fn drop_columns(schema: &Arc<Schema>, partition_columns: Vec<String>) -> Arc<Schema> {
     let fields = schema.fields();
     let mut restricted_fields = vec![];
-    for i in 0..fields.len() {
-        let field = fields[i].to_owned();
-        if partition_columns.iter().any(|n| field.name() != n) {
-            restricted_fields.push(field);
+    for field in fields {
+        {
+            if !partition_columns.contains(field.name()) {
+                restricted_fields.push(field.to_owned());
+            }
         }
     }
     let new_schema = Arc::new(Schema::new(restricted_fields.to_vec()));
@@ -756,7 +773,7 @@ async fn plan_to_parquet_(
     let path = path.as_ref();
     // create directory to contain the Parquet files (one per partition)
     let fs_path = std::path::Path::new(path);
-    match fs::create_dir(fs_path) {
+    match fs::create_dir_all(fs_path) {
         Ok(()) => {
             let mut tasks = vec![];
             for i in 0..plan.output_partitioning().partition_count() {

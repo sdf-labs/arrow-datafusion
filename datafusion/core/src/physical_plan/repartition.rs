@@ -20,6 +20,7 @@
 
 use lazy_static::lazy_static;
 
+use std::iter::zip;
 use std::pin::Pin;
 
 use std::sync::Arc;
@@ -239,15 +240,15 @@ impl BatchPartitioner {
                 assert!(pre_columns.len() == fields.len());
                 let mut restricted_fields = vec![];
                 let mut restricted_cols = vec![];
-                for i in 0..fields.len() {
-                    let field = fields[i].to_owned();
-                    let col = pre_columns[i].to_owned();
-                    if i > 0 {
-                        //partitions.iter().any(|n| field.name() != n) {
-                        restricted_cols.push(col);
-                        restricted_fields.push(field);
+                for (field, col) in zip(fields, pre_columns) {
+                    {
+                        if !partitions.contains(field.name()) {
+                            restricted_fields.push(field.to_owned());
+                            restricted_cols.push(col);
+                        }
                     }
                 }
+
                 let new_schema =
                     Arc::new(Schema::new(restricted_fields.to_vec()).to_owned());
 
