@@ -357,9 +357,13 @@ impl<'a> DFParser<'a> {
         )?;
         match Self::parse_statements(parser) {
             Ok(res) => Ok(res),
-            Err(err) => {
+            Err(sqlparser::parser::ParserError::ParserError(err)) => {
                 error!("{}: {}", &filename, err);
-                exit(1)
+                Err(ParserError::ParserError(format!("'{}': {}", &filename, err.to_string())))
+            }
+            Err(sqlparser::parser::ParserError::TokenizerError(err)) => {
+                error!("{}: {}", &filename, err);
+                Err(ParserError::ParserError(format!("'{}': {}", &filename, err.to_string())))
             }
         }
     }

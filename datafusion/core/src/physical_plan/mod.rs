@@ -464,6 +464,8 @@ pub enum Partitioning {
     Hash(Vec<Arc<dyn PhysicalExpr>>, usize),
     /// Unknown partitioning scheme with a known number of partitions
     UnknownPartitioning(usize),
+    /// Hive Partitions partitioning columns and expressions, partition_size
+    HivePartitioning(Vec<String>, Vec<Arc<dyn PhysicalExpr>>, usize),
 }
 
 impl Partitioning {
@@ -472,6 +474,7 @@ impl Partitioning {
         use Partitioning::*;
         match self {
             RoundRobinBatch(n) | Hash(_, n) | UnknownPartitioning(n) => *n,
+            HivePartitioning(_, _, n) => *n,
         }
     }
 

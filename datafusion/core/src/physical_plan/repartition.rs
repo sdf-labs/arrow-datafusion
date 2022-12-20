@@ -18,7 +18,11 @@
 //! The repartition operator maps N input partitions to M output partitions based on a
 //! partitioning scheme.
 
+use lazy_static::lazy_static;
+
+use std::iter::zip;
 use std::pin::Pin;
+
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::{any::Any, vec};
@@ -28,10 +32,11 @@ use crate::physical_plan::hash_utils::create_hashes;
 use crate::physical_plan::{
     DisplayFormatType, EquivalenceProperties, ExecutionPlan, Partitioning, Statistics,
 };
-use arrow::array::{ArrayRef, UInt64Builder};
-use arrow::datatypes::SchemaRef;
+use arrow::array::{Array, ArrayRef, DictionaryArray, UInt64Builder};
+use arrow::datatypes::{Schema, SchemaRef, UInt16Type};
 use arrow::error::{ArrowError, Result as ArrowResult};
 use arrow::record_batch::RecordBatch;
+use datafusion_common::cast::{as_dictionary_array, as_primitive_array, as_string_array};
 use log::debug;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
@@ -80,6 +85,22 @@ enum BatchPartitionerState {
         num_partitions: usize,
         next_idx: usize,
     },
+    HivePartition {
+        random_state: ahash::RandomState,
+        partitions: Vec<String>,
+        num_partitions: usize,
+        exprs: Vec<Arc<dyn PhysicalExpr>>,
+        hash_buffer: Vec<u64>,
+        reverse_hash: HashMap<u64, (String, u64)>,
+        new_partition_count: u64,
+    },
+}
+
+lazy_static! {
+    /// Record which partitions have been written (under which content hash)
+    pub static ref REVERSE_HASH: Mutex< HashMap<u64, (String, u64)>> = Mutex::new(HashMap::new());
+    /// Record the number of partitions found
+    pub static ref NEW_PARTITION_COUNT: Mutex< u64> = Mutex::new(0);
 }
 
 impl BatchPartitioner {
@@ -101,6 +122,17 @@ impl BatchPartitioner {
                 random_state: ahash::RandomState::with_seeds(0, 0, 0, 0),
                 hash_buffer: vec![],
             },
+            Partitioning::HivePartitioning(partition_columns, exprs, num_partitions) => {
+                BatchPartitionerState::HivePartition {
+                    random_state: ahash::RandomState::with_seeds(0, 0, 0, 0),
+                    partitions: partition_columns,
+                    num_partitions,
+                    exprs,
+                    hash_buffer: vec![],
+                    reverse_hash: HashMap::new(),
+                    new_partition_count: 0,
+                }
+            }
             other => {
                 return Err(DataFusionError::NotImplemented(format!(
                     "Unsupported repartitioning scheme {:?}",
@@ -134,10 +166,121 @@ impl BatchPartitioner {
                 *next_idx = (*next_idx + 1) % *num_partitions;
                 f(idx, batch)?;
             }
+            BatchPartitionerState::HivePartition {
+                random_state,
+                partitions,
+                num_partitions,
+                exprs,
+                hash_buffer,
+                reverse_hash,
+                new_partition_count,
+            } => {
+                // the hive partitioner works exactly as a hash partitioned, i.e.
+                // 0 it evaluates the partition columns
+                // 1 it computes unqiue hashes for each row content (same as hash),
+                // 2 it maps each unique row content to a unique small (small number) partition
+                // 3 it computes indices from small number
+                // 4 it records those in REVERSE_HASH, which is later used to relocate partitions
+                // 5 it computes indices for each partition to be processed with take
+                // 5 it drops partition columns and creates a new schema
+                // 6 it moves the batches (same as hash)
+
+                // TODO 1 and 2 can be merged together
+                // TODO make 4 a simple list of pairs...
+
+                let mut timer = self.timer.timer();
+
+                // 0
+                let arrays = exprs
+                    .iter()
+                    .map(|expr| Ok(expr.evaluate(&batch)?.into_array(batch.num_rows())))
+                    .collect::<Result<Vec<_>>>()?;
+
+                // 1
+                // TODO: BEGIN optimize this
+                hash_buffer.clear();
+                hash_buffer.resize(batch.num_rows(), 0);
+
+                // 2
+                create_hashes(&arrays, random_state, hash_buffer)?;
+
+                // 3
+                if *new_partition_count > *num_partitions as u64 {
+                    eprintln!("No more than num_partions supported.");
+                }
+                for i in 0..hash_buffer.len() {
+                    let hash = hash_buffer[i];
+                    if reverse_hash.contains_key(&hash) {
+                        continue;
+                    } else {
+                        let path = row_val(&partitions, &arrays, i);
+                        reverse_hash.insert(hash, (path, *new_partition_count));
+                        *new_partition_count += 1;
+                    }
+                }
+
+                // 4
+                REVERSE_HASH.lock().clone_from(reverse_hash);
+
+                // 5
+                let mut indices: Vec<_> = (0..*new_partition_count)
+                    .map(|_| UInt64Builder::with_capacity(batch.num_rows()))
+                    .collect();
+
+                for (index, hash) in hash_buffer.iter().enumerate() {
+                    let (_, part_idx) = reverse_hash.get(hash).unwrap();
+                    indices[*part_idx as usize].append_value(index as u64);
+                }
+                // TODO: END optimize this
+
+                // 6
+                let pre_columns = batch.columns();
+                let schema = batch.schema();
+                let fields = schema.fields();
+                assert!(pre_columns.len() == fields.len());
+                let mut restricted_fields = vec![];
+                let mut restricted_cols = vec![];
+                for (field, col) in zip(fields, pre_columns) {
+                    {
+                        if !partitions.contains(field.name()) {
+                            restricted_fields.push(field.to_owned());
+                            restricted_cols.push(col);
+                        }
+                    }
+                }
+
+                let new_schema =
+                    Arc::new(Schema::new(restricted_fields.to_vec()).to_owned());
+
+                // 7
+                for (partition, mut indices) in indices.into_iter().enumerate() {
+                    let indices = indices.finish();
+                    if indices.is_empty() {
+                        continue;
+                    }
+
+                    // Produce batches based on indices
+                    let new_columns = restricted_cols
+                        .iter()
+                        .map(|c| {
+                            arrow::compute::take(c.as_ref(), &indices, None)
+                                .map_err(DataFusionError::ArrowError)
+                        })
+                        .collect::<Result<Vec<ArrayRef>>>()?;
+
+                    let new_batch =
+                        RecordBatch::try_new(new_schema.clone(), new_columns).unwrap();
+
+                    timer.stop();
+                    f(partition, new_batch)?;
+                    timer.restart();
+                }
+            }
+
             BatchPartitionerState::Hash {
                 random_state,
                 exprs,
-                num_partitions: partitions,
+                num_partitions,
                 hash_buffer,
             } => {
                 let mut timer = self.timer.timer();
@@ -152,12 +295,12 @@ impl BatchPartitioner {
 
                 create_hashes(&arrays, random_state, hash_buffer)?;
 
-                let mut indices: Vec<_> = (0..*partitions)
+                let mut indices: Vec<_> = (0..*num_partitions)
                     .map(|_| UInt64Builder::with_capacity(batch.num_rows()))
                     .collect();
 
                 for (index, hash) in hash_buffer.iter().enumerate() {
-                    indices[(*hash % *partitions as u64) as usize]
+                    indices[(*hash % *num_partitions as u64) as usize]
                         .append_value(index as u64);
                 }
 
@@ -187,6 +330,38 @@ impl BatchPartitioner {
         }
         Ok(())
     }
+}
+
+fn row_val(partitions: &Vec<String>, arrays: &Vec<Arc<dyn Array>>, idx: usize) -> String {
+    // combine hashes with `combine_hashes` if we have more than 1 column
+
+    let mut atoms = vec![];
+
+    for (i, col) in arrays.iter().enumerate() {
+        let array = col.as_ref();
+        let data_type = array.data_type();
+        match data_type {
+            arrow::datatypes::DataType::Utf8 => {
+                let strs = as_string_array(array).unwrap();
+                let val = strs.value(idx);
+                atoms.push(format!("{}={}", partitions.get(i).unwrap(), val));
+            }
+            arrow::datatypes::DataType::Dictionary(key_type, value_type) => {
+                if key_type.equals_datatype(&arrow::datatypes::DataType::UInt16)
+                    && value_type.equals_datatype(&arrow::datatypes::DataType::Utf8)
+                {
+                    let dict: &DictionaryArray<UInt16Type> =
+                        as_dictionary_array(array).unwrap();
+                    let values = as_string_array(dict.values()).unwrap();
+                    let keys = as_primitive_array::<UInt16Type>(dict.keys()).unwrap();
+                    let val = values.value(keys.value(idx) as usize);
+                    atoms.push(format!("{}={}", partitions.get(i).unwrap(), val));
+                }
+            }
+            _ => todo!(),
+        }
+    }
+    itertools::join(atoms, "/")
 }
 
 /// The repartition operator maps N input partitions to M output partitions based on a
