@@ -169,7 +169,7 @@ lazy_static! {
     /// Collect all definition-use dependencies (in the form catalog.schema.table) used by all statements
     pub static ref DEF_USE_DEPS: Mutex<HashMap<String, HashSet<String>>> = Mutex::new(HashMap::new());
      /// Collect all used catalog.schema.table names used in from or join for **this** statement
-    static ref USE_DEPS: Mutex<HashSet<String>> = Mutex::new(HashSet::new());
+    pub static ref USE_DEPS: Mutex<HashSet<String>> = Mutex::new(HashSet::new());
 }
 
 /// Return fully qualified name of a table reference
@@ -320,7 +320,7 @@ impl SessionContext {
         table_name: &str,
         batch: RecordBatch,
     ) -> Result<Option<Arc<dyn TableProvider>>> {
-        // TODO TBD Qualified or not? 
+        // TODO TBD Qualified or not?
         let table_name = self.qualify_table_name(&table_name);
         // let table_name = table_name.to_owned();
         let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;

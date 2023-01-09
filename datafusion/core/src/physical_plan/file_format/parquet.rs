@@ -57,7 +57,7 @@ use bytes::Bytes;
 use datafusion_expr::Expr;
 use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryFutureExt, TryStreamExt};
-use log::debug;
+use log::{debug, info};
 use object_store::{ObjectMeta, ObjectStore};
 use parquet::arrow::arrow_reader::ArrowReaderOptions;
 use parquet::arrow::async_reader::AsyncFileReader;
@@ -697,7 +697,7 @@ pub async fn plan_to_parquet_partitioned(
 
     let fs_path = std::path::Path::new(&path_);
     let reverse_hash = REVERSE_HASH.lock();
-    // println!("MAPPER REVERSE HASH {:?}", reverse_hash);
+    debug!("MAPPER REVERSE HASH {:?}", reverse_hash);
 
     let mut seen: HashSet<u64> = HashSet::new();
     for (path, idx) in reverse_hash.values() {
@@ -722,6 +722,7 @@ pub async fn plan_to_parquet_partitioned(
                     fs::create_dir_all(&part)?;
                     let new_path = part.join(old_name.to_owned());
                     // println!("new-path {:?} {}", new_path, new_path.exists());
+                    info!("written: {}", new_path.display());
                     fs::rename(old_path, new_path)?;
                 }
             }

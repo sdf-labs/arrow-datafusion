@@ -43,6 +43,7 @@ use crate::prelude::SessionContext;
 // use arrow::array::GenericByteArray;
 // use arrow::datatypes::GenericStringType;
 
+use arrow::datatypes::DataType;
 use async_trait::async_trait;
 
 use datafusion_common::DataFusionError;
@@ -676,13 +677,15 @@ impl DataFrame {
     }
 
     fn check_columns(&self, partition_columns: &Vec<String>) -> Result<()> {
-        let is_varchar_rep = |data_type| match data_type {
-            arrow::datatypes::DataType::Utf8 => true,
-            arrow::datatypes::DataType::Dictionary(key_type, value_type) => {
-                key_type.equals_datatype(&arrow::datatypes::DataType::UInt16)
-                    && value_type.equals_datatype(&arrow::datatypes::DataType::Utf8)
+        let is_varchar_rep = |data_type: DataType| -> bool {
+            match data_type.to_owned() {
+                arrow::datatypes::DataType::Utf8 => true,
+                arrow::datatypes::DataType::Dictionary(key_type, value_type) => {
+                    key_type.equals_datatype(&arrow::datatypes::DataType::UInt16)
+                        && value_type.equals_datatype(&arrow::datatypes::DataType::Utf8)
+                }
+                _ => false,
             }
-            _ => false,
         };
         for col in partition_columns {
             let data_type = self.schema().field_with_unqualified_name(col)?.data_type();
