@@ -110,8 +110,15 @@ pub trait ExecutionPlan: Debug + Send + Sync {
     /// Specifies the output partitioning scheme of this plan
     fn output_partitioning(&self) -> Partitioning;
 
-    /// If the output of this operator is sorted, returns `Some(keys)`
-    /// with the description of how it was sorted.
+    /// Specifies whether this plan generates an infinite stream of records.
+    /// If the plan does not support pipelining, but it its input(s) are
+    /// infinite, returns an error to indicate this.
+    fn unbounded_output(&self, _children: &[bool]) -> Result<bool> {
+        Ok(false)
+    }
+
+    /// If the output of this operator within each partition is sorted,
+    /// returns `Some(keys)` with the description of how it was sorted.
     ///
     /// For example, Sort, (obviously) produces sorted output as does
     /// SortPreservingMergeStream. Less obviously `Projection`
@@ -128,8 +135,8 @@ pub trait ExecutionPlan: Debug + Send + Sync {
         vec![Distribution::UnspecifiedDistribution; self.children().len()]
     }
 
-    /// Specifies the ordering requirements for all the
-    /// children for this operator.
+    /// Specifies the ordering requirements for all of the children
+    /// For each child, it's the local ordering requirement within each partition rather than the global ordering
     fn required_input_ordering(&self) -> Vec<Option<&[PhysicalSortExpr]>> {
         vec![None; self.children().len()]
     }
@@ -243,6 +250,34 @@ pub trait ExecutionPlan: Debug + Send + Sync {
     fn statistics(&self) -> Statistics;
 }
 
+/// Indicate whether a data exchange is needed for the input of `plan`, which will be very helpful
+/// especially for the distributed engine to judge whether need to deal with shuffling.
+/// Currently there are 3 kinds of execution plan which needs data exchange
+///     1. RepartitionExec for changing the partition number between two operators
+///     2. CoalescePartitionsExec for collapsing all of the partitions into one without ordering guarantee
+///     3. SortPreservingMergeExec for collapsing all of the sorted partitions into one with ordering guarantee
+pub fn need_data_exchange(plan: Arc<dyn ExecutionPlan>) -> bool {
+    if let Some(repart) = plan.as_any().downcast_ref::<RepartitionExec>() {
+        !matches!(
+            repart.output_partitioning(),
+            Partitioning::RoundRobinBatch(_)
+        )
+    } else if let Some(coalesce) = plan.as_any().downcast_ref::<CoalescePartitionsExec>()
+    {
+        coalesce.input().output_partitioning().partition_count() > 1
+    } else if let Some(sort_preserving_merge) =
+        plan.as_any().downcast_ref::<SortPreservingMergeExec>()
+    {
+        sort_preserving_merge
+            .input()
+            .output_partitioning()
+            .partition_count()
+            > 1
+    } else {
+        false
+    }
+}
+
 /// Returns a copy of this plan if we change any child according to the pointer comparison.
 /// The size of `children` must be equal to the size of `ExecutionPlan::children()`.
 /// Allow the vtable address comparisons for ExecutionPlan Trait Objects，it is harmless even
@@ -286,14 +321,11 @@ pub fn with_new_children_if_necessary(
 ///   let mut ctx = SessionContext::with_config(config);
 ///
 ///   // register the a table
-///   ctx.register_csv("example", "tests/example.csv", CsvReadOptions::new()).await.unwrap();
+///   ctx.register_csv("example", "tests/data/example.csv", CsvReadOptions::new()).await.unwrap();
 ///
 ///   // create a plan to run a SQL query
-///   let plan = ctx
-///      .create_logical_plan("SELECT a FROM example WHERE a < 5")
-///      .unwrap();
-///   let plan = ctx.optimize(&plan).unwrap();
-///   let physical_plan = ctx.create_physical_plan(&plan).await.unwrap();
+///   let dataframe = ctx.sql("SELECT a FROM example WHERE a < 5").await.unwrap();
+///   let physical_plan = dataframe.create_physical_plan().await.unwrap();
 ///
 ///   // Format using display string
 ///   let displayable_plan = displayable(physical_plan.as_ref());
@@ -304,10 +336,10 @@ pub fn with_new_children_if_necessary(
 ///   let plan_string = plan_string.replace(normalized.as_ref(), "WORKING_DIR");
 ///
 ///   assert_eq!("ProjectionExec: expr=[a@0 as a]\
-///              \n  CoalesceBatchesExec: target_batch_size=4096\
+///              \n  CoalesceBatchesExec: target_batch_size=8192\
 ///              \n    FilterExec: a@0 < 5\
 ///              \n      RepartitionExec: partitioning=RoundRobinBatch(3)\
-///              \n        CsvExec: files={1 group: [[WORKING_DIR/tests/example.csv]]}, has_header=true, limit=None, projection=[a]",
+///              \n        CsvExec: files={1 group: [[WORKING_DIR/tests/data/example.csv]]}, has_header=true, limit=None, projection=[a]",
 ///               plan_string.trim());
 ///
 ///   let one_line = format!("{}", displayable_plan.one_line());
@@ -406,12 +438,12 @@ pub async fn collect(
     plan: Arc<dyn ExecutionPlan>,
     context: Arc<TaskContext>,
 ) -> Result<Vec<RecordBatch>> {
-    let stream = execute_stream(plan, context).await?;
+    let stream = execute_stream(plan, context)?;
     common::collect(stream).await
 }
 
 /// Execute the [ExecutionPlan] and return a single stream of results
-pub async fn execute_stream(
+pub fn execute_stream(
     plan: Arc<dyn ExecutionPlan>,
     context: Arc<TaskContext>,
 ) -> Result<SendableRecordBatchStream> {
@@ -433,7 +465,7 @@ pub async fn collect_partitioned(
     plan: Arc<dyn ExecutionPlan>,
     context: Arc<TaskContext>,
 ) -> Result<Vec<Vec<RecordBatch>>> {
-    let streams = execute_stream_partitioned(plan, context).await?;
+    let streams = execute_stream_partitioned(plan, context)?;
     let mut batches = Vec::with_capacity(streams.len());
     for stream in streams {
         batches.push(common::collect(stream).await?);
@@ -442,7 +474,7 @@ pub async fn collect_partitioned(
 }
 
 /// Execute the [ExecutionPlan] and return a vec with one stream per output partition
-pub async fn execute_stream_partitioned(
+pub fn execute_stream_partitioned(
     plan: Arc<dyn ExecutionPlan>,
     context: Arc<TaskContext>,
 ) -> Result<Vec<SendableRecordBatchStream>> {
@@ -651,12 +683,15 @@ pub mod repartition;
 pub mod rewrite;
 pub mod sorts;
 pub mod stream;
+pub mod streaming;
 pub mod udaf;
 pub mod union;
 pub mod values;
 pub mod windows;
 
 use crate::execution::context::TaskContext;
+use crate::physical_plan::repartition::RepartitionExec;
+use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 pub use datafusion_physical_expr::{
     expressions, functions, hash_utils, type_coercion, udf,
 };

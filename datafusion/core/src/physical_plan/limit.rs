@@ -30,7 +30,6 @@ use crate::physical_plan::{
     DisplayFormatType, Distribution, EquivalenceProperties, ExecutionPlan, Partitioning,
 };
 use arrow::array::ArrayRef;
-use arrow::compute::limit;
 use arrow::datatypes::SchemaRef;
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
@@ -149,8 +148,7 @@ impl ExecutionPlan for GlobalLimitExec {
         // GlobalLimitExec has a single output partition
         if 0 != partition {
             return Err(DataFusionError::Internal(format!(
-                "GlobalLimitExec invalid partition {}",
-                partition
+                "GlobalLimitExec invalid partition {partition}"
             )));
         }
 
@@ -448,7 +446,7 @@ impl LimitStream {
             let limited_columns: Vec<ArrayRef> = batch
                 .columns()
                 .iter()
-                .map(|col| limit(col, batch_rows))
+                .map(|col| col.slice(0, col.len().min(batch_rows)))
                 .collect();
             Some(RecordBatch::try_new(batch.schema(), limited_columns).unwrap())
         }

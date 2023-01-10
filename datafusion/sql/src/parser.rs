@@ -15,10 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! SQL Parser
-//!
-//! Declares a SQL parser based on sqlparser that handles custom formats that we need.
+//! DataFusion SQL Parser based on [`sqlparser`]
 
+use datafusion_common::parsers::CompressionTypeVariant;
 use sqlparser::{
     ast::{
         ColumnDef, ColumnOptionDef, HiveDistributionStyle, Ident, ObjectName,
@@ -26,8 +25,9 @@ use sqlparser::{
     },
     dialect::{keywords::Keyword, Dialect, GenericDialect},
     parser::{Parser, ParserError},
-    tokenizer::{Token, Tokenizer},
+    tokenizer::{Token, TokenWithLocation, Tokenizer},
 };
+use std::{str::FromStr};
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     fmt, fs,
@@ -137,10 +137,6 @@ fn parse_file_type(s: &str) -> Result<String, ParserError> {
     Ok(s.to_uppercase())
 }
 
-fn parse_file_compression_type(s: &str) -> Result<String, ParserError> {
-    Ok(s.to_uppercase())
-}
-
 /// DataFusion extension DDL for `CREATE EXTERNAL TABLE`
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreateExternalTable {
@@ -161,7 +157,7 @@ pub struct CreateExternalTable {
     /// Option to not error if table already exists
     pub if_not_exists: bool,
     /// File compression type (GZIP, BZIP2, XZ)
-    pub file_compression_type: String,
+    pub file_compression_type: CompressionTypeVariant,
     /// Table(provider) specific options
     pub options: HashMap<String, String>,
 }
@@ -187,7 +183,7 @@ pub struct DescribeTable {
 
 /// DataFusion Statement representations.
 ///
-/// Tokens parsed by `DFParser` are converted into these values.
+/// Tokens parsed by [`DFParser`] are converted into these values.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Statement {
     /// ANSI SQL AST node with package_schema_path
@@ -253,7 +249,10 @@ impl StatementMeta {
     }
 }
 
-/// SQL Parser
+/// DataFusion SQL Parser based on [`sqlparser`]
+///
+/// This parser handles DataFusion specific statements, delegating to
+/// [`Parser`](sqlparser::parser::Parser) for other SQL statements.
 #[allow(dead_code)]
 pub struct DFParser<'a> {
     parser: Parser<'a>,
@@ -264,13 +263,15 @@ pub struct DFParser<'a> {
 }
 
 impl<'a> DFParser<'a> {
-    /// Parse the specified tokens
+    /// Create a new parser for the specified tokens using the
+    /// [`GenericDialect`].
     pub fn new(sql: &str) -> Result<Self, ParserError> {
         let dialect = &GenericDialect {};
         DFParser::new_with_dialect(sql, dialect)
     }
 
-    /// Parse the specified tokens with dialect
+    /// Create a new parser for the specified tokens with the
+    /// specified dialect.
     pub fn new_with_dialect(
         sql: &str,
         dialect: &'a dyn Dialect,
@@ -308,7 +309,8 @@ impl<'a> DFParser<'a> {
         })
     }
 
-    /// Parse a SQL statement and produce a set of statements with dialect
+    /// Parse a sql string into one or [`Statement`]s using the
+    /// [`GenericDialect`].
     pub fn parse_sql(sql: &str) -> Result<VecDeque<Statement>, ParserError> {
         let dialect = &GenericDialect {};
         DFParser::parse_sql_with_dialect(sql, dialect)
@@ -405,9 +407,180 @@ impl<'a> DFParser<'a> {
         Ok(stmts)
     }
 
-    /// Report unexpected token
-    fn expected<T>(&self, expected: &str, found: Token) -> Result<T, ParserError> {
-        parser_err!(format!("Expected {}, found: {}", expected, found))
+    /// Report an unexpected token
+    fn expected<T>(
+        &self,
+        expected: &str,
+        found: TokenWithLocation,
+    ) -> Result<T, ParserError> {
+        parser_err!(format!("Expected {expected}, found: {found}"))
+    }
+
+    
+    fn parse_use(
+        parser: &mut DFParser,
+    ) -> Result<VecDeque<(Statement, StatementMeta)>, ParserError> {
+        let next = parser.parser.next_token();
+        match next.clone() {
+            // Token::SingleQuotedString(schema_path) => {
+            //     // we are staying in the same catalog -- we are reusing parser.catalog
+
+            //     // compute filename
+            //     let schema = basename(&schema_path);
+            //     let schema_filename = format!(
+            //         "{}/{}/{}.sql",
+            //         parser.workspace_path, parser.catalog, schema_path
+            //     );
+
+            //     // avoid duplicate uses
+            //     if VISITED_FILES.lock().unwrap().contains(&schema_filename) {
+            //         return Ok(VecDeque::new());
+            //     }
+            //     VISITED_FILES
+            //         .lock()
+            //         .unwrap()
+            //         .insert(schema_filename.clone());
+
+            //     let regex = Regex::new(r"^[/a-z0-9_]*$").unwrap();
+            //     if !regex.is_match(&schema_path) {
+            //         return parser.wrong_use(&format!("Schema path must consist only of lowercase chars, digits or '_' separated by '/', found {}",next), next );
+            //     }
+            //     if !Path::new(&schema_filename).is_file() {
+            //         return parser.wrong_use(
+            //             &format!("Missing schema file {}", schema_filename),
+            //             next,
+            //         );
+            //     };
+
+            //     // create scopes
+            //     let created_schema =
+            //         format!("CREATE SCHEMA {}.{};\n", &parser.catalog, &schema);
+
+            //     // continue parsing
+            //     Self::parse_sql_file(
+            //         &GenericDialect {},
+            //         schema_filename,
+            //         parser.catalog.to_owned(),
+            //         schema_path.to_owned(),
+            //         created_schema,
+            //         workspace_path,
+            //     )
+            // }
+            Token::Word(w) => {
+                // switch to a possibly new catalog
+
+                //parse
+                let catalog = w.value.clone();
+                let _ = parser.parser.expect_token(&Token::Period);
+                let schema = match parser.parser.parse_identifier() {
+                    Ok(id) => id.value,
+                    Err(_) => "".to_owned(),
+                };
+                let _ = parser.parser.expect_token(&Token::Period);
+                let table = match parser.parser.parse_identifier() {
+                    Ok(id) => id.value,
+                    Err(_) => "".to_owned(),
+                };
+                // check catalog/schema naming
+                // let regex = Regex::new(r"^[a-z0-9_]*$").unwrap();
+                // if !regex.is_match(&catalog)
+                //     || !regex.is_match(&schema)
+                //     || !regex.is_match(&table)
+                // {
+                //     return parser.wrong_use(&format!("Catalog, schema, and table names must only be lowercase, digits or '_', found {}",catalog), next );
+                // }
+
+                if parser.catalog == "" {
+                    println!(
+                        "Source not under workspace -- skipping 'use {}.{}.{}' statement",
+                        catalog, schema, table
+                    );
+                    return Ok(VecDeque::new());
+                }
+
+                // check whether new catalog exists
+                let schema_filename = format!("{}/{}.sql", catalog, schema);
+                let table_filename = format!("{}/{}/{}.sql", catalog, schema, table);
+                let (is_table, filename) = if Path::new(&table_filename).is_file() {
+                    (true, table_filename)
+                } else if Path::new(&schema_filename).is_file() {
+                    (false, schema_filename)
+                } else {
+                    return Err(ParserError::ParserError(
+                        format!(
+                            "Missing schema file {} or table file {} ",
+                            schema_filename, table_filename
+                        )
+                        .to_owned(),
+                    ));
+                };
+                info!("-- USE {}.{}.{} from {}", catalog, schema, table, filename);
+                // avoid duplicate uses
+                if VISITED_FILES.lock().unwrap().contains(&filename) {
+                    return Ok(VecDeque::new());
+                }
+                VISITED_FILES.lock().unwrap().insert(filename.to_owned());
+
+                // create scopes
+                let mut created_catalog = String::new();
+                let mut created_schema = String::new();
+                if !VISITED_CATALOGS.lock().unwrap().contains(&catalog) {
+                    VISITED_CATALOGS.lock().unwrap().insert(catalog.to_owned());
+                    created_catalog = format!("CREATE DATABASE {};\n", &catalog);
+                    info!("{}", created_catalog);
+                };
+                let schema_id = format!("{}.{}", catalog, schema);
+                if !VISITED_SCHEMAS.lock().unwrap().contains(&schema_id) {
+                    VISITED_SCHEMAS.lock().unwrap().insert(schema_id);
+                    created_schema = format!("CREATE SCHEMA {}.{};\n", &catalog, &schema);
+                    info!("{}", created_schema);
+                };
+
+                // continue parsing
+                Self::parse_sql_file(
+                    &GenericDialect {},
+                    filename,
+                    catalog,
+                    schema,
+                    if is_table { table } else { String::new() },
+                    created_catalog + &created_schema,
+                )
+            }
+            unexpected => parser.expected("Object identifier", unexpected)?,
+        }
+        // }
+    }
+
+    /// Parse a file of SQL statements and produce an Abstract Syntax Tree (AST)
+    pub fn parse_sql_file(
+        dialect: &dyn Dialect,
+        filename: String,
+        catalog: String,
+        schema: String,
+        table: String,
+        prefix: String,
+    ) -> Result<VecDeque<(Statement, StatementMeta)>, ParserError> {
+        let contents = fs::read_to_string(&filename)
+            .unwrap_or_else(|_| panic!("Unable to read the file {}", &filename));
+        let contents_with_prefix = prefix.clone() + &contents;
+
+        let dialect: &dyn Dialect = &*dialect;
+        let sql: &str = &contents_with_prefix;
+        let parser = DFParser::new_with_dialect_and_scope(
+            sql,
+            dialect,
+            filename.to_owned(),
+            catalog,
+            schema,
+            table,
+        )?;
+        match Self::parse_statements(parser) {
+            Ok(res) => Ok(res),
+            Err(err) => {
+                error!("{}: {}", &filename, err);
+                exit(1)
+            }
+        }
     }
 
     fn parse_use(
@@ -577,10 +750,8 @@ impl<'a> DFParser<'a> {
     }
 
     /// Parse a new expression
-    pub fn parse_statement(&mut self) -> Result<(Statement, StatementMeta), ParserError> {
-        let token: Token = self.parser.peek_token();
-        // let line_number = token.
-        match token {
+    pub fn parse_statement(&mut self) -> Result<Statement, ParserError> {
+        match self.parser.peek_token().token {
             Token::Word(w) => {
                 match w.keyword {
                     Keyword::CREATE => {
@@ -718,7 +889,7 @@ impl<'a> DFParser<'a> {
         }
 
         loop {
-            if let Token::Word(_) = self.parser.peek_token() {
+            if let Token::Word(_) = self.parser.peek_token().token {
                 let identifier = self.parser.parse_identifier()?;
                 partitions.push(identifier.to_string());
             } else {
@@ -753,7 +924,7 @@ impl<'a> DFParser<'a> {
         loop {
             if let Some(constraint) = self.parser.parse_optional_table_constraint()? {
                 constraints.push(constraint);
-            } else if let Token::Word(_) = self.parser.peek_token() {
+            } else if let Token::Word(_) = self.parser.peek_token().token {
                 let column_def = self.parse_column_def()?;
                 columns.push(column_def);
             } else {
@@ -837,7 +1008,7 @@ impl<'a> DFParser<'a> {
         let file_compression_type = if self.parse_has_file_compression_type() {
             self.parse_file_compression_type()?
         } else {
-            "".to_string()
+            CompressionTypeVariant::UNCOMPRESSED
         };
 
         let table_partition_cols = if self.parse_has_partition() {
@@ -883,22 +1054,26 @@ impl<'a> DFParser<'a> {
 
     /// Parses the set of valid formats
     fn parse_file_format(&mut self) -> Result<String, ParserError> {
-        match self.parser.next_token() {
+        let token = self.parser.next_token();
+        match &token.token {
             Token::Word(w) => parse_file_type(&w.value),
-            unexpected => self.expected("one of PARQUET, NDJSON, or CSV", unexpected),
+            _ => self.expected("one of PARQUET, NDJSON, or CSV", token),
         }
     }
 
     /// Parses the set of
-    fn parse_file_compression_type(&mut self) -> Result<String, ParserError> {
-        match self.parser.next_token() {
-            Token::Word(w) => parse_file_compression_type(&w.value),
-            unexpected => self.expected("one of GZIP, BZIP2, XZ", unexpected),
+    fn parse_file_compression_type(
+        &mut self,
+    ) -> Result<CompressionTypeVariant, ParserError> {
+        let token = self.parser.next_token();
+        match &token.token {
+            Token::Word(w) => CompressionTypeVariant::from_str(&w.value),
+            _ => self.expected("one of GZIP, BZIP2, XZ", token),
         }
     }
 
     fn parse_has_options(&mut self) -> bool {
-        self.consume_token(&Token::make_keyword("OPTIONS"))
+        self.parser.parse_keyword(Keyword::OPTIONS)
     }
 
     //
@@ -924,20 +1099,9 @@ impl<'a> DFParser<'a> {
         Ok(options)
     }
 
-    fn consume_token(&mut self, expected: &Token) -> bool {
-        let token = self.parser.peek_token().to_string().to_uppercase();
-        let token = Token::make_keyword(&token);
-        if token == *expected {
-            self.parser.next_token();
-            true
-        } else {
-            false
-        }
-    }
-
     fn parse_has_file_compression_type(&mut self) -> bool {
-        self.consume_token(&Token::make_keyword("COMPRESSION"))
-            & self.consume_token(&Token::make_keyword("TYPE"))
+        self.parser
+            .parse_keywords(&[Keyword::COMPRESSION, Keyword::TYPE])
     }
 
     fn parse_csv_has_header(&mut self) -> bool {
@@ -946,7 +1110,7 @@ impl<'a> DFParser<'a> {
     }
 
     fn parse_has_delimiter(&mut self) -> bool {
-        self.consume_token(&Token::make_keyword("DELIMITER"))
+        self.parser.parse_keyword(Keyword::DELIMITER)
     }
 
     fn parse_delimiter(&mut self) -> Result<char, ParserError> {
@@ -969,6 +1133,7 @@ impl<'a> DFParser<'a> {
 mod tests {
     use super::*;
     use sqlparser::ast::{DataType, Ident};
+    use CompressionTypeVariant::UNCOMPRESSED;
 
     fn expect_parse_ok(sql: &str, expected: Statement) -> Result<(), ParserError> {
         let statements = DFParser::parse_sql(sql)?;
@@ -986,17 +1151,14 @@ mod tests {
         match DFParser::parse_sql(sql) {
             Ok(statements) => {
                 panic!(
-                    "Expected parse error for '{}', but was successful: {:?}",
-                    sql, statements
+                    "Expected parse error for '{sql}', but was successful: {statements:?}"
                 );
             }
             Err(e) => {
                 let error_message = e.to_string();
                 assert!(
                     error_message.contains(expected_error),
-                    "Expected error '{}' not found in actual error '{}'",
-                    expected_error,
-                    error_message
+                    "Expected error '{expected_error}' not found in actual error '{error_message}'"
                 );
             }
         }
@@ -1028,7 +1190,7 @@ mod tests {
             location: "foo.csv".into(),
             table_partition_cols: vec![],
             if_not_exists: false,
-            file_compression_type: "".to_string(),
+            file_compression_type: UNCOMPRESSED,
             options: HashMap::new(),
         });
         expect_parse_ok(sql, expected)?;
@@ -1045,7 +1207,7 @@ mod tests {
             location: "foo.csv".into(),
             table_partition_cols: vec![],
             if_not_exists: false,
-            file_compression_type: "".to_string(),
+            file_compression_type: UNCOMPRESSED,
             options: HashMap::new(),
         });
         expect_parse_ok(sql, expected)?;
@@ -1062,7 +1224,7 @@ mod tests {
             location: "foo.csv".into(),
             table_partition_cols: vec!["p1".to_string(), "p2".to_string()],
             if_not_exists: false,
-            file_compression_type: "".to_string(),
+            file_compression_type: UNCOMPRESSED,
             options: HashMap::new(),
         });
         expect_parse_ok(sql, expected)?;
@@ -1082,7 +1244,7 @@ mod tests {
                 location: "foo.csv".into(),
                 table_partition_cols: vec![],
                 if_not_exists: false,
-                file_compression_type: "".to_string(),
+                file_compression_type: UNCOMPRESSED,
                 options: HashMap::new(),
             });
             expect_parse_ok(sql, expected)?;
@@ -1104,7 +1266,9 @@ mod tests {
                 location: "foo.csv".into(),
                 table_partition_cols: vec![],
                 if_not_exists: false,
-                file_compression_type: file_compression_type.to_owned(),
+                file_compression_type: CompressionTypeVariant::from_str(
+                    file_compression_type,
+                )?,
                 options: HashMap::new(),
             });
             expect_parse_ok(sql, expected)?;
@@ -1121,7 +1285,7 @@ mod tests {
             location: "foo.parquet".into(),
             table_partition_cols: vec![],
             if_not_exists: false,
-            file_compression_type: "".to_string(),
+            file_compression_type: UNCOMPRESSED,
             options: HashMap::new(),
         });
         expect_parse_ok(sql, expected)?;
@@ -1137,7 +1301,7 @@ mod tests {
             location: "foo.parquet".into(),
             table_partition_cols: vec![],
             if_not_exists: false,
-            file_compression_type: "".to_string(),
+            file_compression_type: UNCOMPRESSED,
             options: HashMap::new(),
         });
         expect_parse_ok(sql, expected)?;
@@ -1153,7 +1317,7 @@ mod tests {
             location: "foo.avro".into(),
             table_partition_cols: vec![],
             if_not_exists: false,
-            file_compression_type: "".to_string(),
+            file_compression_type: UNCOMPRESSED,
             options: HashMap::new(),
         });
         expect_parse_ok(sql, expected)?;
@@ -1170,7 +1334,7 @@ mod tests {
             location: "foo.parquet".into(),
             table_partition_cols: vec![],
             if_not_exists: true,
-            file_compression_type: "".to_string(),
+            file_compression_type: UNCOMPRESSED,
             options: HashMap::new(),
         });
         expect_parse_ok(sql, expected)?;
@@ -1192,7 +1356,7 @@ mod tests {
             location: "blahblah".into(),
             table_partition_cols: vec![],
             if_not_exists: false,
-            file_compression_type: "".to_string(),
+            file_compression_type: UNCOMPRESSED,
             options: HashMap::from([("k1".into(), "v1".into())]),
         });
         expect_parse_ok(sql, expected)?;
@@ -1209,7 +1373,7 @@ mod tests {
             location: "blahblah".into(),
             table_partition_cols: vec![],
             if_not_exists: false,
-            file_compression_type: "".to_string(),
+            file_compression_type: UNCOMPRESSED,
             options: HashMap::from([
                 ("k1".into(), "v1".into()),
                 ("k2".into(), "v2".into()),
@@ -1226,13 +1390,29 @@ mod tests {
         let sql = "CREATE EXTERNAL TABLE t STORED AS CSV WITH HEADER LOCATION 'abc'";
         expect_parse_error(sql, "sql parser error: Expected LOCATION, found: WITH");
 
-        // Error case: `partitioned` is an invalid syntax
+        // Error case: a single word `partitioned` is invalid
         let sql = "CREATE EXTERNAL TABLE t STORED AS CSV PARTITIONED LOCATION 'abc'";
         expect_parse_error(
             sql,
             "sql parser error: Expected LOCATION, found: PARTITIONED",
         );
 
+        // Error case: a single word `compression` is invalid
+        let sql = "CREATE EXTERNAL TABLE t STORED AS CSV COMPRESSION LOCATION 'abc'";
+        expect_parse_error(
+            sql,
+            "sql parser error: Expected LOCATION, found: COMPRESSION",
+        );
+
         Ok(())
+    }
+
+    #[test]
+    fn invalid_compression_type() {
+        let sql = "CREATE EXTERNAL TABLE t STORED AS CSV COMPRESSION TYPE ZZZ LOCATION 'blahblah'";
+        expect_parse_error(
+            sql,
+            "sql parser error: Unsupported file compression type ZZZ",
+        )
     }
 }

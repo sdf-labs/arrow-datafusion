@@ -21,7 +21,9 @@ use std::any::Any;
 use std::convert::TryFrom;
 use std::sync::Arc;
 
-use crate::aggregate::row_accumulator::RowAccumulator;
+use crate::aggregate::row_accumulator::{
+    is_row_accumulator_support_dtype, RowAccumulator,
+};
 use crate::aggregate::sum;
 use crate::expressions::format_state_name;
 use crate::{AggregateExpr, PhysicalExpr};
@@ -33,7 +35,7 @@ use arrow::{
 };
 use datafusion_common::{downcast_value, ScalarValue};
 use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::{Accumulator, AggregateState};
+use datafusion_expr::Accumulator;
 use datafusion_row::accessor::RowAccessor;
 
 /// AVG aggregate expression
@@ -84,12 +86,12 @@ impl AggregateExpr for Avg {
     fn state_fields(&self) -> Result<Vec<Field>> {
         Ok(vec![
             Field::new(
-                &format_state_name(&self.name, "count"),
+                format_state_name(&self.name, "count"),
                 DataType::UInt64,
                 true,
             ),
             Field::new(
-                &format_state_name(&self.name, "sum"),
+                format_state_name(&self.name, "sum"),
                 self.data_type.clone(),
                 true,
             ),
@@ -105,19 +107,7 @@ impl AggregateExpr for Avg {
     }
 
     fn row_accumulator_supported(&self) -> bool {
-        matches!(
-            self.data_type,
-            DataType::UInt8
-                | DataType::UInt16
-                | DataType::UInt32
-                | DataType::UInt64
-                | DataType::Int8
-                | DataType::Int16
-                | DataType::Int32
-                | DataType::Int64
-                | DataType::Float32
-                | DataType::Float64
-        )
+        is_row_accumulator_support_dtype(&self.data_type)
     }
 
     fn create_row_accumulator(
@@ -150,11 +140,8 @@ impl AvgAccumulator {
 }
 
 impl Accumulator for AvgAccumulator {
-    fn state(&self) -> Result<Vec<AggregateState>> {
-        Ok(vec![
-            AggregateState::Scalar(ScalarValue::from(self.count)),
-            AggregateState::Scalar(self.sum.clone()),
-        ])
+    fn state(&self) -> Result<Vec<ScalarValue>> {
+        Ok(vec![ScalarValue::from(self.count), self.sum.clone()])
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
