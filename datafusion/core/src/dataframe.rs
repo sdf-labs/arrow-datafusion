@@ -20,7 +20,6 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use parquet::file::properties::WriterProperties;
 
 use datafusion_common::{Column, DFSchema, ScalarValue};
@@ -56,12 +55,7 @@ use arrow::datatypes::DataType;
 use async_trait::async_trait;
 
 use datafusion_common::DataFusionError;
-use datafusion_common::{Column, DFSchema};
-use datafusion_expr::TableProviderFilterPushDown;
-use parking_lot::RwLock;
-use parquet::file::properties::WriterProperties;
-use std::any::Any;
-use std::sync::Arc;
+
 use std::usize;
 
 /// DataFrame represents a logical set of rows with the same named columns.
@@ -108,15 +102,7 @@ impl DataFrame {
     pub fn copy(&self) -> Result<Arc<DataFrame>> {
         Ok(Arc::new(DataFrame::new(
             self.session_state.clone(),
-            &self.plan.clone(),
-        )))
-    }
-
-    /// Copy self
-    pub fn copy(&self) -> Result<Arc<DataFrame>> {
-        Ok(Arc::new(DataFrame::new(
-            self.session_state.clone(),
-            &self.plan.clone(),
+            self.plan.clone(),
         )))
     }
 
@@ -717,8 +703,8 @@ impl DataFrame {
         aka: Option<String>,
     ) -> Result<()> {
         self.check_columns(&partition_columns)?;
-        let plan = self.create_physical_plan().await?;
-        let state = self.session_state.read().clone();
+        let plan = self.session_state.create_physical_plan(&self.plan).await?;
+        let state = self.session_state.clone();
         plan_to_parquet_partitioned(
             &state,
             plan,
@@ -729,51 +715,6 @@ impl DataFrame {
         )
         .await
         
-    }
-
-    fn check_columns(&self, partition_columns: &Vec<String>) -> Result<()> {
-        let is_varchar_rep = |data_type: DataType| -> bool {
-            match data_type.to_owned() {
-                arrow::datatypes::DataType::Utf8 => true,
-                arrow::datatypes::DataType::Dictionary(key_type, value_type) => {
-                    key_type.equals_datatype(&arrow::datatypes::DataType::UInt16)
-                        && value_type.equals_datatype(&arrow::datatypes::DataType::Utf8)
-                }
-                _ => false,
-            }
-        };
-        for col in partition_columns {
-            let data_type = self.schema().field_with_unqualified_name(col)?.data_type();
-            if !is_varchar_rep(data_type.to_owned()) {
-                return Err(DataFusionError::Execution(format!(
-                    "partition column '{}' must be of type 'varchar', got type '{}'",
-                    &col, &data_type
-                )));
-            }
-        }
-        Ok(())
-    }
-
-    /// Write a `DataFrame` to a partitioned parquet file.
-    pub async fn write_parquet_partitioned(
-        &self,
-        path: &str,
-        writer_properties: Option<WriterProperties>,
-        partition_columns: Vec<String>,
-        aka: Option<String>,
-    ) -> Result<()> {
-        self.check_columns(&partition_columns)?;
-        let plan = self.create_physical_plan().await?;
-        let state = self.session_state.read().clone();
-        plan_to_parquet_partitioned(
-            &state,
-            plan,
-            path,
-            writer_properties,
-            partition_columns,
-            aka,
-        )
-        .await
     }
 
     fn check_columns(&self, partition_columns: &Vec<String>) -> Result<()> {

@@ -277,10 +277,10 @@ impl<'a> DFParser<'a> {
         dialect: &'a dyn Dialect,
     ) -> Result<Self, ParserError> {
         let mut tokenizer = Tokenizer::new(dialect, sql);
-        let tokens = tokenizer.tokenize()?;
+        let tokens = tokenizer.tokenize_with_location()?;
 
         Ok(DFParser {
-            parser: Parser::new(tokens, dialect),
+            parser: Parser::new(dialect).with_tokens_with_locations(tokens),
             catalog: String::new(),
             schema: String::new(),
             table: String::new(),
@@ -297,11 +297,9 @@ impl<'a> DFParser<'a> {
         table: String,
     ) -> Result<Self, ParserError> {
         let mut tokenizer = Tokenizer::new(dialect, sql);
-        let tokens = tokenizer.tokenize()?;
+        let tokens = tokenizer.tokenize_with_location()?;
         Ok(DFParser {
-            parser: Parser::new(
-                tokens, dialect, // filename
-            ),
+            parser: Parser::new(dialect).with_tokens_with_locations(tokens), // filename
             catalog,
             schema,
             table,
@@ -367,6 +365,10 @@ impl<'a> DFParser<'a> {
                 error!("{}: {}", &filename, err);
                 Err(ParserError::ParserError(format!("'{}': {}", &filename, err.to_string())))
             }
+            Err(sqlparser::parser::ParserError::RecursionLimitExceeded) => {
+                error!("{}: {}", &filename, "Recursion Limit Exceeded!");
+                Err(ParserError::ParserError(format!("'{}': {}", &filename, "Recursion Limit Exceeded!")))
+            }
         }
     }
 
@@ -387,7 +389,8 @@ impl<'a> DFParser<'a> {
             if expecting_statement_delimiter {
                 return parser.expected("End of statement", parser.parser.peek_token());
             }
-            let result_statements = match parser.parser.next_token() {
+            let expected_token = parser.parser.next_token();
+            let result_statements = match expected_token.token.to_owned() {
                 Token::Word(w) => match w.keyword {
                     Keyword::USE => Self::parse_use(&mut parser),
                     _ => {
@@ -395,7 +398,7 @@ impl<'a> DFParser<'a> {
                         parser.parse_statement().map(|op| VecDeque::from([op]))
                     }
                 },
-                unexpected => parser.expected("End of statement", unexpected),
+                _unexpected => parser.expected("End of statement", expected_token),
             };
             match result_statements {
                 Ok(stms) => stmts.extend(stms),
@@ -416,12 +419,43 @@ impl<'a> DFParser<'a> {
         parser_err!(format!("Expected {expected}, found: {found}"))
     }
 
-    
+    /// Parse a file of SQL statements and produce an Abstract Syntax Tree (AST)
+    pub fn parse_sql_file(
+        dialect: &dyn Dialect,
+        filename: String,
+        catalog: String,
+        schema: String,
+        table: String,
+        prefix: String,
+    ) -> Result<VecDeque<(Statement, StatementMeta)>, ParserError> {
+        let contents = fs::read_to_string(&filename)
+            .unwrap_or_else(|_| panic!("Unable to read the file {}", &filename));
+        let contents_with_prefix = prefix.clone() + &contents;
+
+        let dialect: &dyn Dialect = &*dialect;
+        let sql: &str = &contents_with_prefix;
+        let parser = DFParser::new_with_dialect_and_scope(
+            sql,
+            dialect,
+            filename.to_owned(),
+            catalog,
+            schema,
+            table,
+        )?;
+        match Self::parse_statements(parser) {
+            Ok(res) => Ok(res),
+            Err(err) => {
+                error!("{}: {}", &filename, err);
+                exit(1)
+            }
+        }
+    }
+
     fn parse_use(
         parser: &mut DFParser,
     ) -> Result<VecDeque<(Statement, StatementMeta)>, ParserError> {
         let next = parser.parser.next_token();
-        match next.clone() {
+        match next.clone().token {
             // Token::SingleQuotedString(schema_path) => {
             //     // we are staying in the same catalog -- we are reusing parser.catalog
 
@@ -546,211 +580,12 @@ impl<'a> DFParser<'a> {
                     created_catalog + &created_schema,
                 )
             }
-            unexpected => parser.expected("Object identifier", unexpected)?,
+            _unexpected => parser.expected("Object identifier", next)?,
         }
         // }
     }
-
-    /// Parse a file of SQL statements and produce an Abstract Syntax Tree (AST)
-    pub fn parse_sql_file(
-        dialect: &dyn Dialect,
-        filename: String,
-        catalog: String,
-        schema: String,
-        table: String,
-        prefix: String,
-    ) -> Result<VecDeque<(Statement, StatementMeta)>, ParserError> {
-        let contents = fs::read_to_string(&filename)
-            .unwrap_or_else(|_| panic!("Unable to read the file {}", &filename));
-        let contents_with_prefix = prefix.clone() + &contents;
-
-        let dialect: &dyn Dialect = &*dialect;
-        let sql: &str = &contents_with_prefix;
-        let parser = DFParser::new_with_dialect_and_scope(
-            sql,
-            dialect,
-            filename.to_owned(),
-            catalog,
-            schema,
-            table,
-        )?;
-        match Self::parse_statements(parser) {
-            Ok(res) => Ok(res),
-            Err(err) => {
-                error!("{}: {}", &filename, err);
-                exit(1)
-            }
-        }
-    }
-
-    fn parse_use(
-        parser: &mut DFParser,
-    ) -> Result<VecDeque<(Statement, StatementMeta)>, ParserError> {
-        let next = parser.parser.next_token();
-        match next.clone() {
-            // Token::SingleQuotedString(schema_path) => {
-            //     // we are staying in the same catalog -- we are reusing parser.catalog
-
-            //     // compute filename
-            //     let schema = basename(&schema_path);
-            //     let schema_filename = format!(
-            //         "{}/{}/{}.sql",
-            //         parser.workspace_path, parser.catalog, schema_path
-            //     );
-
-            //     // avoid duplicate uses
-            //     if VISITED_FILES.lock().unwrap().contains(&schema_filename) {
-            //         return Ok(VecDeque::new());
-            //     }
-            //     VISITED_FILES
-            //         .lock()
-            //         .unwrap()
-            //         .insert(schema_filename.clone());
-
-            //     let regex = Regex::new(r"^[/a-z0-9_]*$").unwrap();
-            //     if !regex.is_match(&schema_path) {
-            //         return parser.wrong_use(&format!("Schema path must consist only of lowercase chars, digits or '_' separated by '/', found {}",next), next );
-            //     }
-            //     if !Path::new(&schema_filename).is_file() {
-            //         return parser.wrong_use(
-            //             &format!("Missing schema file {}", schema_filename),
-            //             next,
-            //         );
-            //     };
-
-            //     // create scopes
-            //     let created_schema =
-            //         format!("CREATE SCHEMA {}.{};\n", &parser.catalog, &schema);
-
-            //     // continue parsing
-            //     Self::parse_sql_file(
-            //         &GenericDialect {},
-            //         schema_filename,
-            //         parser.catalog.to_owned(),
-            //         schema_path.to_owned(),
-            //         created_schema,
-            //         workspace_path,
-            //     )
-            // }
-            Token::Word(w) => {
-                // switch to a possibly new catalog
-
-                //parse
-                let catalog = w.value.clone();
-                let _ = parser.parser.expect_token(&Token::Period);
-                let schema = match parser.parser.parse_identifier() {
-                    Ok(id) => id.value,
-                    Err(_) => "".to_owned(),
-                };
-                let _ = parser.parser.expect_token(&Token::Period);
-                let table = match parser.parser.parse_identifier() {
-                    Ok(id) => id.value,
-                    Err(_) => "".to_owned(),
-                };
-                // check catalog/schema naming
-                // let regex = Regex::new(r"^[a-z0-9_]*$").unwrap();
-                // if !regex.is_match(&catalog)
-                //     || !regex.is_match(&schema)
-                //     || !regex.is_match(&table)
-                // {
-                //     return parser.wrong_use(&format!("Catalog, schema, and table names must only be lowercase, digits or '_', found {}",catalog), next );
-                // }
-
-                if parser.catalog == "" {
-                    println!(
-                        "Source not under workspace -- skipping 'use {}.{}.{}' statement",
-                        catalog, schema, table
-                    );
-                    return Ok(VecDeque::new());
-                }
-
-                // check whether new catalog exists
-                let schema_filename = format!("{}/{}.sql", catalog, schema);
-                let table_filename = format!("{}/{}/{}.sql", catalog, schema, table);
-                let (is_table, filename) = if Path::new(&table_filename).is_file() {
-                    (true, table_filename)
-                } else if Path::new(&schema_filename).is_file() {
-                    (false, schema_filename)
-                } else {
-                    return Err(ParserError::ParserError(
-                        format!(
-                            "Missing schema file {} or table file {} ",
-                            schema_filename, table_filename
-                        )
-                        .to_owned(),
-                    ));
-                };
-                info!("-- USE {}.{}.{} from {}", catalog, schema, table, filename);
-                // avoid duplicate uses
-                if VISITED_FILES.lock().unwrap().contains(&filename) {
-                    return Ok(VecDeque::new());
-                }
-                VISITED_FILES.lock().unwrap().insert(filename.to_owned());
-
-                // create scopes
-                let mut created_catalog = String::new();
-                let mut created_schema = String::new();
-                if !VISITED_CATALOGS.lock().unwrap().contains(&catalog) {
-                    VISITED_CATALOGS.lock().unwrap().insert(catalog.to_owned());
-                    created_catalog = format!("CREATE DATABASE {};\n", &catalog);
-                    info!("{}", created_catalog);
-                };
-                let schema_id = format!("{}.{}", catalog, schema);
-                if !VISITED_SCHEMAS.lock().unwrap().contains(&schema_id) {
-                    VISITED_SCHEMAS.lock().unwrap().insert(schema_id);
-                    created_schema = format!("CREATE SCHEMA {}.{};\n", &catalog, &schema);
-                    info!("{}", created_schema);
-                };
-
-                // continue parsing
-                Self::parse_sql_file(
-                    &GenericDialect {},
-                    filename,
-                    catalog,
-                    schema,
-                    if is_table { table } else { String::new() },
-                    created_catalog + &created_schema,
-                )
-            }
-            unexpected => parser.expected("Object identifier", unexpected)?,
-        }
-        // }
-    }
-
-    /// Parse a file of SQL statements and produce an Abstract Syntax Tree (AST)
-    pub fn parse_sql_file(
-        dialect: &dyn Dialect,
-        filename: String,
-        catalog: String,
-        schema: String,
-        table: String,
-        prefix: String,
-    ) -> Result<VecDeque<(Statement, StatementMeta)>, ParserError> {
-        let contents = fs::read_to_string(&filename)
-            .unwrap_or_else(|_| panic!("Unable to read the file {}", &filename));
-        let contents_with_prefix = prefix.clone() + &contents;
-
-        let dialect: &dyn Dialect = &*dialect;
-        let sql: &str = &contents_with_prefix;
-        let parser = DFParser::new_with_dialect_and_scope(
-            sql,
-            dialect,
-            filename.to_owned(),
-            catalog,
-            schema,
-            table,
-        )?;
-        match Self::parse_statements(parser) {
-            Ok(res) => Ok(res),
-            Err(err) => {
-                error!("{}: {}", &filename, err);
-                exit(1)
-            }
-        }
-    }
-
     /// Parse a new expression
-    pub fn parse_statement(&mut self) -> Result<Statement, ParserError> {
+    pub fn parse_statement(&mut self) -> Result<(Statement, StatementMeta), ParserError> {
         match self.parser.peek_token().token {
             Token::Word(w) => {
                 match w.keyword {

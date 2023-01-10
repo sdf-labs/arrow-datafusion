@@ -30,6 +30,7 @@ use crate::{
 pub use datafusion_physical_expr::execution_props::ExecutionProps;
 use datafusion_physical_expr::var_provider::is_system_variables;
 use parking_lot::RwLock;
+use std::ops::ControlFlow;
 use std::sync::Arc;
 use std::{
     any::{Any, TypeId},
@@ -40,7 +41,6 @@ use std::{
     collections::{HashMap, HashSet},
     fmt::Debug,
 };
-use std::{ops::ControlFlow, sync::Weak};
 
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::record_batch::RecordBatch;
@@ -65,7 +65,6 @@ use datafusion_sql::{ResolvedTableReference, TableReference};
 
 use crate::physical_optimizer::coalesce_batches::CoalesceBatches;
 use crate::physical_optimizer::repartition::Repartition;
-//use datafusion_sql::{ResolvedTableReference, TableReference};
 
 use crate::config::ConfigOptions;
 use crate::execution::{runtime_env::RuntimeEnv, FunctionRegistry};
@@ -102,11 +101,6 @@ use uuid::Uuid;
 use super::options::{
     AvroReadOptions, CsvReadOptions, NdJsonReadOptions, ParquetReadOptions,
 };
-
-/// The default catalog name - this impacts what SQL queries use if not specified
-pub const DEFAULT_CATALOG: &str = "sdf";
-/// The default schema name - this impacts what SQL queries use if not specified
-pub const DEFAULT_SCHEMA: &str = "public";
 
 /// SessionContext is the main interface for executing queries with DataFusion. It stands for
 /// the connection between user and DataFusion/Ballista cluster.
@@ -156,153 +150,7 @@ pub struct SessionContext {
     /// Session start time
     session_start_time: DateTime<Utc>,
     /// Shared session state for the session
-    pub state: Arc<RwLock<SessionState>>,
-}
-
-use lazy_static::lazy_static;
-use std::sync::Mutex;
-
-lazy_static! {
-    /// Collect all definition-use dependencies (in the form catalog.schema.table) used by all statements
-    pub static ref DEF_USE_DEPS: Mutex<HashMap<String, HashSet<String>>> = Mutex::new(HashMap::new());
-     /// Collect all used catalog.schema.table names used in from or join for **this** statement
-    pub static ref USE_DEPS: Mutex<HashSet<String>> = Mutex::new(HashSet::new());
-}
-
-/// Return fully qualified name of a table reference
-fn qualify_table_reference(
-    table_reference: &TableReference,
-    catalog: &str,
-    schema: &str,
-) -> String {
-    if catalog == "" {
-        match table_reference {
-            TableReference::Bare { table } => format!("{}", table),
-            TableReference::Partial { schema, table } => {
-                format!("{}.{}", schema, table)
-            }
-            TableReference::Full {
-                catalog,
-                schema,
-                table,
-            } => format!("{}.{}.{}", catalog, schema, table),
-        }
-    } else {
-        match table_reference {
-            TableReference::Bare { table } => format!("{}.{}.{}", catalog, schema, table),
-            TableReference::Partial { schema, table } => {
-                format!("{}.{}.{}", catalog, schema, table)
-            }
-            TableReference::Full {
-                catalog,
-                schema,
-                table,
-            } => format!("{}.{}.{}", catalog, schema, table),
-        }
-    }
-}
-
-/// Return fully qualified name of a table name
-fn qualify_table_name(name: &str, catalog: &str, schema: &str) -> String {
-    if catalog == "" {
-        name.to_owned()
-    } else {
-        qualify_table_reference(&TableReference::from(name), catalog, schema)
-    }
-}
-
-/// Update definition-use chain with collected use dep
-fn update_def_use_and_return(
-    tr: TableReference,
-    state: SessionState,
-    result: Result<Arc<DataFrame>>,
-) -> Result<Arc<DataFrame>> {
-    let qn = qualify_table_reference(
-        &tr,
-        &state.config.default_catalog,
-        &state.config.default_schema,
-    );
-    result.and_then(|op| {
-        DEF_USE_DEPS
-            .lock()
-            .unwrap()
-            .insert(qn, USE_DEPS.lock().unwrap().clone());
-        USE_DEPS.lock().unwrap().clear();
-        Ok(op)
-    })
-}
-
-use lazy_static::lazy_static;
-use std::sync::Mutex;
-
-lazy_static! {
-    /// Collect all definition-use dependencies (in the form catalog.schema.table) used by all statements
-    pub static ref DEF_USE_DEPS: Mutex<HashMap<String, HashSet<String>>> = Mutex::new(HashMap::new());
-     /// Collect all used catalog.schema.table names used in from or join for **this** statement
-    pub static ref USE_DEPS: Mutex<HashSet<String>> = Mutex::new(HashSet::new());
-}
-
-/// Return fully qualified name of a table reference
-fn qualify_table_reference(
-    table_reference: &TableReference,
-    catalog: &str,
-    schema: &str,
-) -> String {
-    if catalog == "" {
-        match table_reference {
-            TableReference::Bare { table } => format!("{}", table),
-            TableReference::Partial { schema, table } => {
-                format!("{}.{}", schema, table)
-            }
-            TableReference::Full {
-                catalog,
-                schema,
-                table,
-            } => format!("{}.{}.{}", catalog, schema, table),
-        }
-    } else {
-        match table_reference {
-            TableReference::Bare { table } => format!("{}.{}.{}", catalog, schema, table),
-            TableReference::Partial { schema, table } => {
-                format!("{}.{}.{}", catalog, schema, table)
-            }
-            TableReference::Full {
-                catalog,
-                schema,
-                table,
-            } => format!("{}.{}.{}", catalog, schema, table),
-        }
-    }
-}
-
-/// Return fully qualified name of a table name
-fn qualify_table_name(name: &str, catalog: &str, schema: &str) -> String {
-    if catalog == "" {
-        name.to_owned()
-    } else {
-        qualify_table_reference(&TableReference::from(name), catalog, schema)
-    }
-}
-
-/// Update definition-use chain with collected use dep
-fn update_def_use_and_return(
-    tr: TableReference,
-    state: SessionState,
-    result: Result<Arc<DataFrame>>,
-) -> Result<Arc<DataFrame>> {
-    let qn = qualify_table_reference(
-        &tr,
-        &state.config.default_catalog,
-        &state.config.default_schema,
-    );
-    result.and_then(|op| {
-        DEF_USE_DEPS
-            .lock()
-            .unwrap()
-            .insert(qn, USE_DEPS.lock().unwrap().clone());
-        USE_DEPS.lock().unwrap().clear();
-        Ok(op)
-    })
+    state: Arc<RwLock<SessionState>>,
 }
 
 impl Default for SessionContext {
@@ -315,11 +163,6 @@ impl SessionContext {
     /// Creates a new execution context using a default session configuration.
     pub fn new() -> Self {
         Self::with_config(SessionConfig::new())
-    }
-    /// Returns the table name, qualified wih default catalog and default schema
-    pub fn qualify_table_name(&self, name: &str) -> String {
-        let config = self.state().config;
-        qualify_table_name(name, &config.default_catalog, &config.default_schema)
     }
 
     /// Finds any ListSchemaProviders and instructs them to reload tables from "disk"
@@ -368,32 +211,12 @@ impl SessionContext {
         self.session_start_time
     }
 
-    /// Creates a new session context using the provided session state.
-    pub fn with_state_and_scope(
-        state: SessionState,
-        catalog: String,
-        schema: String,
-    ) -> Self {
-        let mut state = state.to_owned();
-        if catalog != "" {
-            state.with_new_default_catalog_and_schema(&catalog, &schema);
-        };
-        Self {
-            session_id: state.session_id.clone(),
-            session_start_time: chrono::Utc::now(),
-            state: Arc::new(RwLock::new(state)),
-        }
-    }
-
     /// Registers the [`RecordBatch`] as the specified table name
     pub fn register_batch(
         &self,
         table_name: &str,
         batch: RecordBatch,
     ) -> Result<Option<Arc<dyn TableProvider>>> {
-        // TODO TBD Qualified or not?
-        let table_name = self.qualify_table_name(&table_name);
-        // let table_name = table_name.to_owned();
         let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
         self.register_table(TableReference::Bare { table: table_name }, Arc::new(table))
     }
@@ -413,40 +236,22 @@ impl SessionContext {
         self.state.read().config.clone()
     }
 
-    /// Creates a [`DataFrame`] taking a plan within a catalog/schema context
-    pub async fn plan_with_scope(
-        &mut self,
-        plan: LogicalPlan,
-        catalog: String,
-        schema: String,
-    ) -> Result<Arc<DataFrame>> {
-        if catalog != "" {
-            let state = self.state();
-            Self::with_state_and_scope(state, catalog, schema)
-        } else {
-            self.to_owned()
-        }
-        .plan(plan)
-        .await
-    }
-    /// Creates a [`DataFrame`] from a logical plan that will execute a SQL query.
+    /// Creates a [`DataFrame`] that will execute a SQL query.
     ///
-    /// This method is `async` because queries of type `CREATE EXTERNAL TABLE`
-    /// might require the schema to be inferred.
+    /// Note: This api implements DDL such as `CREATE TABLE` and `CREATE VIEW` with in memory
+    /// default implementations.
+    ///
+    /// If this is not desirable, consider using [`SessionState::create_logical_plan()`] which
+    /// does not mutate the state based on such statements.
     pub async fn sql(&self, sql: &str) -> Result<DataFrame> {
-        let logical_plan = self.create_logical_plan(sql)?;
-        self.plan(logical_plan).await
-    }
+        // create a query planner
+        let plan = self.state().create_logical_plan(sql).await?;
 
-    /// Creates a [`DataFrame`] taking a plan.
-    ///
-    /// This method is `async` because queries of type `CREATE EXTERNAL TABLE`
-    /// might require the schema to be inferred.
-    pub async fn plan(&self, plan: LogicalPlan) -> Result<DataFrame> {
         match plan {
             LogicalPlan::CreateExternalTable(cmd) => {
                 self.create_external_table(&cmd).await
             }
+
             LogicalPlan::CreateMemoryTable(CreateMemoryTable {
                 name,
                 input,
@@ -456,7 +261,7 @@ impl SessionContext {
                 let input = Arc::try_unwrap(input).unwrap_or_else(|e| e.as_ref().clone());
                 let table = self.table(&name).await;
 
-                let result = match (if_not_exists, or_replace, table) {
+                match (if_not_exists, or_replace, table) {
                     (true, false, Ok(_)) => self.return_empty_dataframe(),
                     (false, true, Ok(_)) => {
                         self.deregister_table(&name)?;
@@ -485,10 +290,7 @@ impl SessionContext {
                     (false, false, Ok(_)) => Err(DataFusionError::Execution(format!(
                         "Table '{name}' already exists"
                     ))),
-                };
-
-                let state = self.state();
-                update_def_use_and_return(tr, state, result)
+                }
             }
 
             LogicalPlan::CreateView(CreateView {
@@ -499,7 +301,7 @@ impl SessionContext {
             }) => {
                 let view = self.table(&name).await;
 
-                let result = match (or_replace, view) {
+                match (or_replace, view) {
                     (true, Ok(_)) => {
                         self.deregister_table(&name)?;
                         let table =
@@ -518,10 +320,7 @@ impl SessionContext {
                     (false, Ok(_)) => Err(DataFusionError::Execution(format!(
                         "Table '{name}' already exists"
                     ))),
-                };
-                let tr = TableReference::from(name.as_str());
-                let state = self.state();
-                update_def_use_and_return(tr, state, result)
+                }
             }
 
             LogicalPlan::DropTable(DropTable {
@@ -566,7 +365,7 @@ impl SessionContext {
                 if_not_exists,
                 ..
             }) => {
-                // sqlparser doesn't accept database / catalog as parameter to CREATE SCHEMA
+                // sqlparser doesnt accept database / catalog as parameter to CREATE SCHEMA
                 // so for now, we default to default catalog
                 let tokens: Vec<&str> = schema_name.split('.').collect();
                 let (catalog, schema_name) = match tokens.len() {
@@ -615,7 +414,6 @@ impl SessionContext {
                 if_not_exists,
                 ..
             }) => {
-                // println!("-- CREATE DATABASE {};", catalog_name);
                 let catalog = self.catalog(catalog_name.as_str());
 
                 match (if_not_exists, catalog) {
@@ -652,7 +450,7 @@ impl SessionContext {
             self.create_custom_table(cmd).await?;
 
         let table = self.table(&cmd.name).await;
-        let result = match (cmd.if_not_exists, table) {
+        match (cmd.if_not_exists, table) {
             (true, Ok(_)) => self.return_empty_dataframe(),
             (_, Err(_)) => {
                 self.register_table(&cmd.name, table_provider)?;
@@ -662,9 +460,7 @@ impl SessionContext {
                 "Table '{}' already exists",
                 cmd.name
             ))),
-        };
-        let state = self.state();
-        update_def_use_and_return(tr, state, result)
+        }
     }
 
     async fn create_custom_table(
@@ -1213,16 +1009,6 @@ impl SessionContext {
         state.execution_props.start_execution();
         state
     }
-
-    /// Get weak reference to [`SessionState`]
-    pub fn state_weak_ref(&self) -> Weak<RwLock<SessionState>> {
-        Arc::downgrade(&self.state)
-    }
-
-    /// Register [`CatalogList`] in [`SessionState`]
-    pub fn register_catalog_list(&mut self, catalog_list: Arc<dyn CatalogList>) {
-        self.state.write().catalog_list = catalog_list;
-    }
 }
 
 impl FunctionRegistry for SessionContext {
@@ -1622,18 +1408,6 @@ pub fn default_session_builder(config: SessionConfig) -> SessionState {
 }
 
 impl SessionState {
-    /// Updates SessionState using the provided catalog and schema
-    pub fn with_new_default_catalog_and_schema<'a>(
-        &'a mut self,
-        catalog: &'a str,
-        schema: &'a str,
-    ) -> () {
-        if catalog != "" {
-            let config = self.config.clone();
-            self.config = config.with_default_catalog_and_schema(catalog, schema);
-        }
-    }
-
     /// Returns new SessionState using the provided configuration and runtime
     pub fn with_config_rt(config: SessionConfig, runtime: Arc<RuntimeEnv>) -> Self {
         let session_id = Uuid::new_v4().to_string();
@@ -1789,15 +1563,15 @@ impl SessionState {
             .catalog(resolved_ref.catalog)
             .ok_or_else(|| {
                 DataFusionError::Plan(format!(
-                    "failed to resolve catalog: {}.{}.{}",
-                    resolved_ref.catalog, resolved_ref.schema, resolved_ref.table
+                    "failed to resolve catalog: {}",
+                    resolved_ref.catalog
                 ))
             })?
             .schema(resolved_ref.schema)
             .ok_or_else(|| {
                 DataFusionError::Plan(format!(
-                    "failed to resolve schema: {}.{}.{}",
-                    resolved_ref.catalog, resolved_ref.schema, resolved_ref.table
+                    "failed to resolve schema: {}",
+                    resolved_ref.schema
                 ))
             })
     }
@@ -2013,11 +1787,6 @@ impl SessionState {
     /// Get a new TaskContext to run in this session
     pub fn task_ctx(&self) -> Arc<TaskContext> {
         Arc::new(TaskContext::from(self))
-    }
-
-    /// Return catalog list
-    pub fn catalog_list(&self) -> Arc<dyn CatalogList> {
-        self.catalog_list.clone()
     }
 }
 
@@ -2680,7 +2449,7 @@ mod tests {
         ctx.sql("CREATE SCHEMA abc").await?.collect().await?;
 
         // Add table to schema
-        ctx.sql("CREATE TABLE datafusion.abc.y AS VALUES (1,2,3)")
+        ctx.sql("CREATE TABLE abc.y AS VALUES (1,2,3)")
             .await?
             .collect()
             .await?;
