@@ -17,12 +17,17 @@
 
 //! Execution plan for reading Parquet files
 
+use arrow::datatypes::Schema;
 use arrow::datatypes::{DataType, SchemaRef};
+use datafusion_physical_expr::expressions::col;
+use datafusion_physical_expr::PhysicalExpr;
 use fmt::Debug;
 use std::any::Any;
+use std::collections::HashSet;
 use std::fmt;
 use std::fs;
 use std::ops::Range;
+
 use std::sync::Arc;
 
 use crate::config::ConfigOptions;
@@ -31,6 +36,8 @@ use crate::physical_plan::file_format::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
 };
 use crate::physical_plan::file_format::FileMeta;
+use crate::physical_plan::repartition::RepartitionExec;
+use crate::physical_plan::repartition::REVERSE_HASH;
 use crate::{
     error::{DataFusionError, Result},
     execution::context::{SessionState, TaskContext},
@@ -48,7 +55,7 @@ use bytes::Bytes;
 use datafusion_expr::Expr;
 use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryFutureExt, TryStreamExt};
-use log::debug;
+use log::{debug, info};
 use object_store::{ObjectMeta, ObjectStore};
 use parquet::arrow::arrow_reader::ArrowReaderOptions;
 use parquet::arrow::async_reader::AsyncFileReader;
@@ -619,6 +626,115 @@ impl ParquetFileReaderFactory for DefaultParquetFileReaderFactory {
     }
 }
 
+/// Executes a query and writes the results to a Hive partitioned Parquet file.
+pub async fn plan_to_parquet_partitioned(
+    state: &SessionState,
+    plan: Arc<dyn ExecutionPlan>,
+    path: impl AsRef<str>,
+    writer_properties: Option<WriterProperties>,
+    partition_columns: Vec<String>,
+    insert_into: Option<String>,
+) -> Result<()> {
+    REVERSE_HASH.lock().clear();
+
+    // TODO move datafuson part in caller, so that this only requires remapper,
+    // TODO move remapper one higher as well,
+    // TODO so there is no change to parquet writer at all
+
+    // Merge batches so that a later batch can see the result of analyzing a former batch
+    // TODO delete once you have an atomic increment for each batch, and each batch writes its own files.
+    let plan = Arc::new(RepartitionExec::try_new(
+        plan,
+        crate::physical_plan::Partitioning::RoundRobinBatch(1),
+    )?);
+
+    // Split the data according to its Hive partitions
+    let mut exprs: Vec<Arc<dyn PhysicalExpr>> = vec![];
+    for name in &partition_columns {
+        let expr = col(&name, &plan.schema())?;
+        exprs.push(expr);
+    }
+    let plan = Arc::new(RepartitionExec::try_new(
+        plan,
+        crate::physical_plan::Partitioning::HivePartitioning(
+            partition_columns.to_vec(),
+            exprs,
+            10, // max number of partitions TODO use default, i.e num of cpus..
+        ),
+    )?);
+    // save some stuff
+    let path_ = path.as_ref().to_owned();
+
+    // calls normal plan to parquet, except it needs a schema for the resulting plan
+    let schema = plan.schema();
+    let new_schema = drop_columns(&schema, partition_columns);
+    plan_to_parquet_(state, plan.clone(), new_schema, path, writer_properties).await?;
+
+    // the postlude moves the written part-{} files into the proper location!
+    // TODO update togetrher with deleting round robin, see above
+
+    let fs_path = std::path::Path::new(&path_);
+    let reverse_hash = REVERSE_HASH.lock();
+    debug!("MAPPER REVERSE HASH {:?}", reverse_hash);
+
+    let mut seen: HashSet<u64> = HashSet::new();
+    for (path, idx) in reverse_hash.values() {
+        seen.insert(*idx);
+        let old_name = format!("part-{}.parquet", idx);
+        let old_path = fs_path.join(old_name.to_owned());
+        println!("old-path {:?} {}", old_path, old_path.is_file());
+        if old_path.is_file() {
+            match insert_into.to_owned() {
+                None => {
+                    fs::create_dir_all(&fs_path.join(path))?;
+                    let new_path = fs_path.join(path).join(old_name.to_owned());
+                    println!("new-path {:?} {}", new_path, new_path.exists());
+                    fs::rename(old_path, new_path)?;
+                }
+                Some(also_name) => {
+                    let prefix = fs_path
+                        .parent() // .table
+                        .unwrap()
+                        .parent() //.schema
+                        .unwrap()
+                        .parent() //.catalog
+                        .unwrap();
+                    let new_part_prefix = prefix.join(also_name.replace(".", "/"));
+                    let part = &new_part_prefix.join(path);
+                    fs::create_dir_all(&part)?;
+                    let new_path = part.join(old_name.to_owned());
+                    println!("new-path {:?} {}", new_path, new_path.exists());
+                    info!("written: {}", new_path.display());
+                    fs::rename(old_path, new_path)?;
+                }
+            }
+        }
+    }
+    // clean
+    for i in 0..plan.output_partitioning().partition_count() {
+        if !seen.contains(&(i as u64)) {
+            let old_name = format!("part-{}.parquet", i);
+            let old_path = fs_path.join(old_name.to_owned());
+            fs::remove_file(old_path)?;
+        }
+    }
+    Ok(())
+}
+
+fn drop_columns(schema: &Arc<Schema>, partition_columns: Vec<String>) -> Arc<Schema> {
+    let fields = schema.fields();
+    let mut restricted_fields = vec![];
+    for field in fields {
+        {
+            if !partition_columns.contains(field.name()) {
+                restricted_fields.push(field.to_owned());
+            }
+        }
+    }
+    let new_schema = Arc::new(Schema::new(restricted_fields.to_vec()));
+    new_schema
+}
+
 /// Executes a query and writes the results to a partitioned Parquet file.
 pub async fn plan_to_parquet(
     state: &SessionState,
@@ -626,10 +742,21 @@ pub async fn plan_to_parquet(
     path: impl AsRef<str>,
     writer_properties: Option<WriterProperties>,
 ) -> Result<()> {
+    let schema = plan.schema().to_owned();
+    plan_to_parquet_(state, plan, schema, path, writer_properties).await
+}
+
+async fn plan_to_parquet_(
+    state: &SessionState,
+    plan: Arc<dyn ExecutionPlan>,
+    schema: Arc<Schema>,
+    path: impl AsRef<str>,
+    writer_properties: Option<WriterProperties>,
+) -> Result<()> {
     let path = path.as_ref();
     // create directory to contain the Parquet files (one per partition)
     let fs_path = std::path::Path::new(path);
-    match fs::create_dir(fs_path) {
+    match fs::create_dir_all(fs_path) {
         Ok(()) => {
             let mut tasks = vec![];
             for i in 0..plan.output_partitioning().partition_count() {
@@ -637,8 +764,11 @@ pub async fn plan_to_parquet(
                 let filename = format!("part-{i}.parquet");
                 let path = fs_path.join(filename);
                 let file = fs::File::create(path)?;
-                let mut writer =
-                    ArrowWriter::try_new(file, plan.schema(), writer_properties.clone())?;
+                let mut writer = ArrowWriter::try_new(
+                    file,
+                    schema.to_owned(),
+                    writer_properties.clone(),
+                )?;
                 let task_ctx = Arc::new(TaskContext::from(state));
                 let stream = plan.execute(i, task_ctx)?;
                 let handle: tokio::task::JoinHandle<Result<()>> =

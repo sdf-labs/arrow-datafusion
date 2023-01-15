@@ -164,6 +164,41 @@ impl ExecutionPlan for WindowAggExec {
         }
     }
 
+    //WOLFRAM PARTITION
+    /*
+    fn output_partitioning(&self) -> Partitioning {
+        // Although WindowAggExec does not change the output partitioning from the input, but can not return the output partitioning
+        // from the input directly, need to adjust the column index to align with the new schema.
+        let window_expr_len = self.window_expr.len();
+        let input_partitioning = self.input.output_partitioning();
+        match input_partitioning {
+            Partitioning::RoundRobinBatch(size) => Partitioning::RoundRobinBatch(size),
+            Partitioning::UnknownPartitioning(size) => {
+                Partitioning::UnknownPartitioning(size)
+            }
+            Partitioning::Hash(exprs, size) => {
+                let new_exprs = exprs
+                    .into_iter()
+                    .map(|expr| {
+                        expr.transform_down(&|e| {
+                            Ok(e.as_any().downcast_ref::<Column>().map(|col| {
+                                Arc::new(Column::new(
+                                    col.name(),
+                                    window_expr_len + col.index(),
+                                ))
+                                    as Arc<dyn PhysicalExpr>
+                            }))
+                        })
+                        .unwrap()
+                    })
+                    .collect::<Vec<_>>();
+                Partitioning::Hash(new_exprs, size)
+            }
+            Partitioning::HivePartitioning(..) => todo!("output_partitioning"),
+        }
+    }
+    */
+
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         self.input().output_ordering()
     }

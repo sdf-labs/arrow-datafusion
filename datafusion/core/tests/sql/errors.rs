@@ -141,7 +141,7 @@ async fn unsupported_sql_returns_error() -> Result<()> {
 
     // create view
     let sql = "create view test_view as select * from aggregate_test_100";
-    let plan = state.create_logical_plan(sql).await;
+    let plan = state.create_logical_plan(sql, "").await;
     let physical_plan = state.create_physical_plan(&plan.unwrap()).await;
     assert!(physical_plan.is_err());
     assert_eq!(
@@ -151,7 +151,7 @@ async fn unsupported_sql_returns_error() -> Result<()> {
     );
     // // drop view
     let sql = "drop view test_view";
-    let plan = state.create_logical_plan(sql).await;
+    let plan = state.create_logical_plan(sql, "").await;
     let physical_plan = state.create_physical_plan(&plan.unwrap()).await;
     assert!(physical_plan.is_err());
     assert_eq!(
@@ -161,7 +161,7 @@ async fn unsupported_sql_returns_error() -> Result<()> {
     );
     // // drop table
     let sql = "drop table aggregate_test_100";
-    let plan = state.create_logical_plan(sql).await;
+    let plan = state.create_logical_plan(sql, "").await;
     let physical_plan = state.create_physical_plan(&plan.unwrap()).await;
     assert!(physical_plan.is_err());
     assert_eq!(

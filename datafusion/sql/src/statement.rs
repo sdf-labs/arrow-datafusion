@@ -351,8 +351,25 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         let schema = self.build_schema(columns)?;
 
+        // Corrected..
+        let atoms: Vec<&str> = name.split(".").collect();
+        let name = match atoms.len() {
+            1 => OwnedTableReference::Bare {
+                table: atoms[0].to_owned(),
+            },
+            2 => OwnedTableReference::Partial {
+                schema: atoms[0].to_owned(),
+                table: atoms[1].to_owned(),
+            },
+            3 => OwnedTableReference::Full {
+                catalog: atoms[0].to_owned(),
+                schema: atoms[1].to_owned(),
+                table: atoms[2].to_owned(),
+            },
+            _ => panic!(), // by construction should not be possible
+        };
         // External tables do not support schemas at the moment, so the name is just a table name
-        let name = OwnedTableReference::Bare { table: name };
+        // let name = OwnedTableReference::Bare { table: name };
 
         Ok(LogicalPlan::CreateExternalTable(PlanCreateExternalTable {
             schema: schema.to_dfschema_ref()?,

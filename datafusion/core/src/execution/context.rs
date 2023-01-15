@@ -30,6 +30,7 @@ use crate::{
 pub use datafusion_physical_expr::execution_props::ExecutionProps;
 use datafusion_physical_expr::var_provider::is_system_variables;
 use parking_lot::RwLock;
+use std::ops::ControlFlow;
 use std::sync::Arc;
 use std::{
     any::{Any, TypeId},
@@ -40,7 +41,6 @@ use std::{
     collections::{HashMap, HashSet},
     fmt::Debug,
 };
-use std::{ops::ControlFlow, sync::Weak};
 
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::record_batch::RecordBatch;
@@ -245,8 +245,33 @@ impl SessionContext {
     /// does not mutate the state based on such statements.
     pub async fn sql(&self, sql: &str) -> Result<DataFrame> {
         // create a query planner
-        let plan = self.state().create_logical_plan(sql).await?;
+        let plan = self.state().create_logical_plan(sql, "").await?;
+        self.sql_df(plan).await
+    }
 
+    /// todo
+    pub async fn sql_plan(&self, sql: &str) -> Result<LogicalPlan> {
+        // create a query planner
+        let plan = self.state().create_logical_plan(sql, "").await?;
+        Ok(plan)
+    }
+
+    /// todo
+    pub async fn sql_plan_and_df(
+        &self,
+        sql: &str,
+        filename: &str,
+    ) -> Result<(LogicalPlan, DataFrame)> {
+        // create a query planner
+        let plan = self.state().create_logical_plan(sql, filename).await?;
+        //TODO delete once BUG that vars are not propagated is resolved
+
+        let df = self.sql_df(plan.to_owned()).await?;
+        Ok((plan, df))
+    }
+
+    ///todo
+    pub async fn sql_df(&self, plan: LogicalPlan) -> Result<DataFrame> {
         match plan {
             LogicalPlan::CreateExternalTable(cmd) => {
                 self.create_external_table(&cmd).await
@@ -1009,16 +1034,6 @@ impl SessionContext {
         state.execution_props.start_execution();
         state
     }
-
-    /// Get weak reference to [`SessionState`]
-    pub fn state_weak_ref(&self) -> Weak<RwLock<SessionState>> {
-        Arc::downgrade(&self.state)
-    }
-
-    /// Register [`CatalogList`] in [`SessionState`]
-    pub fn register_catalog_list(&mut self, catalog_list: Arc<dyn CatalogList>) {
-        self.state.write().catalog_list = catalog_list;
-    }
 }
 
 impl FunctionRegistry for SessionContext {
@@ -1548,7 +1563,8 @@ impl SessionState {
             .expect("Failed to register default schema");
     }
 
-    fn resolve_table_ref<'a>(
+    /// test
+    pub fn resolve_table_ref<'a>(
         &'a self,
         table_ref: impl Into<TableReference<'a>>,
     ) -> ResolvedTableReference<'a> {
@@ -1558,7 +1574,8 @@ impl SessionState {
             .resolve(&catalog.default_catalog, &catalog.default_schema)
     }
 
-    fn schema_for_ref<'a>(
+    /// todo
+    pub fn schema_for_ref<'a>(
         &'a self,
         table_ref: impl Into<TableReference<'a>>,
     ) -> Result<Arc<dyn SchemaProvider>> {
@@ -1634,19 +1651,37 @@ impl SessionState {
     /// Creates a [`LogicalPlan`] from the provided SQL string
     ///
     /// See [`SessionContext::sql`] for a higher-level interface that also handles DDL
-    pub async fn create_logical_plan(&self, sql: &str) -> Result<LogicalPlan> {
+    pub async fn create_logical_plan(
+        &self,
+        sql: &str,
+        filename: &str,
+    ) -> Result<LogicalPlan> {
         use crate::catalog::information_schema::INFORMATION_SCHEMA_TABLES;
         use datafusion_sql::parser::Statement as DFStatement;
         use sqlparser::ast::*;
         use std::collections::hash_map::Entry;
 
-        let mut statements = DFParser::parse_sql(sql)?;
+        let mut statements = DFParser::parse_sql_with_scope(
+            sql,
+            filename.to_owned(),
+            self.config()
+                .config_options()
+                .catalog
+                .default_catalog
+                .to_owned(),
+            self.config()
+                .config_options()
+                .catalog
+                .default_schema
+                .to_owned(),
+            "".to_owned(),
+        )?;
         if statements.len() != 1 {
             return Err(DataFusionError::NotImplemented(
                 "The context currently only supports a single SQL statement".to_string(),
             ));
         }
-        let statement = statements.pop_front().unwrap();
+        let statement = statements.pop_front().unwrap().0;
 
         // Getting `TableProviders` is async but planing is not -- thus pre-fetch
         // table providers for all relations referenced in this query
@@ -1798,16 +1833,14 @@ impl SessionState {
     pub fn task_ctx(&self) -> Arc<TaskContext> {
         Arc::new(TaskContext::from(self))
     }
-
-    /// Return catalog list
-    pub fn catalog_list(&self) -> Arc<dyn CatalogList> {
-        self.catalog_list.clone()
-    }
 }
 
-struct SessionContextProvider<'a> {
-    state: &'a SessionState,
-    tables: HashMap<String, Arc<dyn TableSource>>,
+/// todo
+pub struct SessionContextProvider<'a> {
+    /// todo
+    pub state: &'a SessionState,
+    /// todo
+    pub tables: HashMap<String, Arc<dyn TableSource>>,
 }
 
 impl<'a> ContextProvider for SessionContextProvider<'a> {

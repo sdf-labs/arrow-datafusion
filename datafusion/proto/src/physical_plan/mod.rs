@@ -1003,6 +1003,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 Partitioning::UnknownPartitioning(partition_count) => {
                     PartitionMethod::Unknown(*partition_count as u64)
                 }
+                Partitioning::HivePartitioning(..) => todo!("try_from_physical_plan"),
             };
 
             Ok(protobuf::PhysicalPlanNode {

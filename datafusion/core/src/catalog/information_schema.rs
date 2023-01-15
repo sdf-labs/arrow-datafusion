@@ -38,10 +38,15 @@ use crate::physical_plan::SendableRecordBatchStream;
 
 use super::{catalog::CatalogList, schema::SchemaProvider};
 
+/// todo
 pub const INFORMATION_SCHEMA: &str = "information_schema";
+/// todo
 pub const TABLES: &str = "tables";
+/// todo
 pub const VIEWS: &str = "views";
+/// todo
 pub const COLUMNS: &str = "columns";
+/// todo
 pub const DF_SETTINGS: &str = "df_settings";
 
 /// All information schema tables

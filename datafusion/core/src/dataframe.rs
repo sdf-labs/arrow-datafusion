@@ -20,7 +20,6 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use parquet::file::properties::WriterProperties;
 
 use datafusion_common::{Column, DFSchema, ScalarValue};
@@ -40,11 +39,24 @@ use crate::logical_expr::{
     col, utils::find_window_exprs, Expr, JoinType, LogicalPlan, LogicalPlanBuilder,
     Partitioning, TableType,
 };
-use crate::physical_plan::file_format::{plan_to_csv, plan_to_json, plan_to_parquet};
+use crate::physical_plan::file_format::{
+    plan_to_csv, plan_to_json, plan_to_parquet, plan_to_parquet_partitioned,
+};
+
 use crate::physical_plan::SendableRecordBatchStream;
 use crate::physical_plan::{collect, collect_partitioned};
 use crate::physical_plan::{execute_stream, execute_stream_partitioned, ExecutionPlan};
 use crate::prelude::SessionContext;
+
+// use arrow::array::GenericByteArray;
+// use arrow::datatypes::GenericStringType;
+
+use arrow::datatypes::DataType;
+use async_trait::async_trait;
+
+use datafusion_common::DataFusionError;
+
+use std::usize;
 
 /// DataFrame represents a logical set of rows with the same named columns.
 /// Similar to a [Pandas DataFrame](https://pandas.pydata.org/pandas-docs/stable/reference/api/pandas.DataFrame.html) or
@@ -86,10 +98,42 @@ impl DataFrame {
         }
     }
 
+    /// Copy self
+    pub fn copy(&self) -> Result<Arc<DataFrame>> {
+        Ok(Arc::new(DataFrame::new(
+            self.session_state.clone(),
+            self.plan.clone(),
+        )))
+    }
+
     /// Create a physical plan
     pub async fn create_physical_plan(self) -> Result<Arc<dyn ExecutionPlan>> {
         self.session_state.create_physical_plan(&self.plan).await
     }
+
+    /* WOLFRAM
+        pub async fn create_physical_plan(&self) -> Result<Arc<dyn ExecutionPlan>> {
+            // this function is copied from SessionContext function of the
+            // same name
+            let state_cloned = {
+                let mut state = self.session_state.write();
+                state.execution_props.start_execution();
+
+                // We need to clone `state` to release the lock that is not `Send`. We could
+                // make the lock `Send` by using `tokio::sync::Mutex`, but that would require to
+                // propagate async even to the `LogicalPlan` building methods.
+                // Cloning `state` here is fine as we then pass it as immutable `&state`, which
+                // means that we avoid write consistency issues as the cloned version will not
+                // be written to. As for eventual modifications that would be applied to the
+                // original state after it has been cloned, they will not be picked up by the
+                // clone but that is okay, as it is equivalent to postponing the state update
+                // by keeping the lock until the end of the function scope.
+                state.clone()
+            };
+
+            state_cloned.create_physical_plan(&self.plan).await
+        }
+    */
 
     /// Filter the DataFrame by column. Returns a new DataFrame only containing the
     /// specified columns.
@@ -648,6 +692,51 @@ impl DataFrame {
     ) -> Result<()> {
         let plan = self.session_state.create_physical_plan(&self.plan).await?;
         plan_to_parquet(&self.session_state, plan, path, writer_properties).await
+    }
+
+    /// Write a `DataFrame` to a partitioned parquet file.
+    pub async fn write_parquet_partitioned(
+        &self,
+        path: &str,
+        writer_properties: Option<WriterProperties>,
+        partition_columns: Vec<String>,
+        insert_into: Option<String>,
+    ) -> Result<()> {
+        self.check_columns(&partition_columns)?;
+        let plan = self.session_state.create_physical_plan(&self.plan).await?;
+        let state = self.session_state.clone();
+        plan_to_parquet_partitioned(
+            &state,
+            plan,
+            path,
+            writer_properties,
+            partition_columns,
+            insert_into,
+        )
+        .await
+    }
+
+    fn check_columns(&self, partition_columns: &Vec<String>) -> Result<()> {
+        let is_varchar_rep = |data_type: DataType| -> bool {
+            match data_type.to_owned() {
+                arrow::datatypes::DataType::Utf8 => true,
+                arrow::datatypes::DataType::Dictionary(key_type, value_type) => {
+                    key_type.equals_datatype(&arrow::datatypes::DataType::UInt16)
+                        && value_type.equals_datatype(&arrow::datatypes::DataType::Utf8)
+                }
+                _ => false,
+            }
+        };
+        for col in partition_columns {
+            let data_type = self.schema().field_with_unqualified_name(col)?.data_type();
+            if !is_varchar_rep(data_type.to_owned()) {
+                return Err(DataFusionError::Execution(format!(
+                    "partition column '{}' must be of type 'varchar', got type '{}'",
+                    &col, &data_type
+                )));
+            }
+        }
+        Ok(())
     }
 
     /// Executes a query and writes the results to a partitioned JSON file.

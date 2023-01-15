@@ -139,6 +139,7 @@ pub fn adjust_right_output_partitioning(
                 .collect::<Vec<_>>();
             Partitioning::Hash(new_exprs, size)
         }
+        Partitioning::HivePartitioning(..) => todo!("adjust_right_output_partitioning"),
     }
 }
 

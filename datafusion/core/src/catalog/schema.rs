@@ -111,7 +111,7 @@ impl SchemaProvider for MemorySchemaProvider {
     ) -> Result<Option<Arc<dyn TableProvider>>> {
         if self.table_exist(name.as_str()) {
             return Err(DataFusionError::Execution(format!(
-                "The table {name} already exists"
+                "The table '{name}' already exists"
             )));
         }
         Ok(self.tables.insert(name, table))

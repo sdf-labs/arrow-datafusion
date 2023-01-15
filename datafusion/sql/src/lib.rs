@@ -31,3 +31,6 @@ mod values;
 
 pub use datafusion_common::{ResolvedTableReference, TableReference};
 pub use sqlparser;
+
+#[macro_use]
+extern crate log;
