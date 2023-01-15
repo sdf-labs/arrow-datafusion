@@ -700,7 +700,7 @@ impl DataFrame {
         path: &str,
         writer_properties: Option<WriterProperties>,
         partition_columns: Vec<String>,
-        aka: Option<String>,
+        insert_into: Option<String>,
     ) -> Result<()> {
         self.check_columns(&partition_columns)?;
         let plan = self.session_state.create_physical_plan(&self.plan).await?;
@@ -711,10 +711,9 @@ impl DataFrame {
             path,
             writer_properties,
             partition_columns,
-            aka,
+            insert_into,
         )
         .await
-        
     }
 
     fn check_columns(&self, partition_columns: &Vec<String>) -> Result<()> {

@@ -633,7 +633,7 @@ pub async fn plan_to_parquet_partitioned(
     path: impl AsRef<str>,
     writer_properties: Option<WriterProperties>,
     partition_columns: Vec<String>,
-    aka: Option<String>,
+    insert_into: Option<String>,
 ) -> Result<()> {
     REVERSE_HASH.lock().clear();
 
@@ -682,24 +682,28 @@ pub async fn plan_to_parquet_partitioned(
         seen.insert(*idx);
         let old_name = format!("part-{}.parquet", idx);
         let old_path = fs_path.join(old_name.to_owned());
-        // println!("old-path {:?} {}", old_path, old_path.is_file());
+        println!("old-path {:?} {}", old_path, old_path.is_file());
         if old_path.is_file() {
-            match aka.to_owned() {
+            match insert_into.to_owned() {
                 None => {
                     fs::create_dir_all(&fs_path.join(path))?;
                     let new_path = fs_path.join(path).join(old_name.to_owned());
-                    // println!("new-path {:?} {}", new_path, new_path.exists());
+                    println!("new-path {:?} {}", new_path, new_path.exists());
                     fs::rename(old_path, new_path)?;
                 }
                 Some(also_name) => {
-                    let part = fs_path
-                        .parent()
+                    let prefix = fs_path
+                        .parent() // .table
                         .unwrap()
-                        .join(&also_name.to_owned())
-                        .join(path);
+                        .parent() //.schema
+                        .unwrap()
+                        .parent() //.catalog
+                        .unwrap();
+                    let new_part_prefix = prefix.join(also_name.replace(".", "/"));
+                    let part = &new_part_prefix.join(path);
                     fs::create_dir_all(&part)?;
                     let new_path = part.join(old_name.to_owned());
-                    // println!("new-path {:?} {}", new_path, new_path.exists());
+                    println!("new-path {:?} {}", new_path, new_path.exists());
                     info!("written: {}", new_path.display());
                     fs::rename(old_path, new_path)?;
                 }

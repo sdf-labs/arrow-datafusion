@@ -18,6 +18,7 @@
 //! DataFusion SQL Parser based on [`sqlparser`]
 
 use datafusion_common::parsers::CompressionTypeVariant;
+
 use sqlparser::{
     ast::{
         ColumnDef, ColumnOptionDef, HiveDistributionStyle, Ident, ObjectName,
@@ -27,7 +28,7 @@ use sqlparser::{
     parser::{Parser, ParserError},
     tokenizer::{Token, TokenWithLocation, Tokenizer},
 };
-use std::{str::FromStr};
+use std::str::FromStr;
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     fmt, fs,
@@ -58,9 +59,11 @@ pub static CATALOG: &str = "catalog.yml";
 pub static WORKSPACE: &str = "workspace.yml";
 
 pub static DATA_DIR: &str = ".sdfcache";
-pub const SOURCE_CACHE:&str = "source_cache.csv";
+pub const SOURCE_CACHE: &str = "source_cache.csv";
 pub const DATA_CACHE: &str = "asset_cache.csv";
 
+const DEFAULT_CATALOG: &str = "sdf";
+const DEFAULT_SCHEMA: &str = "public";
 
 pub fn visit(filename: &str, catalog: &str, schema: &str) {
     VISITED_FILES.lock().unwrap().insert(filename.to_owned());
@@ -78,6 +81,7 @@ pub fn basename(path: &str) -> String {
         None => path.to_owned(),
     }
 }
+
 // Removes basename from directory path
 pub fn parent(path: &str) -> String {
     match path.rfind('/') {
@@ -99,6 +103,12 @@ pub fn strip_extension(path: &str, ext: &str) -> String {
     }
 }
 
+pub fn swap_extension(path: &str, old: &str, new: &str) -> String {
+    match path.strip_suffix(old) {
+        Some(base) => format!("{}{}", base, new),
+        None => format!("{}{}", path, new),
+    }
+}
 pub fn find_package_file(starting_directory: &Path) -> Option<PathBuf> {
     let mut path: PathBuf = starting_directory.into();
     let root_filename = Path::new(CATALOG);
@@ -181,6 +191,12 @@ pub struct DescribeTable {
     pub table_name: ObjectName,
 }
 
+impl fmt::Display for DescribeTable {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.table_name)
+    }
+}
+
 /// DataFusion Statement representations.
 ///
 /// Tokens parsed by [`DFParser`] are converted into these values.
@@ -194,6 +210,16 @@ pub enum Statement {
     DescribeTable(DescribeTable),
 }
 
+impl fmt::Display for Statement {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Statement::Statement(s) => write!(f, "{}", s),
+            Statement::CreateExternalTable(s) => write!(f, "{}", s),
+            Statement::DescribeTable(s) => write!(f, "{}", s),
+        }
+    }
+}
+
 /// SDF StatementMeta
 ///
 /// The location at which the statement is defined.
@@ -204,6 +230,24 @@ pub struct StatementMeta {
     pub table: String,
     pub line_number: i32,
     pub filename: String,
+}
+
+impl fmt::Display for StatementMeta {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}:{}:{}.{}{}",
+            self.filename,
+            self.line_number,
+            self.catalog,
+            self.schema,
+            if self.table == "" {
+                "".to_owned()
+            } else {
+                ".".to_owned() + &self.table
+            },
+        )
+    }
 }
 
 impl StatementMeta {
@@ -358,16 +402,27 @@ impl<'a> DFParser<'a> {
         match Self::parse_statements(parser) {
             Ok(res) => Ok(res),
             Err(sqlparser::parser::ParserError::ParserError(err)) => {
-                error!("{}: {}", &filename, err);
-                Err(ParserError::ParserError(format!("'{}': {}", &filename, err.to_string())))
+                error!("PARSE Error {}: {}", &filename, err);
+                Err(ParserError::ParserError(format!(
+                    "'{}': {}",
+                    &filename,
+                    err.to_string()
+                )))
             }
             Err(sqlparser::parser::ParserError::TokenizerError(err)) => {
-                error!("{}: {}", &filename, err);
-                Err(ParserError::ParserError(format!("'{}': {}", &filename, err.to_string())))
+                error!("LEX Error {}: {}", &filename, err);
+                Err(ParserError::ParserError(format!(
+                    "'{}': {}",
+                    &filename,
+                    err.to_string()
+                )))
             }
             Err(sqlparser::parser::ParserError::RecursionLimitExceeded) => {
                 error!("{}: {}", &filename, "Recursion Limit Exceeded!");
-                Err(ParserError::ParserError(format!("'{}': {}", &filename, "Recursion Limit Exceeded!")))
+                Err(ParserError::ParserError(format!(
+                    "'{}': {}",
+                    &filename, "Recursion Limit Exceeded!"
+                )))
             }
         }
     }
@@ -382,7 +437,6 @@ impl<'a> DFParser<'a> {
             while parser.parser.consume_token(&Token::SemiColon) {
                 expecting_statement_delimiter = false;
             }
-
             if parser.parser.peek_token() == Token::EOF {
                 break;
             }
@@ -454,52 +508,10 @@ impl<'a> DFParser<'a> {
     fn parse_use(
         parser: &mut DFParser,
     ) -> Result<VecDeque<(Statement, StatementMeta)>, ParserError> {
+        println!("parse use");
         let next = parser.parser.next_token();
+        println!("parse use {:?}", next);
         match next.clone().token {
-            // Token::SingleQuotedString(schema_path) => {
-            //     // we are staying in the same catalog -- we are reusing parser.catalog
-
-            //     // compute filename
-            //     let schema = basename(&schema_path);
-            //     let schema_filename = format!(
-            //         "{}/{}/{}.sql",
-            //         parser.workspace_path, parser.catalog, schema_path
-            //     );
-
-            //     // avoid duplicate uses
-            //     if VISITED_FILES.lock().unwrap().contains(&schema_filename) {
-            //         return Ok(VecDeque::new());
-            //     }
-            //     VISITED_FILES
-            //         .lock()
-            //         .unwrap()
-            //         .insert(schema_filename.clone());
-
-            //     let regex = Regex::new(r"^[/a-z0-9_]*$").unwrap();
-            //     if !regex.is_match(&schema_path) {
-            //         return parser.wrong_use(&format!("Schema path must consist only of lowercase chars, digits or '_' separated by '/', found {}",next), next );
-            //     }
-            //     if !Path::new(&schema_filename).is_file() {
-            //         return parser.wrong_use(
-            //             &format!("Missing schema file {}", schema_filename),
-            //             next,
-            //         );
-            //     };
-
-            //     // create scopes
-            //     let created_schema =
-            //         format!("CREATE SCHEMA {}.{};\n", &parser.catalog, &schema);
-
-            //     // continue parsing
-            //     Self::parse_sql_file(
-            //         &GenericDialect {},
-            //         schema_filename,
-            //         parser.catalog.to_owned(),
-            //         schema_path.to_owned(),
-            //         created_schema,
-            //         workspace_path,
-            //     )
-            // }
             Token::Word(w) => {
                 // switch to a possibly new catalog
 
@@ -523,6 +535,10 @@ impl<'a> DFParser<'a> {
                 // {
                 //     return parser.wrong_use(&format!("Catalog, schema, and table names must only be lowercase, digits or '_', found {}",catalog), next );
                 // }
+                println!(
+                    "parsed {catalog}|{schema}|{table} |||| passed {}",
+                    parser.catalog
+                );
 
                 if parser.catalog == "" {
                     println!(
@@ -535,6 +551,17 @@ impl<'a> DFParser<'a> {
                 // check whether new catalog exists
                 let schema_filename = format!("{}/{}.sql", catalog, schema);
                 let table_filename = format!("{}/{}/{}.sql", catalog, schema, table);
+
+                println!(
+                    "table_filename = {table_filename}|{}",
+                    Path::new(&table_filename).is_file()
+                );
+
+                println!(
+                    "schema_filename = {schema_filename}|{}",
+                    Path::new(&schema_filename).is_file()
+                );
+
                 let (is_table, filename) = if Path::new(&table_filename).is_file() {
                     (true, table_filename)
                 } else if Path::new(&schema_filename).is_file() {
@@ -548,6 +575,12 @@ impl<'a> DFParser<'a> {
                         .to_owned(),
                     ));
                 };
+                println!(
+                    "Is table {}, filename {}, Visitedfiles {:?}",
+                    is_table,
+                    filename,
+                    VISITED_FILES.lock().unwrap()
+                );
                 info!("-- USE {}.{}.{} from {}", catalog, schema, table, filename);
                 // avoid duplicate uses
                 if VISITED_FILES.lock().unwrap().contains(&filename) {
@@ -569,6 +602,8 @@ impl<'a> DFParser<'a> {
                     created_schema = format!("CREATE SCHEMA {}.{};\n", &catalog, &schema);
                     info!("{}", created_schema);
                 };
+
+                info!("parsing: {}", filename);
 
                 // continue parsing
                 Self::parse_sql_file(
@@ -605,12 +640,20 @@ impl<'a> DFParser<'a> {
                         // self.parser.prev_token();
                         let base_query = self.parser.parse_query()?;
                         let boxed_query = Box::new(base_query.to_owned());
-                        // println!("SELECT:: {} ; catalog {} schema {} table {}", base_query, self.catalog, self.schema, self.table);
-                        if self.table != "" {
+                        if self.filename != "" {
                             // this is a select of of table definition
-                            let c = Ident::new(&self.catalog);
-                            let s = Ident::new(&self.schema);
-                            let t = Ident::new(&self.table);
+                            // let c = Ident::new(&self.catalog);
+                            // let s = Ident::new(&self.schema);
+                            let c = Ident::new(self.catalog.to_owned());
+                            let s = Ident::new(self.schema.to_owned());
+                            // let t = if self.table != "" {
+                            //     Ident::new(&self.table)
+                            // } else {
+                            let t = Ident::new(strip_extension(
+                                &basename(&self.filename),
+                                ".sql",
+                            ));
+                            // };
                             let create_table_statement =
                                 sqlparser::ast::Statement::CreateTable {
                                     or_replace: false,
@@ -620,6 +663,7 @@ impl<'a> DFParser<'a> {
                                     if_not_exists: false,
                                     /// Table name
                                     name: ObjectName(vec![c, s, t]), // vec of ident
+                                    // name: ObjectName(vec![t]), // vec of ident
                                     /// Optional schema
                                     columns: vec![],
                                     constraints: vec![],
@@ -693,26 +737,186 @@ impl<'a> DFParser<'a> {
             self.parse_create_external_table()
         } else {
             let stm = self.parser.parse_create()?;
-            let table = match &stm {
-                SQLStatement::CreateView { name, .. }
-                | SQLStatement::CreateTable { name, .. }
+            let (name, qualified_stm) = match stm {
+                SQLStatement::CreateView {
+                    name,
+                    cluster_by,
+                    columns,
+                    materialized,
+                    or_replace,
+                    query,
+                    with_options,
+                } => (
+                    qualify_object_name(&self.catalog, &self.schema, &name),
+                    SQLStatement::CreateView {
+                        name: qualify_object_name(&self.catalog, &self.schema, &name),
+                        cluster_by,
+                        columns,
+                        materialized,
+                        or_replace,
+                        query,
+                        with_options,
+                    },
+                ),
+                SQLStatement::CreateTable {
+                    name,
+                    collation,
+                    columns,
+                    constraints,
+                    default_charset,
+                    engine,
+                    external,
+                    file_format,
+                    global,
+                    hive_distribution,
+                    hive_formats,
+                    if_not_exists,
+                    like,
+                    location,
+                    on_cluster,
+                    on_commit,
+                    or_replace,
+                    query,
+                    table_properties,
+                    temporary,
+                    with_options,
+                    without_rowid,
+                    clone,
+                } => (
+                    qualify_object_name(&self.catalog, &self.schema, &name),
+                    SQLStatement::CreateTable {
+                        name: qualify_object_name(&self.catalog, &self.schema, &name),
+                        collation,
+                        columns,
+                        constraints,
+                        default_charset,
+                        engine,
+                        external,
+                        file_format,
+                        global,
+                        hive_distribution,
+                        hive_formats,
+                        if_not_exists,
+                        like,
+                        location,
+                        on_cluster,
+                        on_commit,
+                        or_replace,
+                        query,
+                        table_properties,
+                        temporary,
+                        with_options,
+                        without_rowid,
+                        clone,
+                    },
+                ),
+                SQLStatement::CreateVirtualTable {
+                    name,
+                    if_not_exists,
+                    module_args,
+                    module_name,
+                } => (
+                    qualify_object_name(&self.catalog, &self.schema, &name),
+                    SQLStatement::CreateVirtualTable {
+                        name: qualify_object_name(&self.catalog, &self.schema, &name),
+                        if_not_exists,
+                        module_args,
+                        module_name,
+                    },
+                ),
+                _ => (ObjectName(vec![]), stm),
+            };
+
+            let _table = match &qualified_stm {
+                SQLStatement::CreateView { name, .. } => name.to_owned(),
+                SQLStatement::CreateTable { name, .. }
                 | SQLStatement::CreateVirtualTable { name, .. } => name.to_owned(),
                 _ => sqlparser::ast::ObjectName(vec![]),
             };
             Ok((
-                Statement::Statement(Box::from(stm)),
-                self.with_meta(table.to_string()),
+                Statement::Statement(Box::from(qualified_stm)),
+                self.with_meta_for_object_name(qualify_object_name(
+                    &self.catalog,
+                    &self.schema,
+                    &name,
+                )),
             ))
         }
     }
 
     fn with_meta(&mut self, table: String) -> StatementMeta {
-        StatementMeta::new_with_table(
-            self.catalog.to_owned(),
-            self.schema.to_owned(),
-            table,
-            self.filename.to_owned(),
-        )
+        // TODO this should be the qualified name, where local schema catalog can ovveride default ones.
+        // StatementMeta::new_with_table(
+        //     self.catalog.to_owned(),
+        //     self.schema.to_owned(),
+        //     table,
+        //     self.filename.to_owned(),
+        // )
+        let name: Vec<String> = table.split(".").map(|n| n.to_owned()).collect();
+        match name.len() {
+            0 => StatementMeta::new_with_table(
+                DEFAULT_CATALOG.to_owned(),
+                DEFAULT_SCHEMA.to_owned(),
+                "N.N".to_owned(),
+                self.filename.to_owned(),
+            ),
+            1 => StatementMeta::new_with_table(
+                DEFAULT_CATALOG.to_owned(),
+                DEFAULT_SCHEMA.to_owned(),
+                name[0].to_owned(),
+                self.filename.to_owned(),
+            ),
+            2 => StatementMeta::new_with_table(
+                DEFAULT_CATALOG.to_owned(),
+                name[0].to_owned(),
+                name[1].to_owned(),
+                self.filename.to_owned(),
+            ),
+            3 => StatementMeta::new_with_table(
+                name[0].to_owned(),
+                name[1].to_owned(),
+                name[2].to_owned(),
+                self.filename.to_owned(),
+            ),
+            _ => {
+                eprintln!("with object {:?}", name);
+                todo!("with object {:?}", name)
+            }
+        }
+    }
+
+    fn with_meta_for_object_name(&mut self, name: ObjectName) -> StatementMeta {
+        // TODO this should be the qualified name, where local schema catalog can ovveride default ones.
+        match name.0.len() {
+            0 => StatementMeta::new_with_table(
+                DEFAULT_CATALOG.to_owned(),
+                DEFAULT_SCHEMA.to_owned(),
+                "N.N".to_owned(),
+                self.filename.to_owned(),
+            ),
+            1 => StatementMeta::new_with_table(
+                DEFAULT_CATALOG.to_owned(),
+                DEFAULT_SCHEMA.to_owned(),
+                name.0[0].value.to_owned(),
+                self.filename.to_owned(),
+            ),
+            2 => StatementMeta::new_with_table(
+                DEFAULT_CATALOG.to_owned(),
+                name.0[0].value.to_owned(),
+                name.0[1].value.to_owned(),
+                self.filename.to_owned(),
+            ),
+            3 => StatementMeta::new_with_table(
+                name.0[0].value.to_owned(),
+                name.0[1].value.to_owned(),
+                name.0[2].value.to_owned(),
+                self.filename.to_owned(),
+            ),
+            _ => {
+                eprintln!("with object {}", name);
+                todo!("with object {}", name)
+            }
+        }
     }
 
     fn parse_partitions(&mut self) -> Result<Vec<String>, ParserError> {
@@ -863,7 +1067,7 @@ impl<'a> DFParser<'a> {
         let location2 = location.to_owned();
         let file_type2 = file_type.to_owned();
         let create = CreateExternalTable {
-            name: table_name.to_string(),
+            name: qualify_name(&self.catalog, &self.schema, &table_name.to_string()),
             columns,
             file_type,
             has_header,
@@ -883,7 +1087,10 @@ impl<'a> DFParser<'a> {
 
         Ok((
             Statement::CreateExternalTable(create),
-            self.with_meta(table_name.to_string().to_owned()),
+            self.with_meta(
+                qualify_name(&self.catalog, &self.schema, &table_name.to_string())
+                    .to_owned(),
+            ),
         ))
     }
 
@@ -964,6 +1171,42 @@ impl<'a> DFParser<'a> {
     }
 }
 
+/// todo
+pub fn qualify_name(_catalog: &str, _schema: &str, name: &str) -> String {
+    // let trimmed = name.trim_matches('_');
+    // let c: Vec<&str> = name.split(".").collect();
+    // let res = match c.len() {
+    //     1 => format!("{}.{}.{}", catalog, schema, c[0]),
+    //     2 => format!("{}.{}.{}", catalog, c[0], c[1]),
+    //     3 => trimmed.to_owned(),
+    //     _ => panic!(),
+    // };
+    // // println!("qualified_name {} {} {} => {}", catalog, schema, name, res);
+    // res
+    name.to_owned()
+}
+
+/// todo
+pub fn qualify_object_name(
+    _catalog: &str,
+    _schema: &str,
+    name: &ObjectName,
+) -> ObjectName {
+    // let c: Vec<Ident> = name.0.to_vec();
+    // let res = match c.len() {
+    //     1 => ObjectName(vec![
+    //         Ident::new(catalog),
+    //         Ident::new(schema),
+    //         c[0].to_owned(),
+    //     ]),
+    //     2 => ObjectName(vec![Ident::new(catalog), c[0].to_owned(), c[1].to_owned()]),
+    //     3 => name.to_owned(),
+    //     _ => panic!(),
+    // };
+    // // println!("qualified_name {} {} {} => {}", catalog, schema, name, res);
+    // res
+    name.to_owned()
+}
 #[cfg(test)]
 mod tests {
     use super::*;
