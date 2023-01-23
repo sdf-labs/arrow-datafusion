@@ -1064,7 +1064,7 @@ impl<'a> DFParser<'a> {
 
         self.parser.expect_keyword(Keyword::LOCATION)?;
         let location = self.parser.parse_literal_string()?;
-        if !Path::exists(Path::new(&location)) {
+        if !location.starts_with("s3://") && !Path::exists(Path::new(&location)) {
             return Err(ParserError::ParserError(format!(
                 "Missing external file '{location}'"
             )));
