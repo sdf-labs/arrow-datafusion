@@ -55,7 +55,7 @@ use bytes::Bytes;
 use datafusion_expr::Expr;
 use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryFutureExt, TryStreamExt};
-use log::{debug, info};
+use log::{debug, info, trace};
 use object_store::{ObjectMeta, ObjectStore};
 use parquet::arrow::arrow_reader::ArrowReaderOptions;
 use parquet::arrow::async_reader::AsyncFileReader;
@@ -675,20 +675,20 @@ pub async fn plan_to_parquet_partitioned(
 
     let fs_path = std::path::Path::new(&path_);
     let reverse_hash = REVERSE_HASH.lock();
-    debug!("MAPPER REVERSE HASH {:?}", reverse_hash);
+    debug!("reverse_hash {:?}", reverse_hash);
 
     let mut seen: HashSet<u64> = HashSet::new();
     for (path, idx) in reverse_hash.values() {
         seen.insert(*idx);
         let old_name = format!("part-{}.parquet", idx);
         let old_path = fs_path.join(old_name.to_owned());
-        println!("old-path {:?} {}", old_path, old_path.is_file());
+        trace!("old-path {:?} {}", old_path, old_path.is_file());
         if old_path.is_file() {
             match insert_into.to_owned() {
                 None => {
                     fs::create_dir_all(&fs_path.join(path))?;
                     let new_path = fs_path.join(path).join(old_name.to_owned());
-                    println!("new-path {:?} {}", new_path, new_path.exists());
+                    trace!("new-path {:?} {}", new_path, new_path.exists());
                     fs::rename(old_path, new_path)?;
                 }
                 Some(also_name) => {
@@ -703,7 +703,7 @@ pub async fn plan_to_parquet_partitioned(
                     let part = &new_part_prefix.join(path);
                     fs::create_dir_all(&part)?;
                     let new_path = part.join(old_name.to_owned());
-                    println!("new-path {:?} {}", new_path, new_path.exists());
+                    trace!("new-path {:?} {}", new_path, new_path.exists());
                     info!("written: {}", new_path.display());
                     fs::rename(old_path, new_path)?;
                 }
