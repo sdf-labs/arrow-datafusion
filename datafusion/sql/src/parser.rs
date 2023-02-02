@@ -401,24 +401,13 @@ impl<'a> DFParser<'a> {
         )?;
         match Self::parse_statements(parser) {
             Ok(res) => Ok(res),
-            Err(sqlparser::parser::ParserError::ParserError(err)) => {
-                error!("PARSE Error {}: {}", &filename, err);
-                Err(ParserError::ParserError(format!(
-                    "'{}': {}",
-                    &filename,
-                    err.to_string()
-                )))
-            }
-            Err(sqlparser::parser::ParserError::TokenizerError(err)) => {
-                error!("LEX Error {}: {}", &filename, err);
-                Err(ParserError::ParserError(format!(
-                    "'{}': {}",
-                    &filename,
-                    err.to_string()
-                )))
-            }
+            Err(sqlparser::parser::ParserError::ParserError(err)) => Err(
+                ParserError::ParserError(format!("'{}': {}", &filename, err.to_string())),
+            ),
+            Err(sqlparser::parser::ParserError::TokenizerError(err)) => Err(
+                ParserError::ParserError(format!("'{}': {}", &filename, err.to_string())),
+            ),
             Err(sqlparser::parser::ParserError::RecursionLimitExceeded) => {
-                error!("{}: {}", &filename, "Recursion Limit Exceeded!");
                 Err(ParserError::ParserError(format!(
                     "'{}': {}",
                     &filename, "Recursion Limit Exceeded!"
@@ -508,9 +497,7 @@ impl<'a> DFParser<'a> {
     fn parse_use(
         parser: &mut DFParser,
     ) -> Result<VecDeque<(Statement, StatementMeta)>, ParserError> {
-        println!("parse use");
         let next = parser.parser.next_token();
-        println!("parse use {:?}", next);
         match next.clone().token {
             Token::Word(w) => {
                 // switch to a possibly new catalog
