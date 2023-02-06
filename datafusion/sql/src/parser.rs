@@ -109,6 +109,7 @@ pub fn swap_extension(path: &str, old: &str, new: &str) -> String {
         None => format!("{}{}", path, new),
     }
 }
+
 pub fn find_package_file(starting_directory: &Path) -> Option<PathBuf> {
     let mut path: PathBuf = starting_directory.into();
     let root_filename = Path::new(CATALOG);
@@ -132,6 +133,68 @@ pub fn find_package_path(starting_directory: &Path) -> Option<PathBuf> {
         Some(tmp)
     } else {
         None
+    }
+}
+
+// HACK HACK: two problems: 1) this copies the code from build.rs of SDF; 
+// 2) Datafusion should not be aware of the workspace file; it should support 
+// a way of setting the root dir as a session parameter
+
+pub fn find_file(starting_directory: &Path, file: &Path) -> Option<PathBuf> {
+    let mut path: PathBuf = starting_directory.into();
+    loop {
+        path.push(file);
+        if path.is_file() {
+            break Some(path.to_path_buf().canonicalize().unwrap());
+        }
+        if !(path.pop() && path.pop()) {
+            // remove file && remove parent
+            break None;
+        }
+    }
+}
+
+pub fn find_path(starting_directory: &Path, file: &Path) -> Option<String> {
+    if let Some(path) = find_file(Path::new(&starting_directory), file) {
+        let mut tmp: PathBuf = path.into();
+        tmp.pop();
+        Some(tmp.display().to_string())
+    } else {
+        None
+    }
+}
+
+fn find_workspace_dir(search_start: &str) -> Option<String> {
+    let start = Path::new(search_start);
+    find_path(start, &Path::new(WORKSPACE))
+}
+
+fn get_full_path(ws_dir: &str, input: &str) -> Option<String> {
+    let input_path = Path::new(input);
+    if input_path.is_absolute() {
+        if let Some(p) = input_path.canonicalize().ok() {
+            p.to_str().map(|x| x.to_owned())
+        } else {
+            None
+        }
+    } else {
+        if let Some(p) = Path::new(ws_dir).join(input).canonicalize().ok() {
+            p.to_str().map(|x| x.to_owned())
+        } else {
+            None
+        }
+    }
+}
+
+fn exists_full_path(path: &str, start_path: &str) -> bool {
+    if let Some(ws_dir) = find_workspace_dir(start_path) {
+        if let Some(full) = get_full_path(&ws_dir, path) {
+            Path::new(&full).exists()
+        } else {
+            false
+        }
+    } else {
+        false
     }
 }
 
@@ -1051,7 +1114,8 @@ impl<'a> DFParser<'a> {
 
         self.parser.expect_keyword(Keyword::LOCATION)?;
         let location = self.parser.parse_literal_string()?;
-        if !location.starts_with("s3://") && !Path::exists(Path::new(&location)) {
+        if !location.starts_with("s3://") && !exists_full_path(&location, &self.filename)
+        {
             return Err(ParserError::ParserError(format!(
                 "Missing external file '{location}'"
             )));

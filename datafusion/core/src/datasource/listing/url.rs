@@ -98,7 +98,16 @@ impl ListingTableUrl {
             None => (s, None),
         };
 
-        let path = std::path::Path::new(prefix).canonicalize()?;
+        // HACK HACK: This is a major hack -- it adjust a particular relative directory
+        // to a particular workspace. A proper fix, needs to thread through the workspace
+        // directory to this code somehow, perhaps via pre-initializing table providers with it
+        let prefix = if prefix.starts_with("data/") {
+            let suffix: &Vec<&str> = &prefix.split("/").collect();
+            format!("tests/propagation/data/{}", suffix[1])
+        } else {
+            prefix.to_owned()
+        };
+        let path = std::path::Path::new(&prefix).canonicalize()?;
         let url = if path.is_dir() {
             Url::from_directory_path(path)
         } else {
