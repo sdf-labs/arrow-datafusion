@@ -659,7 +659,7 @@ pub async fn plan_to_parquet_partitioned(
         crate::physical_plan::Partitioning::HivePartitioning(
             partition_columns.to_vec(),
             exprs,
-            10, // max number of partitions TODO use default, i.e num of cpus..
+            1000, // max number of partitions TODO use default, i.e num of cpus..
         ),
     )?);
     // save some stuff
