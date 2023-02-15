@@ -865,7 +865,7 @@ impl ExpressionVisitor for ColumnCollector {
     }
 }
 
-pub(crate) fn find_columns_referenced_by_expr(e: &Expr) -> Vec<Column> {
+pub fn find_columns_referenced_by_expr(e: &Expr) -> Vec<Column> {
     // As the `ExpressionVisitor` impl above always returns Ok, this
     // "can't" error
     let ColumnCollector { exprs } = e
