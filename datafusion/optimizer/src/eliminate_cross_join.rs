@@ -38,7 +38,7 @@ impl EliminateCrossJoin {
     }
 }
 
-/// Attempt to reorder join tp eliminate cross joins to inner joins.
+/// Attempt to reorder join to eliminate cross joins to inner joins.
 /// for queries:
 /// 'select ... from a, b where a.x = b.y and b.xx = 100;'
 /// 'select ... from a, b where (a.x = b.y and b.xx = 100) or (a.x = b.y and b.xx = 200);'
@@ -62,6 +62,12 @@ impl OptimizerRule for EliminateCrossJoin {
                 let mut all_inputs: Vec<LogicalPlan> = vec![];
                 match &input {
                     LogicalPlan::Join(join) if (join.join_type == JoinType::Inner) => {
+                        // The filter of inner join will lost, skip this rule.
+                        // issue: https://github.com/apache/arrow-datafusion/issues/4844
+                        if join.filter.is_some() {
+                            return Ok(None);
+                        }
+
                         flatten_join_inputs(
                             &input,
                             &mut possible_join_keys,
@@ -76,7 +82,7 @@ impl OptimizerRule for EliminateCrossJoin {
                         )?;
                     }
                     _ => {
-                        return Ok(Some(utils::optimize_children(self, plan, config)?));
+                        return utils::optimize_children(self, plan, config);
                     }
                 }
 
@@ -96,7 +102,7 @@ impl OptimizerRule for EliminateCrossJoin {
                     )?;
                 }
 
-                left = utils::optimize_children(self, &left, config)?;
+                left = utils::optimize_children(self, &left, config)?.unwrap_or(left);
 
                 if plan.schema() != left.schema() {
                     left = LogicalPlan::Projection(Projection::new_from_schema(
@@ -122,7 +128,7 @@ impl OptimizerRule for EliminateCrossJoin {
                 }
             }
 
-            _ => Ok(Some(utils::optimize_children(self, plan, config)?)),
+            _ => utils::optimize_children(self, plan, config),
         }
     }
 
@@ -241,10 +247,12 @@ fn intersect(
     vec1: &[(Expr, Expr)],
     vec2: &[(Expr, Expr)],
 ) {
-    for x1 in vec1.iter() {
-        for x2 in vec2.iter() {
-            if x1.0 == x2.0 && x1.1 == x2.1 || x1.1 == x2.0 && x1.0 == x2.1 {
-                accum.push((x1.0.clone(), x1.1.clone()));
+    if !(vec1.is_empty() || vec2.is_empty()) {
+        for x1 in vec1.iter() {
+            for x2 in vec2.iter() {
+                if x1.0 == x2.0 && x1.1 == x2.1 || x1.1 == x2.0 && x1.0 == x2.1 {
+                    accum.push((x1.0.clone(), x1.1.clone()));
+                }
             }
         }
     }

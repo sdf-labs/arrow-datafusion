@@ -17,7 +17,10 @@
 
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::{
-    array::{Int32Array, StringArray, UInt32Array},
+    array::{
+        ArrayRef, Int32Array, Int32Builder, ListBuilder, StringArray, StringBuilder,
+        StructBuilder, UInt32Array, UInt32Builder,
+    },
     record_batch::RecordBatch,
 };
 use datafusion::from_slice::FromSlice;
@@ -125,6 +128,82 @@ async fn sort_on_unprojected_columns() -> Result<()> {
 }
 
 #[tokio::test]
+async fn sort_on_distinct_columns() -> Result<()> {
+    let schema = Schema::new(vec![
+        Field::new("a", DataType::Int32, false),
+        Field::new("b", DataType::Int32, false),
+    ]);
+
+    let batch = RecordBatch::try_new(
+        Arc::new(schema.clone()),
+        vec![
+            Arc::new(Int32Array::from_slice([1, 10, 10, 100])),
+            Arc::new(Int32Array::from_slice([2, 3, 4, 5])),
+        ],
+    )
+    .unwrap();
+
+    let ctx = SessionContext::new();
+    ctx.register_batch("t", batch).unwrap();
+    let df = ctx
+        .table("t")
+        .await
+        .unwrap()
+        .select(vec![col("a")])
+        .unwrap()
+        .distinct()
+        .unwrap()
+        .sort(vec![Expr::Sort(Sort::new(Box::new(col("a")), false, true))])
+        .unwrap();
+    let results = df.collect().await.unwrap();
+
+    #[rustfmt::skip]
+    let expected = vec![
+        "+-----+",
+        "| a   |",
+        "+-----+",
+        "| 100 |",
+        "| 10  |",
+        "| 1   |",
+        "+-----+",
+    ];
+    assert_batches_eq!(expected, &results);
+    Ok(())
+}
+#[tokio::test]
+async fn sort_on_distinct_unprojected_columns() -> Result<()> {
+    let schema = Schema::new(vec![
+        Field::new("a", DataType::Int32, false),
+        Field::new("b", DataType::Int32, false),
+    ]);
+
+    let batch = RecordBatch::try_new(
+        Arc::new(schema.clone()),
+        vec![
+            Arc::new(Int32Array::from_slice([1, 10, 10, 100])),
+            Arc::new(Int32Array::from_slice([2, 3, 4, 5])),
+        ],
+    )
+    .unwrap();
+
+    // Cannot sort on a column after distinct that would add a new column
+    let ctx = SessionContext::new();
+    ctx.register_batch("t", batch).unwrap();
+    let err = ctx
+        .table("t")
+        .await
+        .unwrap()
+        .select(vec![col("a")])
+        .unwrap()
+        .distinct()
+        .unwrap()
+        .sort(vec![Expr::Sort(Sort::new(Box::new(col("b")), false, true))])
+        .unwrap_err();
+    assert_eq!(err.to_string(), "Error during planning: For SELECT DISTINCT, ORDER BY expressions b must appear in select list");
+    Ok(())
+}
+
+#[tokio::test]
 async fn filter_with_alias_overwrite() -> Result<()> {
     let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
 
@@ -168,24 +247,19 @@ async fn select_with_alias_overwrite() -> Result<()> {
     let batch = RecordBatch::try_new(
         Arc::new(schema.clone()),
         vec![Arc::new(Int32Array::from_slice([1, 10, 10, 100]))],
-    )
-    .unwrap();
+    )?;
 
     let ctx = SessionContext::new();
-    ctx.register_batch("t", batch).unwrap();
+    ctx.register_batch("t", batch)?;
 
     let df = ctx
         .table("t")
-        .await
-        .unwrap()
-        .select(vec![col("a").alias("a")])
-        .unwrap()
-        .select(vec![(col("a").eq(lit(10))).alias("a")])
-        .unwrap()
-        .select(vec![col("a")])
-        .unwrap();
+        .await?
+        .select(vec![col("a").alias("a")])?
+        .select(vec![(col("a").eq(lit(10))).alias("a")])?
+        .select(vec![col("a")])?;
 
-    let results = df.collect().await.unwrap();
+    let results = df.collect().await?;
 
     #[rustfmt::skip]
         let expected = vec![
@@ -319,19 +393,19 @@ async fn test_grouping_set_array_agg_with_overflow() -> Result<()> {
         "|    | 2  | 184    | 8.363636363636363   |",
         "|    | 1  | 367    | 16.681818181818183  |",
         "| e  |    | 847    | 40.333333333333336  |",
-        "| e  | 5  | -22    | -11                 |",
+        "| e  | 5  | -22    | -11.0               |",
         "| e  | 4  | 261    | 37.285714285714285  |",
-        "| e  | 3  | 192    | 48                  |",
+        "| e  | 3  | 192    | 48.0                |",
         "| e  | 2  | 189    | 37.8                |",
         "| e  | 1  | 227    | 75.66666666666667   |",
         "| d  |    | 458    | 25.444444444444443  |",
         "| d  | 5  | -99    | -49.5               |",
-        "| d  | 4  | 162    | 54                  |",
+        "| d  | 4  | 162    | 54.0                |",
         "| d  | 3  | 124    | 41.333333333333336  |",
         "| d  | 2  | 328    | 109.33333333333333  |",
         "| d  | 1  | -57    | -8.142857142857142  |",
         "| c  |    | -28    | -1.3333333333333333 |",
-        "| c  | 5  | 24     | 12                  |",
+        "| c  | 5  | 24     | 12.0                |",
         "| c  | 4  | -43    | -10.75              |",
         "| c  | 3  | 190    | 47.5                |",
         "| c  | 2  | -389   | -55.57142857142857  |",
@@ -339,12 +413,12 @@ async fn test_grouping_set_array_agg_with_overflow() -> Result<()> {
         "| b  |    | -111   | -5.842105263157895  |",
         "| b  | 5  | -1     | -0.2                |",
         "| b  | 4  | -223   | -44.6               |",
-        "| b  | 3  | -84    | -42                 |",
+        "| b  | 3  | -84    | -42.0               |",
         "| b  | 2  | 102    | 25.5                |",
         "| b  | 1  | 95     | 31.666666666666668  |",
         "| a  |    | -385   | -18.333333333333332 |",
-        "| a  | 5  | -96    | -32                 |",
-        "| a  | 4  | -128   | -32                 |",
+        "| a  | 5  | -96    | -32.0               |",
+        "| a  | 4  | -128   | -32.0               |",
         "| a  | 3  | -27    | -4.5                |",
         "| a  | 2  | -46    | -15.333333333333334 |",
         "| a  | 1  | -88    | -17.6               |",
@@ -406,6 +480,234 @@ async fn join_with_alias_filter() -> Result<()> {
         "+----+----+---+----+---+---+",
     ];
 
+    assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn right_semi_with_alias_filter() -> Result<()> {
+    let join_ctx = create_join_context()?;
+    let t1 = join_ctx.table("t1").await?;
+    let t2 = join_ctx.table("t2").await?;
+
+    // t1.a = t2.a and t1.c > 1 and t2.c > 1
+    let filter = col("t1.a")
+        .eq(col("t2.a"))
+        .and(col("t1.c").gt(lit(1u32)))
+        .and(col("t2.c").gt(lit(1u32)));
+
+    let df = t1
+        .join(t2, JoinType::RightSemi, &[], &[], Some(filter))?
+        .select(vec![col("t2.a"), col("t2.b"), col("t2.c")])?;
+    let optimized_plan = df.clone().into_optimized_plan()?;
+    let expected = vec![
+        "RightSemi Join: t1.a = t2.a [a:UInt32, b:Utf8, c:Int32]",
+        "  Filter: t1.c > Int32(1) [a:UInt32, c:Int32]",
+        "    TableScan: t1 projection=[a, c] [a:UInt32, c:Int32]",
+        "  Filter: t2.c > Int32(1) [a:UInt32, b:Utf8, c:Int32]",
+        "    TableScan: t2 projection=[a, b, c] [a:UInt32, b:Utf8, c:Int32]",
+    ];
+
+    let formatted = optimized_plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+
+    let results = df.collect().await?;
+    let expected: Vec<&str> = vec![
+        "+-----+---+---+",
+        "| a   | b | c |",
+        "+-----+---+---+",
+        "| 10  | b | 2 |",
+        "| 100 | d | 4 |",
+        "+-----+---+---+",
+    ];
+    assert_batches_sorted_eq!(expected, &results);
+    Ok(())
+}
+
+#[tokio::test]
+async fn right_anti_filter_push_down() -> Result<()> {
+    let join_ctx = create_join_context()?;
+    let t1 = join_ctx.table("t1").await?;
+    let t2 = join_ctx.table("t2").await?;
+
+    // t1.a = t2.a and t1.c > 1 and t2.c > 1
+    let filter = col("t1.a")
+        .eq(col("t2.a"))
+        .and(col("t1.c").gt(lit(1u32)))
+        .and(col("t2.c").gt(lit(1u32)));
+
+    let df = t1
+        .join(t2, JoinType::RightAnti, &[], &[], Some(filter))?
+        .select(vec![col("t2.a"), col("t2.b"), col("t2.c")])?;
+    let optimized_plan = df.clone().into_optimized_plan()?;
+    let expected = vec![
+        "RightAnti Join: t1.a = t2.a Filter: t2.c > Int32(1) [a:UInt32, b:Utf8, c:Int32]",
+        "  Filter: t1.c > Int32(1) [a:UInt32, c:Int32]",
+        "    TableScan: t1 projection=[a, c] [a:UInt32, c:Int32]",
+        "  TableScan: t2 projection=[a, b, c] [a:UInt32, b:Utf8, c:Int32]",
+    ];
+
+    let formatted = optimized_plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+
+    let results = df.collect().await?;
+    let expected: Vec<&str> = vec![
+        "+----+---+---+",
+        "| a  | b | c |",
+        "+----+---+---+",
+        "| 13 | c | 3 |",
+        "| 3  | a | 1 |",
+        "+----+---+---+",
+    ];
+    assert_batches_sorted_eq!(expected, &results);
+    Ok(())
+}
+
+#[tokio::test]
+async fn unnest_columns() -> Result<()> {
+    const NUM_ROWS: usize = 4;
+    let df = table_with_nested_types(NUM_ROWS).await?;
+    let results = df.collect().await?;
+    let expected = vec![
+        "+----------+------------------------------------------------+--------------------+",
+        "| shape_id | points                                         | tags               |",
+        "+----------+------------------------------------------------+--------------------+",
+        "| 1        | [{x: -3, y: -4}, {x: -3, y: 6}, {x: 2, y: -2}] | [tag1]             |",
+        "| 2        |                                                | [tag1, tag2]       |",
+        "| 3        | [{x: -9, y: 2}, {x: -10, y: -4}]               |                    |",
+        "| 4        | [{x: -3, y: 5}, {x: 2, y: -1}]                 | [tag1, tag2, tag3] |",
+        "+----------+------------------------------------------------+--------------------+",
+    ];
+    assert_batches_sorted_eq!(expected, &results);
+
+    // Unnest tags
+    let df = table_with_nested_types(NUM_ROWS).await?;
+    let results = df.unnest_column("tags")?.collect().await?;
+    let expected = vec![
+        "+----------+------------------------------------------------+------+",
+        "| shape_id | points                                         | tags |",
+        "+----------+------------------------------------------------+------+",
+        "| 1        | [{x: -3, y: -4}, {x: -3, y: 6}, {x: 2, y: -2}] | tag1 |",
+        "| 2        |                                                | tag1 |",
+        "| 2        |                                                | tag2 |",
+        "| 3        | [{x: -9, y: 2}, {x: -10, y: -4}]               |      |",
+        "| 4        | [{x: -3, y: 5}, {x: 2, y: -1}]                 | tag1 |",
+        "| 4        | [{x: -3, y: 5}, {x: 2, y: -1}]                 | tag2 |",
+        "| 4        | [{x: -3, y: 5}, {x: 2, y: -1}]                 | tag3 |",
+        "+----------+------------------------------------------------+------+",
+    ];
+    assert_batches_sorted_eq!(expected, &results);
+
+    // Test aggregate results for tags.
+    let df = table_with_nested_types(NUM_ROWS).await?;
+    let count = df.unnest_column("tags")?.count().await?;
+    assert_eq!(count, results.iter().map(|r| r.num_rows()).sum::<usize>());
+
+    // Unnest points
+    let df = table_with_nested_types(NUM_ROWS).await?;
+    let results = df.unnest_column("points")?.collect().await?;
+    let expected = vec![
+        "+----------+-----------------+--------------------+",
+        "| shape_id | points          | tags               |",
+        "+----------+-----------------+--------------------+",
+        "| 1        | {x: -3, y: -4}  | [tag1]             |",
+        "| 1        | {x: -3, y: 6}   | [tag1]             |",
+        "| 1        | {x: 2, y: -2}   | [tag1]             |",
+        "| 2        |                 | [tag1, tag2]       |",
+        "| 3        | {x: -10, y: -4} |                    |",
+        "| 3        | {x: -9, y: 2}   |                    |",
+        "| 4        | {x: -3, y: 5}   | [tag1, tag2, tag3] |",
+        "| 4        | {x: 2, y: -1}   | [tag1, tag2, tag3] |",
+        "+----------+-----------------+--------------------+",
+    ];
+    assert_batches_sorted_eq!(expected, &results);
+
+    // Test aggregate results for points.
+    let df = table_with_nested_types(NUM_ROWS).await?;
+    let count = df.unnest_column("points")?.count().await?;
+    assert_eq!(count, results.iter().map(|r| r.num_rows()).sum::<usize>());
+
+    // Unnest both points and tags.
+    let df = table_with_nested_types(NUM_ROWS).await?;
+    let results = df
+        .unnest_column("points")?
+        .unnest_column("tags")?
+        .collect()
+        .await?;
+    let expected = vec![
+        "+----------+-----------------+------+",
+        "| shape_id | points          | tags |",
+        "+----------+-----------------+------+",
+        "| 1        | {x: -3, y: -4}  | tag1 |",
+        "| 1        | {x: -3, y: 6}   | tag1 |",
+        "| 1        | {x: 2, y: -2}   | tag1 |",
+        "| 2        |                 | tag1 |",
+        "| 2        |                 | tag2 |",
+        "| 3        | {x: -10, y: -4} |      |",
+        "| 3        | {x: -9, y: 2}   |      |",
+        "| 4        | {x: -3, y: 5}   | tag1 |",
+        "| 4        | {x: -3, y: 5}   | tag2 |",
+        "| 4        | {x: -3, y: 5}   | tag3 |",
+        "| 4        | {x: 2, y: -1}   | tag1 |",
+        "| 4        | {x: 2, y: -1}   | tag2 |",
+        "| 4        | {x: 2, y: -1}   | tag3 |",
+        "+----------+-----------------+------+",
+    ];
+    assert_batches_sorted_eq!(expected, &results);
+
+    // Test aggregate results for points and tags.
+    let df = table_with_nested_types(NUM_ROWS).await?;
+    let count = df
+        .unnest_column("points")?
+        .unnest_column("tags")?
+        .count()
+        .await?;
+    assert_eq!(count, results.iter().map(|r| r.num_rows()).sum::<usize>());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn unnest_aggregate_columns() -> Result<()> {
+    const NUM_ROWS: usize = 5;
+
+    let df = table_with_nested_types(NUM_ROWS).await?;
+    let results = df.select_columns(&["tags"])?.collect().await?;
+    let expected = vec![
+        r#"+--------------------+"#,
+        r#"| tags               |"#,
+        r#"+--------------------+"#,
+        r#"| [tag1]             |"#,
+        r#"| [tag1, tag2]       |"#,
+        r#"|                    |"#,
+        r#"| [tag1, tag2, tag3] |"#,
+        r#"| [tag1, tag2, tag3] |"#,
+        r#"+--------------------+"#,
+    ];
+    assert_batches_sorted_eq!(expected, &results);
+
+    let df = table_with_nested_types(NUM_ROWS).await?;
+    let results = df
+        .unnest_column("tags")?
+        .aggregate(vec![], vec![count(col("tags"))])?
+        .collect()
+        .await?;
+    let expected = vec![
+        r#"+--------------------+"#,
+        r#"| COUNT(shapes.tags) |"#,
+        r#"+--------------------+"#,
+        r#"| 9                  |"#,
+        r#"+--------------------+"#,
+    ];
     assert_batches_sorted_eq!(expected, &results);
 
     Ok(())
@@ -485,4 +787,71 @@ fn create_join_context() -> Result<SessionContext> {
     ctx.register_batch("t2", batch2)?;
 
     Ok(ctx)
+}
+
+/// Create a data frame that contains nested types.
+///
+/// Create a data frame with nested types, each row contains:
+/// - shape_id an integer primary key
+/// - points A list of points structs {x, y}
+/// - A list of tags.
+async fn table_with_nested_types(n: usize) -> Result<DataFrame> {
+    use rand::prelude::*;
+
+    let mut shape_id_builder = UInt32Builder::new();
+    let mut points_builder = ListBuilder::new(StructBuilder::from_fields(
+        vec![
+            Field::new("x", DataType::Int32, false),
+            Field::new("y", DataType::Int32, false),
+        ],
+        5,
+    ));
+    let mut tags_builder = ListBuilder::new(StringBuilder::new());
+
+    let mut rng = StdRng::seed_from_u64(197);
+
+    for idx in 0..n {
+        // Append shape id.
+        shape_id_builder.append_value(idx as u32 + 1);
+
+        // Add a random number of points
+        let num_points: usize = rng.gen_range(0..4);
+        if num_points > 0 {
+            for _ in 0..num_points.max(2) {
+                // Add x value
+                points_builder
+                    .values()
+                    .field_builder::<Int32Builder>(0)
+                    .unwrap()
+                    .append_value(rng.gen_range(-10..10));
+                // Add y value
+                points_builder
+                    .values()
+                    .field_builder::<Int32Builder>(1)
+                    .unwrap()
+                    .append_value(rng.gen_range(-10..10));
+                points_builder.values().append(true);
+            }
+        }
+
+        // Append null if num points is 0.
+        points_builder.append(num_points > 0);
+
+        // Append tags.
+        let num_tags: usize = rng.gen_range(0..5);
+        for id in 0..num_tags {
+            tags_builder.values().append_value(format!("tag{}", id + 1));
+        }
+        tags_builder.append(num_tags > 0);
+    }
+
+    let batch = RecordBatch::try_from_iter(vec![
+        ("shape_id", Arc::new(shape_id_builder.finish()) as ArrayRef),
+        ("points", Arc::new(points_builder.finish()) as ArrayRef),
+        ("tags", Arc::new(tags_builder.finish()) as ArrayRef),
+    ])?;
+
+    let ctx = SessionContext::new();
+    ctx.register_batch("shapes", batch)?;
+    ctx.table("shapes").await
 }

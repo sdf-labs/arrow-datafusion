@@ -19,9 +19,569 @@
 
 # Changelog
 
-## [16.0.0](https://github.com/apache/arrow-datafusion/tree/16.0.0) (2023-01-06)
+## [19.0.0](https://github.com/apache/arrow-datafusion/tree/19.0.0) (2023-02-24)
 
-[Full Changelog](https://github.com/apache/arrow-datafusion/compare/15.0.0-rc1...16.0.0)
+[Full Changelog](https://github.com/apache/arrow-datafusion/compare/18.0.0...19.0.0)
+
+**Breaking changes:**
+
+- Use DataFusionError instead of ArrowError in SendableRecordBatchStream [\#5101](https://github.com/apache/arrow-datafusion/pull/5101) ([comphead](https://github.com/comphead))
+- Update to arrow 32 and Switch to RawDecoder for JSON [\#5056](https://github.com/apache/arrow-datafusion/pull/5056) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([tustvold](https://github.com/tustvold))
+- Allow `SessionContext::read_csv`, etc to read multiple files [\#4908](https://github.com/apache/arrow-datafusion/pull/4908) ([saikrishna1-bidgely](https://github.com/saikrishna1-bidgely))
+
+**Implemented enhancements:**
+
+- Ignore Arrow in dependabot [\#5340](https://github.com/apache/arrow-datafusion/issues/5340)
+- Provide access to internal fields of SessionContext [\#5317](https://github.com/apache/arrow-datafusion/issues/5317)
+- Investigate performance drop for DISTINCT queries [\#5313](https://github.com/apache/arrow-datafusion/issues/5313)
+- \[DOC\] Update math expression documentation [\#5312](https://github.com/apache/arrow-datafusion/issues/5312)
+- Replace merge\_batches with concat\_batches [\#5297](https://github.com/apache/arrow-datafusion/issues/5297)
+- Support for some of the window frame range queries [\#5275](https://github.com/apache/arrow-datafusion/issues/5275)
+- Make `log` function to be in sync with PostgresSql [\#5259](https://github.com/apache/arrow-datafusion/issues/5259)
+- \[SQLLogicTest\] Make schema validation ignore nullable and metadata attributes [\#5231](https://github.com/apache/arrow-datafusion/issues/5231)
+- Add support for linear groups search [\#5213](https://github.com/apache/arrow-datafusion/issues/5213)
+- Add SQL function overload `LOG(base, x)` for logarithm of x to base [\#5206](https://github.com/apache/arrow-datafusion/issues/5206)
+- `all_schema()` will get schema of child of child of .... [\#5192](https://github.com/apache/arrow-datafusion/issues/5192)
+- Enable parquet parallel scans by default [\#5125](https://github.com/apache/arrow-datafusion/issues/5125)
+- Don't  repartition ProjectionExec when it does not compute anything [\#4968](https://github.com/apache/arrow-datafusion/issues/4968)
+- Support non-tuple expression for Exists Subquery to Join  [\#4934](https://github.com/apache/arrow-datafusion/issues/4934)
+- Read multiple files/folders using `read_csv` [\#4909](https://github.com/apache/arrow-datafusion/issues/4909)
+
+**Fixed bugs:**
+
+- Make inline\_table\_scan optimize whole plan during first optimization stage. [\#5364](https://github.com/apache/arrow-datafusion/issues/5364)
+- tpcds\_logical\_q8 ambiguous name. [\#5334](https://github.com/apache/arrow-datafusion/issues/5334)
+- Protobuf serialisation is missing for GetIndexedFieldExpr [\#5323](https://github.com/apache/arrow-datafusion/issues/5323)
+- Indexing a nested list with 0 or an index larger than list size is not handled correctly [\#5310](https://github.com/apache/arrow-datafusion/issues/5310)
+- Protobuf serialization drops `preserve_partitioning` from `SortExec` [\#5305](https://github.com/apache/arrow-datafusion/issues/5305)
+- data file without suffix can't be read correctly [\#5301](https://github.com/apache/arrow-datafusion/issues/5301)
+- Idk [\#5298](https://github.com/apache/arrow-datafusion/issues/5298)
+- Error with query that has DISTINCT with ORDER BY and aliased select list [\#5293](https://github.com/apache/arrow-datafusion/issues/5293)
+- Optimizer prunes UnnestExec on aggregate count [\#5281](https://github.com/apache/arrow-datafusion/issues/5281)
+- Strange Behaviour on RepartitionExec with CoalescePartitionsExec. [\#5278](https://github.com/apache/arrow-datafusion/issues/5278)
+- Error "For SELECT DISTINCT, ORDER BY expressions id must appear in select list" may be over eager  [\#5255](https://github.com/apache/arrow-datafusion/issues/5255)
+- SQL allows SORT BY keyword [\#5247](https://github.com/apache/arrow-datafusion/issues/5247)
+- test `sort_on_window_null_string` failed after disable `skip_fail`. [\#5233](https://github.com/apache/arrow-datafusion/issues/5233)
+- Dataframe API adds ?table? qualifier [\#5187](https://github.com/apache/arrow-datafusion/issues/5187)
+- Re-ordering Projections in scan are not working anymore \(since DF15\) [\#5146](https://github.com/apache/arrow-datafusion/issues/5146)
+- parquet page level skipping \(page index pruning\) doesn't work with evolved schemas [\#5104](https://github.com/apache/arrow-datafusion/issues/5104)
+- Incorrect results on queries with `distinct` and orderby [\#5065](https://github.com/apache/arrow-datafusion/issues/5065)
+- NestedLoopJoin will panic when right child contains RepartitionExec [\#5022](https://github.com/apache/arrow-datafusion/issues/5022)
+- JSON projection only work when the index is in ascending order [\#4832](https://github.com/apache/arrow-datafusion/issues/4832)
+- Stack overflows when planning tpcds 22 in debug mode [\#4786](https://github.com/apache/arrow-datafusion/issues/4786)
+- Failed to create Left anti join physical plan due to SchemaError::FieldNotFound  [\#4366](https://github.com/apache/arrow-datafusion/issues/4366)
+- Filters/limit are not pushdown druing optimalization for table with alias [\#2270](https://github.com/apache/arrow-datafusion/issues/2270)
+
+**Documentation updates:**
+
+- Update README.md fix \[welcoming community\] links [\#5232](https://github.com/apache/arrow-datafusion/pull/5232) ([jiangzhx](https://github.com/jiangzhx))
+- Update README.md update blaze-rs link to https://github.com/blaze-init/blaze [\#5190](https://github.com/apache/arrow-datafusion/pull/5190) ([jiangzhx](https://github.com/jiangzhx))
+- Typo of greptimedb [\#5103](https://github.com/apache/arrow-datafusion/pull/5103) ([fengjiachun](https://github.com/fengjiachun))
+- chore: change `DataBend` to `Databend` [\#5096](https://github.com/apache/arrow-datafusion/pull/5096) ([xudong963](https://github.com/xudong963))
+
+**Closed issues:**
+
+- Implement column number / column type verification for sqllogictest [\#4499](https://github.com/apache/arrow-datafusion/issues/4499)
+
+**Merged pull requests:**
+
+- generate new projection plan in inline\_table\_scan instead of discarding [\#5371](https://github.com/apache/arrow-datafusion/pull/5371) ([jackwener](https://github.com/jackwener))
+- minor: fix rule name and comment. [\#5370](https://github.com/apache/arrow-datafusion/pull/5370) ([jackwener](https://github.com/jackwener))
+- minor: port limit tests to sqllogictests [\#5355](https://github.com/apache/arrow-datafusion/pull/5355) ([jackwener](https://github.com/jackwener))
+- feat: add rule to merge projection. [\#5349](https://github.com/apache/arrow-datafusion/pull/5349) ([jackwener](https://github.com/jackwener))
+- Ignore Arrow in dependabot [\#5341](https://github.com/apache/arrow-datafusion/pull/5341) ([iajoiner](https://github.com/iajoiner))
+- minor: remove useless `.get()` [\#5336](https://github.com/apache/arrow-datafusion/pull/5336) ([jackwener](https://github.com/jackwener))
+- bugfix: fix tpcds\_logical\_q8 ambiguous name. [\#5335](https://github.com/apache/arrow-datafusion/pull/5335) ([jackwener](https://github.com/jackwener))
+- minor: disable tpcds\_logical\_q10/q35 [\#5333](https://github.com/apache/arrow-datafusion/pull/5333) ([jackwener](https://github.com/jackwener))
+- minor: port intersection sql tests to sqllogictests [\#5331](https://github.com/apache/arrow-datafusion/pull/5331) ([alamb](https://github.com/alamb))
+- minor: port more window tests to sqllogictests [\#5330](https://github.com/apache/arrow-datafusion/pull/5330) ([alamb](https://github.com/alamb))
+- MINOR: nicer error messages for cli, use display format rather than debug [\#5329](https://github.com/apache/arrow-datafusion/pull/5329) ([kmitchener](https://github.com/kmitchener))
+- Add missing protobuf serialisation functionality GetIndexedFieldExpr. [\#5324](https://github.com/apache/arrow-datafusion/pull/5324) ([ahmedriza](https://github.com/ahmedriza))
+- chore: small typo in the example README [\#5319](https://github.com/apache/arrow-datafusion/pull/5319) ([gianarb](https://github.com/gianarb))
+- feat: add accessor to SessionContext fields for ContextProvider impl [\#5318](https://github.com/apache/arrow-datafusion/pull/5318) ([sunng87](https://github.com/sunng87))
+- \[DOC\] Update math expression documentation  [\#5316](https://github.com/apache/arrow-datafusion/pull/5316) ([comphead](https://github.com/comphead))
+- Fix nested list indexing when the index is 0 or larger than the list size [\#5311](https://github.com/apache/arrow-datafusion/pull/5311) ([ahmedriza](https://github.com/ahmedriza))
+- Fix SortExec bench case and Add SortExec input cases to bench for SortPreservingMergeExec [\#5308](https://github.com/apache/arrow-datafusion/pull/5308) ([jaylmiller](https://github.com/jaylmiller))
+- Allow DISTINCT with ORDER BY and an aliased select list [\#5307](https://github.com/apache/arrow-datafusion/pull/5307) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([alamb](https://github.com/alamb))
+- Serialize preserve\_partitioning in SortExec [\#5306](https://github.com/apache/arrow-datafusion/pull/5306) ([thinkharderdev](https://github.com/thinkharderdev))
+- fix: correct plan builder when test `scalar_subquery_project_expr` [\#5304](https://github.com/apache/arrow-datafusion/pull/5304) ([jackwener](https://github.com/jackwener))
+- Make SQL query consistent with API syntax expression in code examples [\#5303](https://github.com/apache/arrow-datafusion/pull/5303) ([ongchi](https://github.com/ongchi))
+- enable tpcds-64 test [\#5302](https://github.com/apache/arrow-datafusion/pull/5302) ([jackwener](https://github.com/jackwener))
+- Feature/merge batches removal [\#5300](https://github.com/apache/arrow-datafusion/pull/5300) ([berkaysynnada](https://github.com/berkaysynnada))
+- fix: add yield point to `RepartitionExec` [\#5299](https://github.com/apache/arrow-datafusion/pull/5299) ([crepererum](https://github.com/crepererum))
+- `datafusion.optimizer.repartition_file_scans` enabled by default [\#5295](https://github.com/apache/arrow-datafusion/pull/5295) ([korowa](https://github.com/korowa))
+- minor: derive Ord/PartialOrd/Eq/PartialEq traits for `ObjectStoreUrl` [\#5288](https://github.com/apache/arrow-datafusion/pull/5288) ([crepererum](https://github.com/crepererum))
+- Fix the potential bug of check\_all\_column\_from\_schema [\#5287](https://github.com/apache/arrow-datafusion/pull/5287) ([ygf11](https://github.com/ygf11))
+- Linear search support for Window Group queries [\#5286](https://github.com/apache/arrow-datafusion/pull/5286) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([mustafasrepo](https://github.com/mustafasrepo))
+- Prevent optimizer from pruning UnnestExec. [\#5282](https://github.com/apache/arrow-datafusion/pull/5282) ([vincev](https://github.com/vincev))
+- Minor: Add fetch to SortExec display [\#5279](https://github.com/apache/arrow-datafusion/pull/5279) ([thinkharderdev](https://github.com/thinkharderdev))
+- Set `catalog_list` from outside for `SessionState`. [\#5277](https://github.com/apache/arrow-datafusion/pull/5277) ([MichaelScofield](https://github.com/MichaelScofield))
+- Support page skipping / page\_index pushdown for evolved schemas [\#5268](https://github.com/apache/arrow-datafusion/pull/5268) ([alamb](https://github.com/alamb))
+- Use upstream newline\_delimited\_stream [\#5267](https://github.com/apache/arrow-datafusion/pull/5267) ([tustvold](https://github.com/tustvold))
+- Support non-tuple expression for exists-subquery to join [\#5264](https://github.com/apache/arrow-datafusion/pull/5264) ([ygf11](https://github.com/ygf11))
+- minor: Fix cargo fmt [\#5263](https://github.com/apache/arrow-datafusion/pull/5263) ([alamb](https://github.com/alamb))
+- minor: replace `unwrap()` with `?` [\#5262](https://github.com/apache/arrow-datafusion/pull/5262) ([jackwener](https://github.com/jackwener))
+- Preserve `TableScan.projection` order in `push_down_projection` optimizer rule [\#5261](https://github.com/apache/arrow-datafusion/pull/5261) ([korowa](https://github.com/korowa))
+- Minor: refactor ParquetExec roundtrip tests [\#5260](https://github.com/apache/arrow-datafusion/pull/5260) ([alamb](https://github.com/alamb))
+- \[fix\]\[plan\] relax the check for distinct, order by for dataframe [\#5258](https://github.com/apache/arrow-datafusion/pull/5258) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([xiaoyong-z](https://github.com/xiaoyong-z))
+- enhance the checking of type errors in the test `window_frame_creation` [\#5257](https://github.com/apache/arrow-datafusion/pull/5257) ([HaoYang670](https://github.com/HaoYang670))
+- SQL planning benchmarks for very wide tables [\#5256](https://github.com/apache/arrow-datafusion/pull/5256) ([alamb](https://github.com/alamb))
+- Minor: Add negative test for SORT BY [\#5254](https://github.com/apache/arrow-datafusion/pull/5254) ([alamb](https://github.com/alamb))
+- \[sqllogictest\] Define output types and check them in tests [\#5253](https://github.com/apache/arrow-datafusion/pull/5253) ([melgenek](https://github.com/melgenek))
+- Minor: port some explain test to sqllogictest, add filename normalization [\#5252](https://github.com/apache/arrow-datafusion/pull/5252) ([alamb](https://github.com/alamb))
+- Disallow SORT BY in SQL [\#5249](https://github.com/apache/arrow-datafusion/pull/5249) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([Jefffrey](https://github.com/Jefffrey))
+- \[SQLLogicTest\] Make schema validation ignore nullable and metadata attributes [\#5246](https://github.com/apache/arrow-datafusion/pull/5246) ([comphead](https://github.com/comphead))
+- Add SQL function overload LOG\(base, x\) for logarithm of x to base [\#5245](https://github.com/apache/arrow-datafusion/pull/5245) ([comphead](https://github.com/comphead))
+- Update sqllogictest requirement from 0.11.1 to 0.12.0 \#5237 [\#5244](https://github.com/apache/arrow-datafusion/pull/5244) ([alamb](https://github.com/alamb))
+- Test case for NDJsonExec with randomly ordered projection [\#5243](https://github.com/apache/arrow-datafusion/pull/5243) ([korowa](https://github.com/korowa))
+- Update to arrow `33.0.0` [\#5241](https://github.com/apache/arrow-datafusion/pull/5241) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([tustvold](https://github.com/tustvold))
+- DataFusion 18.0.0 Release [\#5240](https://github.com/apache/arrow-datafusion/pull/5240) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([andygrove](https://github.com/andygrove))
+- fix clippy in nightly [\#5238](https://github.com/apache/arrow-datafusion/pull/5238) ([jackwener](https://github.com/jackwener))
+- refactor: correct the implementation of `all_schemas()` [\#5236](https://github.com/apache/arrow-datafusion/pull/5236) ([jackwener](https://github.com/jackwener))
+- bugfix: fix error when `get_coerced_window_frame` meet `utf8` [\#5234](https://github.com/apache/arrow-datafusion/pull/5234) ([jackwener](https://github.com/jackwener))
+- Feature/sort enforcement refactor [\#5228](https://github.com/apache/arrow-datafusion/pull/5228) ([mustafasrepo](https://github.com/mustafasrepo))
+- Minor: Fix doc links and typos [\#5225](https://github.com/apache/arrow-datafusion/pull/5225) ([Jefffrey](https://github.com/Jefffrey))
+- fix: correct expected error in test [\#5224](https://github.com/apache/arrow-datafusion/pull/5224) ([jackwener](https://github.com/jackwener))
+- bugfix: fix propagating empty\_relation generates an illegal plan [\#5219](https://github.com/apache/arrow-datafusion/pull/5219) ([yukkit](https://github.com/yukkit))
+- Replace placeholders in ScalarSubqueries [\#5216](https://github.com/apache/arrow-datafusion/pull/5216) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([avantgardnerio](https://github.com/avantgardnerio))
+- Dataframe join\_on method [\#5210](https://github.com/apache/arrow-datafusion/pull/5210) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([Jefffrey](https://github.com/Jefffrey))
+- bugfix: fix eval `nullalbe()` in `simplify_exprs` [\#5208](https://github.com/apache/arrow-datafusion/pull/5208) ([jackwener](https://github.com/jackwener))
+- minor: remove unnecessary clone [\#5207](https://github.com/apache/arrow-datafusion/pull/5207) ([Ted-Jiang](https://github.com/Ted-Jiang))
+- minor: extract `merge_schema()` function. [\#5203](https://github.com/apache/arrow-datafusion/pull/5203) ([jackwener](https://github.com/jackwener))
+- minor: remove unnecessary `continue` [\#5200](https://github.com/apache/arrow-datafusion/pull/5200) ([xiaoyong-z](https://github.com/xiaoyong-z))
+- Minor: Begin porting some window tests to sqllogictests [\#5199](https://github.com/apache/arrow-datafusion/pull/5199) ([alamb](https://github.com/alamb))
+- fix\(MemTable\): make it cancel-safe and fix parallelism [\#5197](https://github.com/apache/arrow-datafusion/pull/5197) ([DDtKey](https://github.com/DDtKey))
+- fix: make `write_csv/json/parquet` cancel-safe [\#5196](https://github.com/apache/arrow-datafusion/pull/5196) ([DDtKey](https://github.com/DDtKey))
+- Support arithmetic operation on DictionaryArray [\#5194](https://github.com/apache/arrow-datafusion/pull/5194) ([viirya](https://github.com/viirya))
+- sqllogicaltest: add cleanup and use rowsort. [\#5189](https://github.com/apache/arrow-datafusion/pull/5189) ([jackwener](https://github.com/jackwener))
+- bugfix: fix `TableScan` may contain fields not included in `schema` [\#5188](https://github.com/apache/arrow-datafusion/pull/5188) ([jackwener](https://github.com/jackwener))
+- Create disk manager spill folder if doesn't exist [\#5185](https://github.com/apache/arrow-datafusion/pull/5185) ([comphead](https://github.com/comphead))
+- Parse identifiers properly for TableReferences [\#5183](https://github.com/apache/arrow-datafusion/pull/5183) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([Jefffrey](https://github.com/Jefffrey))
+- Fix decimal scalar dyn kernels [\#5179](https://github.com/apache/arrow-datafusion/pull/5179) ([viirya](https://github.com/viirya))
+- Patch git Safe Paths in CI [\#5177](https://github.com/apache/arrow-datafusion/pull/5177) ([tustvold](https://github.com/tustvold))
+- Add initial support for serializing physical plans with Substrait [\#5176](https://github.com/apache/arrow-datafusion/pull/5176) ([andygrove](https://github.com/andygrove))
+- Bump tokio from 1.24.1 to 1.24.2 in /datafusion-cli [\#5172](https://github.com/apache/arrow-datafusion/pull/5172) ([dependabot[bot]](https://github.com/apps/dependabot))
+- Make EnforceSorting global sort aware, fix sort mis-optimizations involving unions, support parallel sort + merge transformations [\#5171](https://github.com/apache/arrow-datafusion/pull/5171) ([mustafasrepo](https://github.com/mustafasrepo))
+- Update substrait  README.md [\#5168](https://github.com/apache/arrow-datafusion/pull/5168) ([jiangzhx](https://github.com/jiangzhx))
+- Switch to use sum kernel from arrow-rs for Decimal128 [\#5167](https://github.com/apache/arrow-datafusion/pull/5167) ([sunchao](https://github.com/sunchao))
+- FileStream: Open next file in parallel while decoding [\#5161](https://github.com/apache/arrow-datafusion/pull/5161) ([thinkharderdev](https://github.com/thinkharderdev))
+- Fix FairSpillPool try\_grow for non-spillable consumers [\#5160](https://github.com/apache/arrow-datafusion/pull/5160) ([tustvold](https://github.com/tustvold))
+- fix: treat unsupported SQL plans as "not implemented" [\#5159](https://github.com/apache/arrow-datafusion/pull/5159) ([crepererum](https://github.com/crepererum))
+- Compare NULL types [\#5158](https://github.com/apache/arrow-datafusion/pull/5158) ([melgenek](https://github.com/melgenek))
+- Always wrapping OnceAsync for the inner table side in NestedLoopJoinExec [\#5156](https://github.com/apache/arrow-datafusion/pull/5156) ([ygf11](https://github.com/ygf11))
+- chore: add object\_name\_to\_table\_reference in SqlToRel [\#5155](https://github.com/apache/arrow-datafusion/pull/5155) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([jiacai2050](https://github.com/jiacai2050))
+- Ambiguity check for where selection [\#5153](https://github.com/apache/arrow-datafusion/pull/5153) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([Jefffrey](https://github.com/Jefffrey))
+- feat: Type coercion for Dictionary\(\_, \_\) to Utf8 for regex conditions [\#5152](https://github.com/apache/arrow-datafusion/pull/5152) ([stuartcarnie](https://github.com/stuartcarnie))
+- Support arithmetic scalar operation with DictionaryArray [\#5151](https://github.com/apache/arrow-datafusion/pull/5151) ([viirya](https://github.com/viirya))
+- \[sqllogictest\] Support `pg_typeof` [\#5148](https://github.com/apache/arrow-datafusion/pull/5148) ([melgenek](https://github.com/melgenek))
+- Date to Timestamp cast [\#5140](https://github.com/apache/arrow-datafusion/pull/5140) ([comphead](https://github.com/comphead))
+- add example for Flight SQL server that supports JDBC driver [\#5138](https://github.com/apache/arrow-datafusion/pull/5138) ([kmitchener](https://github.com/kmitchener))
+- Add in-list test [\#5135](https://github.com/apache/arrow-datafusion/pull/5135) ([nseekhao](https://github.com/nseekhao))
+- \[BugFix\] abort plan if order by column not in select list [\#5132](https://github.com/apache/arrow-datafusion/pull/5132) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([xiaoyong-z](https://github.com/xiaoyong-z))
+- Bug fix: Empty Record Batch handling [\#5131](https://github.com/apache/arrow-datafusion/pull/5131) ([mustafasrepo](https://github.com/mustafasrepo))
+- Add option to control whether to normalize ident [\#5124](https://github.com/apache/arrow-datafusion/pull/5124) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([jiacai2050](https://github.com/jiacai2050))
+- Make `parse_physical_expr` public [\#5118](https://github.com/apache/arrow-datafusion/pull/5118) ([comphead](https://github.com/comphead))
+- Support coercing `utf8` to `interval` and `timestamp` \(including arguments to `date_bin`\) [\#5117](https://github.com/apache/arrow-datafusion/pull/5117) ([alamb](https://github.com/alamb))
+- Fix release issues [\#5116](https://github.com/apache/arrow-datafusion/pull/5116) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([andygrove](https://github.com/andygrove))
+- minor: port date\_bin tests to sqllogictests [\#5115](https://github.com/apache/arrow-datafusion/pull/5115) ([alamb](https://github.com/alamb))
+- Minor: reduce code duplication using `rewrite_expr` [\#5114](https://github.com/apache/arrow-datafusion/pull/5114) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([alamb](https://github.com/alamb))
+- Replace &Option\<T\> with Option\<&T\> [\#5113](https://github.com/apache/arrow-datafusion/pull/5113) ([gaoxinge](https://github.com/gaoxinge))
+- Improve `get_meet_of_orderings` to check for common prefixes [\#5111](https://github.com/apache/arrow-datafusion/pull/5111) ([ozankabak](https://github.com/ozankabak))
+- \[sqllogictest\] Apply rowsort when there is no explicit order by [\#5110](https://github.com/apache/arrow-datafusion/pull/5110) ([melgenek](https://github.com/melgenek))
+- Add unnest\_column to DataFrame [\#5106](https://github.com/apache/arrow-datafusion/pull/5106) ([vincev](https://github.com/vincev))
+- Minor: reduce indent level in page filter pruning code [\#5105](https://github.com/apache/arrow-datafusion/pull/5105) ([alamb](https://github.com/alamb))
+- Replace &Option\<T\> with Option\<&T\> [\#5102](https://github.com/apache/arrow-datafusion/pull/5102) ([gaoxinge](https://github.com/gaoxinge))
+- Minor: remove unused methods in datafusion/optimizer/src/utils.rs [\#5098](https://github.com/apache/arrow-datafusion/pull/5098) ([ygf11](https://github.com/ygf11))
+- ci: don't trigger rust ci for doc changes [\#5097](https://github.com/apache/arrow-datafusion/pull/5097) ([xudong963](https://github.com/xudong963))
+- sqllogicaltest: fix unstable slt case. [\#5095](https://github.com/apache/arrow-datafusion/pull/5095) ([jackwener](https://github.com/jackwener))
+- chore: update cranelift-module [\#5094](https://github.com/apache/arrow-datafusion/pull/5094) ([jackwener](https://github.com/jackwener))
+- refactor: Add `rewrite_expr` convenience method for rewriting `Expr`s [\#5092](https://github.com/apache/arrow-datafusion/pull/5092) ([alamb](https://github.com/alamb))
+- Minor: extract sort col rewrite into its own module, add unit tests [\#5088](https://github.com/apache/arrow-datafusion/pull/5088) ([alamb](https://github.com/alamb))
+- \[sqllogictest\] Move `decimal.rs` tests [\#5086](https://github.com/apache/arrow-datafusion/pull/5086) ([melgenek](https://github.com/melgenek))
+- Insert target columns empty fix [\#5079](https://github.com/apache/arrow-datafusion/pull/5079) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([gruuya](https://github.com/gruuya))
+- sqllogicaltest: move union.rs [\#5075](https://github.com/apache/arrow-datafusion/pull/5075) ([jackwener](https://github.com/jackwener))
+- \[Enhancement\] Don't repartition ProjectionExec when it does not compute anything [\#5074](https://github.com/apache/arrow-datafusion/pull/5074) ([xiaoyong-z](https://github.com/xiaoyong-z))
+- Support ORDER BY an aliased column [\#5067](https://github.com/apache/arrow-datafusion/pull/5067) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([alamb](https://github.com/alamb))
+- Parquet parallel scan [\#5057](https://github.com/apache/arrow-datafusion/pull/5057) ([korowa](https://github.com/korowa))
+- \[BugFix\] fix file stream time scanning metrics bug [\#5020](https://github.com/apache/arrow-datafusion/pull/5020) ([xiaoyong-z](https://github.com/xiaoyong-z))
+- Show optimization errors in explain [\#4819](https://github.com/apache/arrow-datafusion/pull/4819) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([Jefffrey](https://github.com/Jefffrey))
+
+
+## [18.0.0](https://github.com/apache/arrow-datafusion/tree/18.0.0) (2023-02-10)
+
+[Full Changelog](https://github.com/apache/arrow-datafusion/compare/17.0.0...18.0.0)
+
+**Breaking changes:**
+
+- Use DataFusionError instead of ArrowError in SendableRecordBatchStream [\#5101](https://github.com/apache/arrow-datafusion/pull/5101) ([comphead](https://github.com/comphead))
+- Update to arrow 32 and Switch to RawDecoder for JSON [\#5056](https://github.com/apache/arrow-datafusion/pull/5056) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([tustvold](https://github.com/tustvold))
+
+**Implemented enhancements:**
+
+- DiskManager to create a spill folder if doesn't exist [\#5186](https://github.com/apache/arrow-datafusion/issues/5186)
+- cast expression may cause duplicate column name error [\#5174](https://github.com/apache/arrow-datafusion/issues/5174)
+- Add type coercion from Dictionary to string for regular expressions [\#5154](https://github.com/apache/arrow-datafusion/issues/5154)
+- Unnecessary `Filter` on Parquet datasources [\#5149](https://github.com/apache/arrow-datafusion/issues/5149)
+- \[sqllogictest\] Support `pg_typeof` for Postgres compatibility tests [\#5147](https://github.com/apache/arrow-datafusion/issues/5147)
+- Supporting Grafana global variables  [\#5144](https://github.com/apache/arrow-datafusion/issues/5144)
+- add example for standalone DataFusion server which supports Arrow Flight SQL JDBC driver [\#5139](https://github.com/apache/arrow-datafusion/issues/5139)
+- Support for InList in datafusion-substrait [\#5134](https://github.com/apache/arrow-datafusion/issues/5134)
+- Pipeline file opening in `FileStream` [\#5129](https://github.com/apache/arrow-datafusion/issues/5129)
+- Make `parse_physical_expr` public [\#5107](https://github.com/apache/arrow-datafusion/issues/5107)
+- Use DataFusionError in SendableRecordBatchStream [\#5039](https://github.com/apache/arrow-datafusion/issues/5039)
+- Interval coercion:`date_bin('1 hour',...)` does not work but `date_bin(interval '1 hour', ...` does [\#4853](https://github.com/apache/arrow-datafusion/issues/4853)
+- `Explain <query>` should not fail if meeting errors when optimizing the query [\#4766](https://github.com/apache/arrow-datafusion/issues/4766)
+- Add option to determine whether to convert identifiers  [\#4551](https://github.com/apache/arrow-datafusion/issues/4551)
+- Replace `&Option<T>` with `Option<&T>`. [\#4424](https://github.com/apache/arrow-datafusion/issues/4424)
+- Error type in `RecordBatchStream` [\#4172](https://github.com/apache/arrow-datafusion/issues/4172)
+- Support non-equi join \(e.g. `ON` clause\) in Dataframe API [\#1254](https://github.com/apache/arrow-datafusion/issues/1254)
+-   Allow ParquetExec to parallelize work based on row groups [\#137](https://github.com/apache/arrow-datafusion/issues/137)
+
+**Fixed bugs:**
+
+- Confusing schema errors when using window partition [\#5229](https://github.com/apache/arrow-datafusion/issues/5229)
+- Propagating empty\_relation generate an illegal plan [\#5218](https://github.com/apache/arrow-datafusion/issues/5218)
+- The test `in_list_types_struct_literal` fails when setting `skip_failed_rules` as `false` [\#5217](https://github.com/apache/arrow-datafusion/issues/5217)
+- Placeholder values are not replaced in ScalarSubqueries [\#5215](https://github.com/apache/arrow-datafusion/issues/5215)
+- Querying against delta lake table does not seem to work [\#5202](https://github.com/apache/arrow-datafusion/issues/5202)
+- Arithmetic operation doesn't work with DictionaryArray [\#5193](https://github.com/apache/arrow-datafusion/issues/5193)
+- simplify\_expr\(\) invoke nullable\(\) exist bug [\#5191](https://github.com/apache/arrow-datafusion/issues/5191)
+- CI is currently broken on git diff: Not a git repository [\#5180](https://github.com/apache/arrow-datafusion/issues/5180)
+- `write_csv/json/parquet` isn't cancel safe [\#5178](https://github.com/apache/arrow-datafusion/issues/5178)
+- no hyperlink to blaze-rs \[doc: README-"Use Cases"\] [\#5175](https://github.com/apache/arrow-datafusion/issues/5175)
+- Arithmetic scalar operation doesn't work with DictionaryArray [\#5150](https://github.com/apache/arrow-datafusion/issues/5150)
+- Sort operator disappear in physical\_plan [\#5100](https://github.com/apache/arrow-datafusion/issues/5100)
+- Window function error: InvalidArgumentError\("number of columns\(27\) must match number of fields\(35\) in schema" [\#5090](https://github.com/apache/arrow-datafusion/issues/5090)
+- `INSERT` statements without target column list are not working [\#5078](https://github.com/apache/arrow-datafusion/issues/5078)
+- fix file stream time scanning metrics bug [\#5019](https://github.com/apache/arrow-datafusion/issues/5019)
+- Date before `1678` causes panic  [\#4875](https://github.com/apache/arrow-datafusion/issues/4875)
+- Can not ORDER BY an aliased group column [\#4854](https://github.com/apache/arrow-datafusion/issues/4854)
+- The `filters` expressions in `TableScan` may contain fields not included in `schema`. [\#4793](https://github.com/apache/arrow-datafusion/issues/4793)
+- Comparing a `Timestamp` to a `Date32` fails [\#4644](https://github.com/apache/arrow-datafusion/issues/4644)
+- String --\> TableReference parsing does not properly handle `"` and `.` [\#4532](https://github.com/apache/arrow-datafusion/issues/4532)
+- can't compare NULL type with NULL type [\#4335](https://github.com/apache/arrow-datafusion/issues/4335)
+- Add ambiguous check when generate selection plan [\#4196](https://github.com/apache/arrow-datafusion/issues/4196)
+- Internal error in CAST from Timestamp\[us\] [\#3922](https://github.com/apache/arrow-datafusion/issues/3922)
+- Run median expr on parquet file column got error [\#3805](https://github.com/apache/arrow-datafusion/issues/3805)
+- aliasing a field renders it missing in the order by clause [\#669](https://github.com/apache/arrow-datafusion/issues/669)
+-  Querying datetime data in DataFusion with an embedded timezone always fails [\#153](https://github.com/apache/arrow-datafusion/issues/153)
+
+**Documentation updates:**
+
+- Update README.md fix \[welcoming community\] links [\#5232](https://github.com/apache/arrow-datafusion/pull/5232) ([jiangzhx](https://github.com/jiangzhx))
+- Update README.md update blaze-rs link to https://github.com/blaze-init/blaze [\#5190](https://github.com/apache/arrow-datafusion/pull/5190) ([jiangzhx](https://github.com/jiangzhx))
+- Typo of greptimedb [\#5103](https://github.com/apache/arrow-datafusion/pull/5103) ([fengjiachun](https://github.com/fengjiachun))
+- chore: change `DataBend` to `Databend` [\#5096](https://github.com/apache/arrow-datafusion/pull/5096) ([xudong963](https://github.com/xudong963))
+
+**Closed issues:**
+
+- Change coerced type for comparison between timestamp with date to timestamp [\#4761](https://github.com/apache/arrow-datafusion/issues/4761)
+
+**Merged pull requests:**
+
+- fix: correct expected error in test [\#5224](https://github.com/apache/arrow-datafusion/pull/5224) ([jackwener](https://github.com/jackwener))
+- bugfix: fix propagating empty\_relation generates an illegal plan [\#5219](https://github.com/apache/arrow-datafusion/pull/5219) ([yukkit](https://github.com/yukkit))
+- Replace placeholders in ScalarSubqueries [\#5216](https://github.com/apache/arrow-datafusion/pull/5216) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([avantgardnerio](https://github.com/avantgardnerio))
+- Dataframe join\_on method [\#5210](https://github.com/apache/arrow-datafusion/pull/5210) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([Jefffrey](https://github.com/Jefffrey))
+- bugfix: fix eval `nullalbe()` in `simplify_exprs` [\#5208](https://github.com/apache/arrow-datafusion/pull/5208) ([jackwener](https://github.com/jackwener))
+- minor: remove unnecessary clone [\#5207](https://github.com/apache/arrow-datafusion/pull/5207) ([Ted-Jiang](https://github.com/Ted-Jiang))
+- minor: extract `merge_schema()` function. [\#5203](https://github.com/apache/arrow-datafusion/pull/5203) ([jackwener](https://github.com/jackwener))
+- minor: remove unnecessary `continue` [\#5200](https://github.com/apache/arrow-datafusion/pull/5200) ([xiaoyong-z](https://github.com/xiaoyong-z))
+- fix\(MemTable\): make it cancel-safe and fix parallelism [\#5197](https://github.com/apache/arrow-datafusion/pull/5197) ([DDtKey](https://github.com/DDtKey))
+- fix: make `write_csv/json/parquet` cancel-safe [\#5196](https://github.com/apache/arrow-datafusion/pull/5196) ([DDtKey](https://github.com/DDtKey))
+- Support arithmetic operation on DictionaryArray [\#5194](https://github.com/apache/arrow-datafusion/pull/5194) ([viirya](https://github.com/viirya))
+- sqllogicaltest: add cleanup and use rowsort. [\#5189](https://github.com/apache/arrow-datafusion/pull/5189) ([jackwener](https://github.com/jackwener))
+- bugfix: fix `TableScan` may contain fields not included in `schema` [\#5188](https://github.com/apache/arrow-datafusion/pull/5188) ([jackwener](https://github.com/jackwener))
+- Create disk manager spill folder if doesn't exist [\#5185](https://github.com/apache/arrow-datafusion/pull/5185) ([comphead](https://github.com/comphead))
+- Parse identifiers properly for TableReferences [\#5183](https://github.com/apache/arrow-datafusion/pull/5183) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([Jefffrey](https://github.com/Jefffrey))
+- Fix decimal scalar dyn kernels [\#5179](https://github.com/apache/arrow-datafusion/pull/5179) ([viirya](https://github.com/viirya))
+- Patch git Safe Paths in CI [\#5177](https://github.com/apache/arrow-datafusion/pull/5177) ([tustvold](https://github.com/tustvold))
+- Add initial support for serializing physical plans with Substrait [\#5176](https://github.com/apache/arrow-datafusion/pull/5176) ([andygrove](https://github.com/andygrove))
+- Bump tokio from 1.24.1 to 1.24.2 in /datafusion-cli [\#5172](https://github.com/apache/arrow-datafusion/pull/5172) ([dependabot[bot]](https://github.com/apps/dependabot))
+- Make EnforceSorting global sort aware, fix sort mis-optimizations involving unions, support parallel sort + merge transformations [\#5171](https://github.com/apache/arrow-datafusion/pull/5171) ([mustafasrepo](https://github.com/mustafasrepo))
+- Update substrait  README.md [\#5168](https://github.com/apache/arrow-datafusion/pull/5168) ([jiangzhx](https://github.com/jiangzhx))
+- Switch to use sum kernel from arrow-rs for Decimal128 [\#5167](https://github.com/apache/arrow-datafusion/pull/5167) ([sunchao](https://github.com/sunchao))
+- FileStream: Open next file in parallel while decoding [\#5161](https://github.com/apache/arrow-datafusion/pull/5161) ([thinkharderdev](https://github.com/thinkharderdev))
+- Fix FairSpillPool try\_grow for non-spillable consumers [\#5160](https://github.com/apache/arrow-datafusion/pull/5160) ([tustvold](https://github.com/tustvold))
+- fix: treat unsupported SQL plans as "not implemented" [\#5159](https://github.com/apache/arrow-datafusion/pull/5159) ([crepererum](https://github.com/crepererum))
+- Compare NULL types [\#5158](https://github.com/apache/arrow-datafusion/pull/5158) ([melgenek](https://github.com/melgenek))
+- chore: add object\_name\_to\_table\_reference in SqlToRel [\#5155](https://github.com/apache/arrow-datafusion/pull/5155) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([jiacai2050](https://github.com/jiacai2050))
+- Ambiguity check for where selection [\#5153](https://github.com/apache/arrow-datafusion/pull/5153) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([Jefffrey](https://github.com/Jefffrey))
+- feat: Type coercion for Dictionary\(\_, \_\) to Utf8 for regex conditions [\#5152](https://github.com/apache/arrow-datafusion/pull/5152) ([stuartcarnie](https://github.com/stuartcarnie))
+- Support arithmetic scalar operation with DictionaryArray [\#5151](https://github.com/apache/arrow-datafusion/pull/5151) ([viirya](https://github.com/viirya))
+- \[sqllogictest\] Support `pg_typeof` [\#5148](https://github.com/apache/arrow-datafusion/pull/5148) ([melgenek](https://github.com/melgenek))
+- Date to Timestamp cast [\#5140](https://github.com/apache/arrow-datafusion/pull/5140) ([comphead](https://github.com/comphead))
+- add example for Flight SQL server that supports JDBC driver [\#5138](https://github.com/apache/arrow-datafusion/pull/5138) ([kmitchener](https://github.com/kmitchener))
+- Add in-list test [\#5135](https://github.com/apache/arrow-datafusion/pull/5135) ([nseekhao](https://github.com/nseekhao))
+- Bug fix: Empty Record Batch handling [\#5131](https://github.com/apache/arrow-datafusion/pull/5131) ([mustafasrepo](https://github.com/mustafasrepo))
+- Add option to control whether to normalize ident [\#5124](https://github.com/apache/arrow-datafusion/pull/5124) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([jiacai2050](https://github.com/jiacai2050))
+- Make `parse_physical_expr` public [\#5118](https://github.com/apache/arrow-datafusion/pull/5118) ([comphead](https://github.com/comphead))
+- Support coercing `utf8` to `interval` and `timestamp` \(including arguments to `date_bin`\) [\#5117](https://github.com/apache/arrow-datafusion/pull/5117) ([alamb](https://github.com/alamb))
+- Fix release issues [\#5116](https://github.com/apache/arrow-datafusion/pull/5116) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([andygrove](https://github.com/andygrove))
+- minor: port date\_bin tests to sqllogictests [\#5115](https://github.com/apache/arrow-datafusion/pull/5115) ([alamb](https://github.com/alamb))
+- Minor: reduce code duplication using `rewrite_expr` [\#5114](https://github.com/apache/arrow-datafusion/pull/5114) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([alamb](https://github.com/alamb))
+- Replace &Option\<T\> with Option\<&T\> [\#5113](https://github.com/apache/arrow-datafusion/pull/5113) ([gaoxinge](https://github.com/gaoxinge))
+- Improve `get_meet_of_orderings` to check for common prefixes [\#5111](https://github.com/apache/arrow-datafusion/pull/5111) ([ozankabak](https://github.com/ozankabak))
+- \[sqllogictest\] Apply rowsort when there is no explicit order by [\#5110](https://github.com/apache/arrow-datafusion/pull/5110) ([melgenek](https://github.com/melgenek))
+- Add unnest\_column to DataFrame [\#5106](https://github.com/apache/arrow-datafusion/pull/5106) ([vincev](https://github.com/vincev))
+- Minor: reduce indent level in page filter pruning code [\#5105](https://github.com/apache/arrow-datafusion/pull/5105) ([alamb](https://github.com/alamb))
+- Replace &Option\<T\> with Option\<&T\> [\#5102](https://github.com/apache/arrow-datafusion/pull/5102) ([gaoxinge](https://github.com/gaoxinge))
+- Minor: remove unused methods in datafusion/optimizer/src/utils.rs [\#5098](https://github.com/apache/arrow-datafusion/pull/5098) ([ygf11](https://github.com/ygf11))
+- ci: don't trigger rust ci for doc changes [\#5097](https://github.com/apache/arrow-datafusion/pull/5097) ([xudong963](https://github.com/xudong963))
+- sqllogicaltest: fix unstable slt case. [\#5095](https://github.com/apache/arrow-datafusion/pull/5095) ([jackwener](https://github.com/jackwener))
+- chore: update cranelift-module [\#5094](https://github.com/apache/arrow-datafusion/pull/5094) ([jackwener](https://github.com/jackwener))
+- refactor: Add `rewrite_expr` convenience method for rewriting `Expr`s [\#5092](https://github.com/apache/arrow-datafusion/pull/5092) ([alamb](https://github.com/alamb))
+- Minor: extract sort col rewrite into its own module, add unit tests [\#5088](https://github.com/apache/arrow-datafusion/pull/5088) ([alamb](https://github.com/alamb))
+- \[sqllogictest\] Move `decimal.rs` tests [\#5086](https://github.com/apache/arrow-datafusion/pull/5086) ([melgenek](https://github.com/melgenek))
+- Insert target columns empty fix [\#5079](https://github.com/apache/arrow-datafusion/pull/5079) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([gruuya](https://github.com/gruuya))
+- sqllogicaltest: move union.rs [\#5075](https://github.com/apache/arrow-datafusion/pull/5075) ([jackwener](https://github.com/jackwener))
+- Support ORDER BY an aliased column [\#5067](https://github.com/apache/arrow-datafusion/pull/5067) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([alamb](https://github.com/alamb))
+- Parquet parallel scan [\#5057](https://github.com/apache/arrow-datafusion/pull/5057) ([korowa](https://github.com/korowa))
+- \[BugFix\] fix file stream time scanning metrics bug [\#5020](https://github.com/apache/arrow-datafusion/pull/5020) ([xiaoyong-z](https://github.com/xiaoyong-z))
+- Show optimization errors in explain [\#4819](https://github.com/apache/arrow-datafusion/pull/4819) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([Jefffrey](https://github.com/Jefffrey))
+
+
+## [17.0.0](https://github.com/apache/arrow-datafusion/tree/17.0.0) (2023-01-27)
+
+[Full Changelog](https://github.com/apache/arrow-datafusion/compare/17.0.0-rc1...17.0.0)
+
+**Breaking changes:**
+
+- Implemented a ReadOptions trait for cleaner code. [\#5025](https://github.com/apache/arrow-datafusion/pull/5025) ([saikrishna1-bidgely](https://github.com/saikrishna1-bidgely))
+
+**Implemented enhancements:**
+
+- Add null-equals-null JOIN support in Substrait producer/consumer [\#5084](https://github.com/apache/arrow-datafusion/issues/5084)
+- Cleaner code for Read Options in reader methdos. [\#5024](https://github.com/apache/arrow-datafusion/issues/5024)
+- Substrait donation follow-on work [\#4897](https://github.com/apache/arrow-datafusion/issues/4897)
+- Add `len` method to `DataFrame` [\#1926](https://github.com/apache/arrow-datafusion/issues/1926)
+
+**Fixed bugs:**
+
+- Clippy failures in master branch and in PRs \(due to new nightly Rust\) [\#5080](https://github.com/apache/arrow-datafusion/issues/5080)
+
+**Merged pull requests:**
+
+- Add null-equals-null join support [\#5085](https://github.com/apache/arrow-datafusion/pull/5085) ([nseekhao](https://github.com/nseekhao))
+- Optimize returned plan in roundtrip\_fill\_na function [\#5083](https://github.com/apache/arrow-datafusion/pull/5083) ([nseekhao](https://github.com/nseekhao))
+- fix clippy failures [\#5081](https://github.com/apache/arrow-datafusion/pull/5081) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([andygrove](https://github.com/andygrove))
+- Add NULL literal support for decimal and integers [\#5077](https://github.com/apache/arrow-datafusion/pull/5077) ([nseekhao](https://github.com/nseekhao))
+- DataFrame count method [\#5071](https://github.com/apache/arrow-datafusion/pull/5071) ([Jefffrey](https://github.com/Jefffrey))
+- \[sqllogictests\] Port orderby.rs to sqllogictests [\#5062](https://github.com/apache/arrow-datafusion/pull/5062) ([alamb](https://github.com/alamb))
+
+## [17.0.0-rc1](https://github.com/apache/arrow-datafusion/tree/17.0.0-rc1) (2023-01-26)
+
+[Full Changelog](https://github.com/apache/arrow-datafusion/compare/16.1.0...17.0.0-rc1)
+
+**Breaking changes:**
+
+- Change ExecutionPlan::maintains\_input\_order to return vector \(to support multi children executors better\) [\#5035](https://github.com/apache/arrow-datafusion/pull/5035) ([mustafasrepo](https://github.com/mustafasrepo))
+- Allow overriding error type in DataFusion Result [\#5000](https://github.com/apache/arrow-datafusion/pull/5000) ([tustvold](https://github.com/tustvold))
+- Add dictionary\_expresions feature \(\#4386\) [\#4999](https://github.com/apache/arrow-datafusion/pull/4999) ([tustvold](https://github.com/tustvold))
+
+**Implemented enhancements:**
+
+- Retain the ordering of fields in the table schema when creating the projection for an update plan [\#5052](https://github.com/apache/arrow-datafusion/issues/5052)
+- \[sqllogictest\] Remove `integration-tests` directory [\#5011](https://github.com/apache/arrow-datafusion/issues/5011)
+- \[sqllogictest\] Consolidate normalization code for the postgres and non-postgres paths  [\#5010](https://github.com/apache/arrow-datafusion/issues/5010)
+- \[sqllogictest\] Don't orchestrate the postgres containers with rust / docker [\#5009](https://github.com/apache/arrow-datafusion/issues/5009)
+- check external table exist before creating a table  [\#4997](https://github.com/apache/arrow-datafusion/issues/4997)
+- Implement `std::error::Error` for DataFusionError [\#4991](https://github.com/apache/arrow-datafusion/issues/4991)
+- Return Vec\<bool\> instead of bool in ExecutionPlan::maintains\_input\_order [\#4980](https://github.com/apache/arrow-datafusion/issues/4980)
+- Add support for linear range search [\#4979](https://github.com/apache/arrow-datafusion/issues/4979)
+- Add support for bounded execution when window query involves UNBOUNDED PRECEDING [\#4978](https://github.com/apache/arrow-datafusion/issues/4978)
+- Infer prepared statement parameter types for insert queries with values clauses [\#4976](https://github.com/apache/arrow-datafusion/issues/4976)
+- The filter of outer table happens multiple time after optimizing in-subquery to join [\#4914](https://github.com/apache/arrow-datafusion/issues/4914)
+- Support Describe FILE in datafusion-cli [\#4913](https://github.com/apache/arrow-datafusion/issues/4913)
+- Release DataFusion 16 [\#4776](https://github.com/apache/arrow-datafusion/issues/4776)
+- Support writing lists in the arrow csv writer [\#4502](https://github.com/apache/arrow-datafusion/issues/4502)
+- Replace python based integration test with sqllogictest [\#4462](https://github.com/apache/arrow-datafusion/issues/4462)
+- Support CREATE TABLE table\_name\(...schema\_fields\) [\#4396](https://github.com/apache/arrow-datafusion/issues/4396)
+- Make Binary Dictionary Operations Optional [\#4386](https://github.com/apache/arrow-datafusion/issues/4386)
+- Improve / Cleanup DataFusion CI [\#3045](https://github.com/apache/arrow-datafusion/issues/3045)
+- More frequent DataFusion releases to crates.io \(discussion\) [\#2327](https://github.com/apache/arrow-datafusion/issues/2327)
+
+**Fixed bugs:**
+
+- UPDATE statment for non existent column doesn't error out [\#5068](https://github.com/apache/arrow-datafusion/issues/5068)
+- Limit doesn't drop on first batch when limit size == fetch size. [\#5064](https://github.com/apache/arrow-datafusion/issues/5064)
+- Performance regressions since DataFusion 15.x [\#5060](https://github.com/apache/arrow-datafusion/issues/5060)
+- Quoted schema and table names result in double-quoted names in logical plan. [\#5058](https://github.com/apache/arrow-datafusion/issues/5058)
+- Homebrew release script has the amount of arguments being incorrect [\#5043](https://github.com/apache/arrow-datafusion/issues/5043)
+- CI Failing with Out of Disk [\#5040](https://github.com/apache/arrow-datafusion/issues/5040)
+- Doc links to LogicalPlan in the core package need updating. [\#5036](https://github.com/apache/arrow-datafusion/issues/5036)
+- explain analyze can not see csvexec execution time metrics [\#5014](https://github.com/apache/arrow-datafusion/issues/5014)
+- AVG\(nulls\) returns 0 rather than NULL [\#5007](https://github.com/apache/arrow-datafusion/issues/5007)
+- Invalid Placeholders return internal error \(rather than Plan error\) [\#5005](https://github.com/apache/arrow-datafusion/issues/5005)
+- select \* from csv error [\#4996](https://github.com/apache/arrow-datafusion/issues/4996)
+- Incorrect nested error wrapped to `ArrowError:External` variant for joins [\#4981](https://github.com/apache/arrow-datafusion/issues/4981)
+
+**Documentation updates:**
+
+- MINOR: Add Substrait to feature list in README [\#4955](https://github.com/apache/arrow-datafusion/pull/4955) ([andygrove](https://github.com/andygrove))
+- Minor: comma engineering in Readme [\#4954](https://github.com/apache/arrow-datafusion/pull/4954) ([alamb](https://github.com/alamb))
+- Update main DataFusion README [\#4903](https://github.com/apache/arrow-datafusion/pull/4903) ([alamb](https://github.com/alamb))
+- Docs: Add known user - Kamu [\#4899](https://github.com/apache/arrow-datafusion/pull/4899) ([sergiimk](https://github.com/sergiimk))
+
+**Closed issues:**
+
+- Support sub directories in sqllogictest runner [\#4709](https://github.com/apache/arrow-datafusion/issues/4709)
+- Bug displaying fractional seconds in `IntervalMonthDayNano`  [\#4220](https://github.com/apache/arrow-datafusion/issues/4220)
+
+**Merged pull requests:**
+
+- Add `release-crates.sh` script [\#5070](https://github.com/apache/arrow-datafusion/pull/5070) ([iajoiner](https://github.com/iajoiner))
+- Validate assignment target column existence for UPDATE statements [\#5069](https://github.com/apache/arrow-datafusion/pull/5069) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([gruuya](https://github.com/gruuya))
+- Fix limit when size of batch to poll == skip/fetch value [\#5066](https://github.com/apache/arrow-datafusion/pull/5066) ([Dandandan](https://github.com/Dandandan))
+- Fix CREATE SCHEMA schema name double quoting issue. [\#5059](https://github.com/apache/arrow-datafusion/pull/5059) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([neumark](https://github.com/neumark))
+- Minor: Move some aggregate error tests to sqllogictests [\#5055](https://github.com/apache/arrow-datafusion/pull/5055) ([alamb](https://github.com/alamb))
+- Add decimal support to substrait serde [\#5054](https://github.com/apache/arrow-datafusion/pull/5054) ([andygrove](https://github.com/andygrove))
+- Retain schema order in projection [\#5053](https://github.com/apache/arrow-datafusion/pull/5053) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([avantgardnerio](https://github.com/avantgardnerio))
+- Improve join type support in substrait [\#5051](https://github.com/apache/arrow-datafusion/pull/5051) ([andygrove](https://github.com/andygrove))
+- \[Substrait\] ReadRel. Get column names from TableScan source [\#5050](https://github.com/apache/arrow-datafusion/pull/5050) ([andygrove](https://github.com/andygrove))
+- Ensure insert projections are of correct type [\#5049](https://github.com/apache/arrow-datafusion/pull/5049) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([avantgardnerio](https://github.com/avantgardnerio))
+- Remove unnecessary pyo3 dependency from datafusion crate [\#5048](https://github.com/apache/arrow-datafusion/pull/5048) ([tustvold](https://github.com/tustvold))
+- Cleanup CI \(\#5040\) [\#5047](https://github.com/apache/arrow-datafusion/pull/5047) ([tustvold](https://github.com/tustvold))
+- Fix homebrew publish script [\#5044](https://github.com/apache/arrow-datafusion/pull/5044) ([iajoiner](https://github.com/iajoiner))
+- Update docs links to logical plans module. [\#5037](https://github.com/apache/arrow-datafusion/pull/5037) ([vincev](https://github.com/vincev))
+- \[sqllogictest\] Read subdirectories in `test_files` [\#5033](https://github.com/apache/arrow-datafusion/pull/5033) ([melgenek](https://github.com/melgenek))
+- minor: Fix docs for create\_default\_catalog\_and\_schema [\#5032](https://github.com/apache/arrow-datafusion/pull/5032) ([alamb](https://github.com/alamb))
+- Remove python based posgres comparsion `integration-test` [\#5031](https://github.com/apache/arrow-datafusion/pull/5031) ([alamb](https://github.com/alamb))
+- \[sqllogictest\] Create empty tables [\#5026](https://github.com/apache/arrow-datafusion/pull/5026) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([melgenek](https://github.com/melgenek))
+- Simplify the  `PushDownLimit`. [\#5021](https://github.com/apache/arrow-datafusion/pull/5021) ([HaoYang670](https://github.com/HaoYang670))
+- \[BugFix\] fix explain csv/json/avro exec can not see metrics bug [\#5018](https://github.com/apache/arrow-datafusion/pull/5018) ([xiaoyong-z](https://github.com/xiaoyong-z))
+- Check placeholder  \_\_timeTo and return Datafusion::Plan error [\#5017](https://github.com/apache/arrow-datafusion/pull/5017) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([matthias-Q](https://github.com/matthias-Q))
+- \[sqllogictets\] Remove postgres container orchestration [\#5015](https://github.com/apache/arrow-datafusion/pull/5015) ([alamb](https://github.com/alamb))
+- Sqllogictest: use the same normalization for all tests [\#5013](https://github.com/apache/arrow-datafusion/pull/5013) ([melgenek](https://github.com/melgenek))
+- Minor: Remove invalid comments [\#5012](https://github.com/apache/arrow-datafusion/pull/5012) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([xudong963](https://github.com/xudong963))
+- AVG\(null\) is NULL \(not zero\) [\#5008](https://github.com/apache/arrow-datafusion/pull/5008) ([alamb](https://github.com/alamb))
+- Minor: improve internal error message [\#5006](https://github.com/apache/arrow-datafusion/pull/5006) ([alamb](https://github.com/alamb))
+- Support for bounded execution when window frame involves UNBOUNDED PRECEDING [\#5003](https://github.com/apache/arrow-datafusion/pull/5003) ([mustafasrepo](https://github.com/mustafasrepo))
+- Bump sqllogictest to v0.11.1 [\#5002](https://github.com/apache/arrow-datafusion/pull/5002) ([xudong963](https://github.com/xudong963))
+- Minor: Document how to create `ListingTables` [\#5001](https://github.com/apache/arrow-datafusion/pull/5001) ([alamb](https://github.com/alamb))
+- \[Enhancement\] early check table exist before create [\#4998](https://github.com/apache/arrow-datafusion/pull/4998) ([xiaoyong-z](https://github.com/xiaoyong-z))
+- \[Feature\] support describe file [\#4995](https://github.com/apache/arrow-datafusion/pull/4995) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([xiaoyong-z](https://github.com/xiaoyong-z))
+- Implement `std::error::Error::source()` for `DataFusionError`, make `DataFusionError::find_root` more generic [\#4992](https://github.com/apache/arrow-datafusion/pull/4992) ([alamb](https://github.com/alamb))
+- Add support for linear range calculation in WINDOW functions [\#4989](https://github.com/apache/arrow-datafusion/pull/4989) ([mustafasrepo](https://github.com/mustafasrepo))
+- re-export substrait crate [\#4988](https://github.com/apache/arrow-datafusion/pull/4988) ([jdye64](https://github.com/jdye64))
+- minor: Update data type support documentation [\#4984](https://github.com/apache/arrow-datafusion/pull/4984) ([alamb](https://github.com/alamb))
+- fix\(4981\): incorrect error wrapping in `OnceFut` [\#4983](https://github.com/apache/arrow-datafusion/pull/4983) ([DDtKey](https://github.com/DDtKey))
+- Infer values for inserts [\#4977](https://github.com/apache/arrow-datafusion/pull/4977) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([avantgardnerio](https://github.com/avantgardnerio))
+- Simplify GroupByHash implementation \(to prepare for more work\) [\#4972](https://github.com/apache/arrow-datafusion/pull/4972) ([alamb](https://github.com/alamb))
+- Add DataFusionError::Substrait variant to DataFusionError enum [\#4971](https://github.com/apache/arrow-datafusion/pull/4971) ([jdye64](https://github.com/jdye64))
+- refactor: display input partitions for `RepartitionExec` [\#4969](https://github.com/apache/arrow-datafusion/pull/4969) ([crepererum](https://github.com/crepererum))
+- Upgrade to Substrait 0.4.0 [\#4966](https://github.com/apache/arrow-datafusion/pull/4966) ([mbrobbel](https://github.com/mbrobbel))
+- Expose `sql_to_statement` and `statement_to_plan` on `SessionState` [\#4958](https://github.com/apache/arrow-datafusion/pull/4958) ([avantgardnerio](https://github.com/avantgardnerio))
+- Minor: Make messages consistent for LogicalPlan::Dml [\#4953](https://github.com/apache/arrow-datafusion/pull/4953) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([alamb](https://github.com/alamb))
+- Do not resort inputs to `UnionExec` if they are already sorted [\#4946](https://github.com/apache/arrow-datafusion/pull/4946) ([alamb](https://github.com/alamb))
+- Minor: Reduce even more redundancy creating window\_agg in sort\_enforcement tests [\#4945](https://github.com/apache/arrow-datafusion/pull/4945) ([alamb](https://github.com/alamb))
+- Only add outer filter once when transforming exists/in subquery to join [\#4944](https://github.com/apache/arrow-datafusion/pull/4944) ([ygf11](https://github.com/ygf11))
+- fix: `FieldNotFound` error message without valid fields [\#4942](https://github.com/apache/arrow-datafusion/pull/4942) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([DDtKey](https://github.com/DDtKey))
+- Propagate planning error back to user [\#4940](https://github.com/apache/arrow-datafusion/pull/4940) ([fsdvh](https://github.com/fsdvh))
+- Make it able to specify a session id for SessionState [\#4933](https://github.com/apache/arrow-datafusion/pull/4933) ([yahoNanJing](https://github.com/yahoNanJing))
+- SUPPORT SEMI/ANTI JOIN SQL syntax in DataFusion [\#4932](https://github.com/apache/arrow-datafusion/pull/4932) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([mingmwang](https://github.com/mingmwang))
+- Support gs:// as GCS schema [\#4930](https://github.com/apache/arrow-datafusion/pull/4930) ([jychen7](https://github.com/jychen7))
+- Upgrade object\_store from 0.5.0 to 0.5.3 [\#4929](https://github.com/apache/arrow-datafusion/pull/4929) ([jychen7](https://github.com/jychen7))
+- Reduce redundancy in sort\_enforcement tests [\#4928](https://github.com/apache/arrow-datafusion/pull/4928) ([alamb](https://github.com/alamb))
+- Update to arrow 31 [\#4927](https://github.com/apache/arrow-datafusion/pull/4927) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([tustvold](https://github.com/tustvold))
+- Unify Row hash and hash implementation [\#4924](https://github.com/apache/arrow-datafusion/pull/4924) ([mustafasrepo](https://github.com/mustafasrepo))
+- Support join-filter pushdown for semi/anti join [\#4923](https://github.com/apache/arrow-datafusion/pull/4923) ([ygf11](https://github.com/ygf11))
+- Minor add ticket link to broken test [\#4919](https://github.com/apache/arrow-datafusion/pull/4919) ([alamb](https://github.com/alamb))
+- Improve documentation for ExprVisitor, port simple uses to new walking function [\#4916](https://github.com/apache/arrow-datafusion/pull/4916) ([alamb](https://github.com/alamb))
+- Add substrait label to PRs [\#4915](https://github.com/apache/arrow-datafusion/pull/4915) ([alamb](https://github.com/alamb))
+- Executing ProjectionExec with no column should not return an Err [\#4912](https://github.com/apache/arrow-datafusion/pull/4912) ([viirya](https://github.com/viirya))
+- Refactor: `Add LogicalPlan::observe_expressions` to walk expressions [\#4906](https://github.com/apache/arrow-datafusion/pull/4906) ([alamb](https://github.com/alamb))
+- Minor: Port information schema tests to sqllogictest [\#4905](https://github.com/apache/arrow-datafusion/pull/4905) ([alamb](https://github.com/alamb))
+- Add insert/update/delete to LogicalPlan and add SQL planner support [\#4902](https://github.com/apache/arrow-datafusion/pull/4902) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([avantgardnerio](https://github.com/avantgardnerio))
+- fix: Visit subqueries in `Expr::Alias` [\#4900](https://github.com/apache/arrow-datafusion/pull/4900) ([askoa](https://github.com/askoa))
+- \[Substrait\] Change API to return LogicalPlan instead of DataFrame [\#4896](https://github.com/apache/arrow-datafusion/pull/4896) ([andygrove](https://github.com/andygrove))
+- Upgrade to substrait 0.3 [\#4895](https://github.com/apache/arrow-datafusion/pull/4895) ([andygrove](https://github.com/andygrove))
+- Add datafusion-substrait crate to workspace [\#4893](https://github.com/apache/arrow-datafusion/pull/4893) ([andygrove](https://github.com/andygrove))
+- refactor and add simple function to deserialize and serialize proto b… [\#4892](https://github.com/apache/arrow-datafusion/pull/4892) ([jdye64](https://github.com/jdye64))
+- Update  `optimize_children` to return `Result<Option<LogicalPlan>>` [\#4888](https://github.com/apache/arrow-datafusion/pull/4888) ([HaoYang670](https://github.com/HaoYang670))
+- Do not repartition inputs whose sort order is required [\#4885](https://github.com/apache/arrow-datafusion/pull/4885) ([alamb](https://github.com/alamb))
+- Minor: Add docstrings to UnionExec [\#4884](https://github.com/apache/arrow-datafusion/pull/4884) ([alamb](https://github.com/alamb))
+- Update datafusion-substrait crate to build against repo version of DataFusion [\#4879](https://github.com/apache/arrow-datafusion/pull/4879) ([andygrove](https://github.com/andygrove))
+- Fix column indices in EnforceDistribution optimizer in Partial AggregateMode [\#4878](https://github.com/apache/arrow-datafusion/pull/4878) ([jonmmease](https://github.com/jonmmease))
+- refactor: improve repartition buffering [\#4867](https://github.com/apache/arrow-datafusion/pull/4867) ([crepererum](https://github.com/crepererum))
+- Rewrite coerce\_plan\_expr\_for\_schema to fix union type coercion [\#4862](https://github.com/apache/arrow-datafusion/pull/4862) ([ygf11](https://github.com/ygf11))
+- \(\#4462\) Postgres compatibility tests using sqllogictest [\#4834](https://github.com/apache/arrow-datafusion/pull/4834) ([melgenek](https://github.com/melgenek))
+- Support non-tuple expression for in-subquery to join [\#4826](https://github.com/apache/arrow-datafusion/pull/4826) ([ygf11](https://github.com/ygf11))
+- Update to arrow `30.0.1` [\#4818](https://github.com/apache/arrow-datafusion/pull/4818) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([tustvold](https://github.com/tustvold))
+- Refine the statistics estimation for the limit and aggregate operator [\#4716](https://github.com/apache/arrow-datafusion/pull/4716) ([yahoNanJing](https://github.com/yahoNanJing))
+- Infer prepared statement parameter types [\#4701](https://github.com/apache/arrow-datafusion/pull/4701) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([avantgardnerio](https://github.com/avantgardnerio))
+- Add datafusion-substrait crate [\#4543](https://github.com/apache/arrow-datafusion/pull/4543) ([andygrove](https://github.com/andygrove))
+- Refactor loser tree  code in SortPreservingMerge per PR comments [\#4407](https://github.com/apache/arrow-datafusion/pull/4407) ([alamb](https://github.com/alamb))
+
+
+## [16.1.0](https://github.com/apache/arrow-datafusion/tree/16.1.0) (2023-01-19)
+
+[Full Changelog](https://github.com/apache/arrow-datafusion/compare/16.1.0-rc1...16.0.0)
+
+**Merged pull requests:**
+
+- Fix column indices in EnforceDistribution optimizer in Partial AggregateMode \(\#4878\) [\#4959](https://github.com/apache/arrow-datafusion/pull/4959)
+- Make it able to specify a session id for SessionState \(\#4933\) [\#4951](https://github.com/apache/arrow-datafusion/pull/4951)
+
+## [16.0.0](https://github.com/apache/arrow-datafusion/tree/16.0.0) (2023-01-12)
+
+[Full Changelog](https://github.com/apache/arrow-datafusion/compare/16.0.0-rc1...16.0.0)
+
+**Breaking changes:**
+
+- Remove unused ExecutionPlan::relies\_input\_order \(has been replaced with `required_input_ordering`\) [\#4856](https://github.com/apache/arrow-datafusion/pull/4856) ([alamb](https://github.com/alamb))
+- Add DataFrame::into\_view instead of implementing TableProvider \(\#2659\) [\#4778](https://github.com/apache/arrow-datafusion/pull/4778) ([tustvold](https://github.com/tustvold))
+
+**Implemented enhancements:**
+
+- Support custom window frame with AVG aggregate function [\#4845](https://github.com/apache/arrow-datafusion/issues/4845)
+- add sqllogicaltest for tpch and remove some duplicated test. [\#4801](https://github.com/apache/arrow-datafusion/issues/4801)
+- Catalog Snapshot Isolation [\#4697](https://github.com/apache/arrow-datafusion/issues/4697)
+- Support `select .. FROM 'parquet.file'` in datafusion-cli [\#4580](https://github.com/apache/arrow-datafusion/issues/4580)
+
+**Fixed bugs:**
+
+- Regression: `write_csv` result has incorrect formatting [\#4876](https://github.com/apache/arrow-datafusion/issues/4876)
+- Incorrect results for join condition against current master branch [\#4844](https://github.com/apache/arrow-datafusion/issues/4844)
+- Match Postgres for stddev and variance on less than 3 values [\#4843](https://github.com/apache/arrow-datafusion/issues/4843)
+- `JOIN ... USING (columns)` works incorrectly with multiple columns \(joined-over columns are missing in the output\) [\#4674](https://github.com/apache/arrow-datafusion/issues/4674)
+- ROW\_NUMBER window function inconsistent across partitions in multi-threaded runtime [\#4673](https://github.com/apache/arrow-datafusion/issues/4673)
+- `SELECT ... FROM (tbl1 UNION tbl2)` wrongly works like `SELECT DISTINCT ... FROM (tbl1 UNION tbl2)` [\#4667](https://github.com/apache/arrow-datafusion/issues/4667)
+- DataFrame TableProvider Circular Reference [\#2659](https://github.com/apache/arrow-datafusion/issues/2659)
+
+**Documentation updates:**
+
+- Add Synnada to known uses [\#4857](https://github.com/apache/arrow-datafusion/pull/4857) ([ozankabak](https://github.com/ozankabak))
+
+**Closed issues:**
+
+- Remove tests from `sql_integration` that were ported to `sqllogictest` [\#4498](https://github.com/apache/arrow-datafusion/issues/4498)
+- How to register a http url to the `object_store` [\#4491](https://github.com/apache/arrow-datafusion/issues/4491)
+- optimizer: support `unsigned <-> decimal` for unwrap\_cast\_in\_comparion rule [\#4287](https://github.com/apache/arrow-datafusion/issues/4287)
+-   Add SQL support for NATURAL JOIN [\#117](https://github.com/apache/arrow-datafusion/issues/117)
+- \[Datafusion\] Datafusion queries involving a column name that begins with a number produces unexpected results [\#108](https://github.com/apache/arrow-datafusion/issues/108)
+
+**Merged pull requests:**
+
+- docs: improve `Column::normalize_with_schemas` docs [\#4871](https://github.com/apache/arrow-datafusion/pull/4871) ([crepererum](https://github.com/crepererum))
+- Skip EliminateCrossJoin rule when meet non-empty join filter [\#4869](https://github.com/apache/arrow-datafusion/pull/4869) ([ygf11](https://github.com/ygf11))
+- Support for SQL Natural Join [\#4863](https://github.com/apache/arrow-datafusion/pull/4863) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([Jefffrey](https://github.com/Jefffrey))
+- Minor: Move test data into `datafusion/core/tests/data` [\#4855](https://github.com/apache/arrow-datafusion/pull/4855) ([alamb](https://github.com/alamb))
+- Covariance single row input & null skipping [\#4852](https://github.com/apache/arrow-datafusion/pull/4852) ([korowa](https://github.com/korowa))
+- Document ability to select directly from files in datafusion-cli [\#4851](https://github.com/apache/arrow-datafusion/pull/4851) ([alamb](https://github.com/alamb))
+- Fix push\_down\_projection through a distinct [\#4849](https://github.com/apache/arrow-datafusion/pull/4849) ([Jefffrey](https://github.com/Jefffrey))
+- Support using var/var\_pop/stddev/stddev\_pop in window expressions with custom frames [\#4848](https://github.com/apache/arrow-datafusion/pull/4848) ([jonmmease](https://github.com/jonmmease))
+- Update variance/stddev to work with single values [\#4847](https://github.com/apache/arrow-datafusion/pull/4847) ([jonmmease](https://github.com/jonmmease))
+- Implement retract\_batch for AvgAccumulator [\#4846](https://github.com/apache/arrow-datafusion/pull/4846) ([jonmmease](https://github.com/jonmmease))
+- Support wildcard select on multiple column using joins [\#4840](https://github.com/apache/arrow-datafusion/pull/4840) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([Jefffrey](https://github.com/Jefffrey))
+- Orthogonalize distribution and sort enforcement rules into `EnforceDistribution` and `EnforceSorting` [\#4839](https://github.com/apache/arrow-datafusion/pull/4839) ([mustafasrepo](https://github.com/mustafasrepo))
+- support `select .. FROM 'parquet.file'` in datafusion-cli [\#4838](https://github.com/apache/arrow-datafusion/pull/4838) ([unconsolable](https://github.com/unconsolable))
+- Remove tests from sql\_integration that were ported to sqllogictest  [\#4836](https://github.com/apache/arrow-datafusion/pull/4836) ([matthewwillian](https://github.com/matthewwillian))
+- add tpch sqllogicaltest and remove some duplicated test [\#4802](https://github.com/apache/arrow-datafusion/pull/4802) ([jackwener](https://github.com/jackwener))
+
+## [16.0.0-rc1](https://github.com/apache/arrow-datafusion/tree/16.0.0-rc1) (2023-01-07)
+
+[Full Changelog](https://github.com/apache/arrow-datafusion/compare/15.0.0...16.0.0-rc1)
 
 **Breaking changes:**
 
@@ -75,6 +635,7 @@
 - Normalize datafusion configuration names [\#4595](https://github.com/apache/arrow-datafusion/issues/4595)
 - Add need\_data\_exchange in the ExecutionPlan to indicate whether a physical operator needs data exchange [\#4585](https://github.com/apache/arrow-datafusion/issues/4585)
 - Bump Datafusion sql-parser dependency to 0.28 [\#4573](https://github.com/apache/arrow-datafusion/issues/4573)
+- tpch test exist duplicated [\#4563](https://github.com/apache/arrow-datafusion/issues/4563)
 - user-defined aggregate function as window function [\#4552](https://github.com/apache/arrow-datafusion/issues/4552)
 - Convert a Prepare Logical Plan into a Logical Plan with all parameters replaced with values [\#4550](https://github.com/apache/arrow-datafusion/issues/4550)
 - FileStream requires fake ObjectStore when ParquetFileReaderFactory is used [\#4533](https://github.com/apache/arrow-datafusion/issues/4533)
@@ -92,6 +653,7 @@
 - Add support for NTILE built-in Window Function [\#4403](https://github.com/apache/arrow-datafusion/issues/4403)
 - Add Support for MIN, MAX Aggregate Functions when run with custom window frames [\#4402](https://github.com/apache/arrow-datafusion/issues/4402)
 - Support `INSERT INTO` statement [\#4397](https://github.com/apache/arrow-datafusion/issues/4397)
+- Enhancement: split the SQL `planner` into smaller modules [\#4392](https://github.com/apache/arrow-datafusion/issues/4392)
 - Proposal: Improve the join keys of logical plan [\#4389](https://github.com/apache/arrow-datafusion/issues/4389)
 - Add `MergeSubqueryAlias` rule [\#4383](https://github.com/apache/arrow-datafusion/issues/4383)
 - Optimizer rule support `subqueryAlias` [\#4381](https://github.com/apache/arrow-datafusion/issues/4381)
@@ -118,6 +680,8 @@
 
 **Fixed bugs:**
 
+- PushdownFilter rule exist bug will cause filter change wrong [\#4822](https://github.com/apache/arrow-datafusion/issues/4822)
+- Unlimited memory consumption in `RepartitionExec` [\#4816](https://github.com/apache/arrow-datafusion/issues/4816)
 - Physical Optimizer Config Mutation Doesn't Take Effect [\#4806](https://github.com/apache/arrow-datafusion/issues/4806)
 - cargo test failed `error: linking with `cc` failed: exit status: 1` [\#4790](https://github.com/apache/arrow-datafusion/issues/4790)
 - Parquet files generated by DataFusion cannot be read by Apache Spark [\#4782](https://github.com/apache/arrow-datafusion/issues/4782)
@@ -177,6 +741,7 @@
 
 **Closed issues:**
 
+- move the tests in planner [\#4798](https://github.com/apache/arrow-datafusion/issues/4798)
 - Make it easier to update sqltestlogic test expected output \("test script completion mode"\) [\#4570](https://github.com/apache/arrow-datafusion/issues/4570)
 - Make ConfigOption names into an Enum  [\#4517](https://github.com/apache/arrow-datafusion/issues/4517)
 - Implement null / empty string handling for sqllogictest [\#4500](https://github.com/apache/arrow-datafusion/issues/4500)
@@ -185,9 +750,15 @@
 
 **Merged pull requests:**
 
+- Bump tokio from 1.23.0 to 1.23.1 in /datafusion-cli [\#4835](https://github.com/apache/arrow-datafusion/pull/4835) ([dependabot[bot]](https://github.com/apps/dependabot))
+- Fix a few links in `roadmap.md` [\#4833](https://github.com/apache/arrow-datafusion/pull/4833) ([romanz](https://github.com/romanz))
+- DataFusion 16.0.0 release prep: Update version + add changelog [\#4831](https://github.com/apache/arrow-datafusion/pull/4831) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([andygrove](https://github.com/andygrove))
 - feat: use arrow row format for hash-group-by [\#4830](https://github.com/apache/arrow-datafusion/pull/4830) ([crepererum](https://github.com/crepererum))
+- refactor: split relation of planner into one part. [\#4829](https://github.com/apache/arrow-datafusion/pull/4829) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([jackwener](https://github.com/jackwener))
+- bugfix: remove cnf\_rewrite in push\_down\_filter [\#4825](https://github.com/apache/arrow-datafusion/pull/4825) ([jackwener](https://github.com/jackwener))
 - minor: add some comments to row group pruning tests [\#4823](https://github.com/apache/arrow-datafusion/pull/4823) ([alamb](https://github.com/alamb))
 - Handle trailing tbl column in TPCH benchmarks [\#4821](https://github.com/apache/arrow-datafusion/pull/4821) ([tustvold](https://github.com/tustvold))
+- fix: account for memory in `RepartitionExec` [\#4820](https://github.com/apache/arrow-datafusion/pull/4820) ([crepererum](https://github.com/crepererum))
 - Fix clippy [\#4817](https://github.com/apache/arrow-datafusion/pull/4817) ([tustvold](https://github.com/tustvold))
 - Add test cases: row group filter with missing statistics for decimal data type [\#4810](https://github.com/apache/arrow-datafusion/pull/4810) ([liukun4515](https://github.com/liukun4515))
 - Move default catalog and schema onto ConfigOptions \(\#3887\) [\#4805](https://github.com/apache/arrow-datafusion/pull/4805) ([tustvold](https://github.com/tustvold))
@@ -344,10 +915,6 @@
 - `date_part` support fractions of second [\#4385](https://github.com/apache/arrow-datafusion/pull/4385) ([comphead](https://github.com/comphead))
 - Minor: use upstream RowSelection code from arrow `intersect_row_selection` [\#4340](https://github.com/apache/arrow-datafusion/pull/4340) ([alamb](https://github.com/alamb))
 - Support type coercion for timestamp and utf8 [\#4312](https://github.com/apache/arrow-datafusion/pull/4312) ([andre-cc-natzka](https://github.com/andre-cc-natzka))
-
-## [15.0.0-rc1](https://github.com/apache/arrow-datafusion/tree/15.0.0-rc1) (2022-12-02)
-
-[Full Changelog](https://github.com/apache/arrow-datafusion/compare/15.0.0...15.0.0-rc1)
 
 
 ## [15.0.0](https://github.com/apache/arrow-datafusion/tree/15.0.0) (2022-12-01)

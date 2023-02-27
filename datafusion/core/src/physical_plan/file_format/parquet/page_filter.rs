@@ -110,14 +110,16 @@ impl PagePruningPredicate {
     pub fn try_new(expr: &Expr, schema: SchemaRef) -> Result<Self> {
         let predicates = split_conjunction(expr)
             .into_iter()
-            .filter_map(|predicate| match predicate.to_columns() {
-                Ok(columns) if columns.len() == 1 => {
-                    match PruningPredicate::try_new(predicate.clone(), schema.clone()) {
-                        Ok(p) if !p.allways_true() => Some(Ok(p)),
-                        _ => None,
+            .filter_map(|predicate| {
+                match PruningPredicate::try_new(predicate.clone(), schema.clone()) {
+                    Ok(p)
+                        if (!p.allways_true())
+                            && (p.required_columns().n_columns() < 2) =>
+                    {
+                        Some(Ok(p))
                     }
+                    _ => None,
                 }
-                _ => None,
             })
             .collect::<Result<Vec<_>>>()?;
         Ok(Self { predicates })
@@ -139,72 +141,145 @@ impl PagePruningPredicate {
         let page_index_predicates = &self.predicates;
         let groups = file_metadata.row_groups();
 
+        if groups.is_empty() {
+            return Ok(None);
+        }
+
         let file_offset_indexes = file_metadata.offset_indexes();
         let file_page_indexes = file_metadata.page_indexes();
-        if let (Some(file_offset_indexes), Some(file_page_indexes)) =
-            (file_offset_indexes, file_page_indexes)
-        {
-            let mut row_selections = Vec::with_capacity(page_index_predicates.len());
-            for predicate in page_index_predicates {
-                // `extract_page_index_push_down_predicates` only return predicate with one col.
-                //  when building `PruningPredicate`, some single column filter like `abs(i) = 1`
-                //  will be rewrite to `lit(true)`, so may have an empty required_columns.
-                if let Some(&col_id) = predicate.need_input_columns_ids().iter().next() {
-                    let mut selectors = Vec::with_capacity(row_groups.len());
-                    for r in row_groups.iter() {
-                        let rg_offset_indexes = file_offset_indexes.get(*r);
-                        let rg_page_indexes = file_page_indexes.get(*r);
-                        if let (Some(rg_page_indexes), Some(rg_offset_indexes)) =
-                            (rg_page_indexes, rg_offset_indexes)
-                        {
-                            selectors.extend(
-                                prune_pages_in_one_row_group(
-                                    &groups[*r],
-                                    predicate,
-                                    rg_offset_indexes.get(col_id),
-                                    rg_page_indexes.get(col_id),
-                                    groups[*r].column(col_id).column_descr(),
-                                    file_metrics,
-                                )
-                                .map_err(|e| {
-                                    ArrowError::ParquetError(format!(
-                                        "Fail in prune_pages_in_one_row_group: {e}"
-                                    ))
-                                }),
-                            );
-                        } else {
-                            trace!(
-                                "Did not have enough metadata to prune with page indexes, falling back, falling back to all rows",
-                            );
-                            // fallback select all rows
-                            let all_selected =
-                                vec![RowSelector::select(groups[*r].num_rows() as usize)];
-                            selectors.push(all_selected);
-                        }
-                    }
-                    debug!(
-                        "Use filter and page index create RowSelection {:?} from predicate: {:?}",
-                        &selectors,
-                        predicate.predicate_expr(),
+        let (file_offset_indexes, file_page_indexes) =
+            match (file_offset_indexes, file_page_indexes) {
+                (Some(o), Some(i)) => (o, i),
+                _ => {
+                    trace!(
+                    "skip page pruning due to lack of indexes. Have offset: {} file: {}",
+                    file_offset_indexes.is_some(), file_page_indexes.is_some()
+                );
+                    return Ok(None);
+                }
+            };
+
+        let mut row_selections = Vec::with_capacity(page_index_predicates.len());
+        for predicate in page_index_predicates {
+            // find column index by looking in the row group metadata.
+            let col_idx = find_column_index(predicate, &groups[0]);
+
+            let mut selectors = Vec::with_capacity(row_groups.len());
+            for r in row_groups.iter() {
+                let row_group_metadata = &groups[*r];
+
+                let rg_offset_indexes = file_offset_indexes.get(*r);
+                let rg_page_indexes = file_page_indexes.get(*r);
+                if let (Some(rg_page_indexes), Some(rg_offset_indexes), Some(col_idx)) =
+                    (rg_page_indexes, rg_offset_indexes, col_idx)
+                {
+                    selectors.extend(
+                        prune_pages_in_one_row_group(
+                            row_group_metadata,
+                            predicate,
+                            rg_offset_indexes.get(col_idx),
+                            rg_page_indexes.get(col_idx),
+                            groups[*r].column(col_idx).column_descr(),
+                            file_metrics,
+                        )
+                        .map_err(|e| {
+                            ArrowError::ParquetError(format!(
+                                "Fail in prune_pages_in_one_row_group: {e}"
+                            ))
+                        }),
                     );
-                    row_selections
-                        .push(selectors.into_iter().flatten().collect::<Vec<_>>());
+                } else {
+                    trace!(
+                        "Did not have enough metadata to prune with page indexes, \
+                         falling back to all rows",
+                    );
+                    // fallback select all rows
+                    let all_selected =
+                        vec![RowSelector::select(groups[*r].num_rows() as usize)];
+                    selectors.push(all_selected);
                 }
             }
-            let final_selection = combine_multi_col_selection(row_selections);
-            let total_skip = final_selection.iter().fold(0, |acc, x| {
-                if x.skip {
-                    acc + x.row_count
-                } else {
-                    acc
-                }
-            });
-            file_metrics.page_index_rows_filtered.add(total_skip);
-            Ok(Some(final_selection))
+            debug!(
+                "Use filter and page index create RowSelection {:?} from predicate: {:?}",
+                &selectors,
+                predicate.predicate_expr(),
+            );
+            row_selections.push(selectors.into_iter().flatten().collect::<Vec<_>>());
+        }
+
+        let final_selection = combine_multi_col_selection(row_selections);
+        let total_skip =
+            final_selection.iter().fold(
+                0,
+                |acc, x| {
+                    if x.skip {
+                        acc + x.row_count
+                    } else {
+                        acc
+                    }
+                },
+            );
+        file_metrics.page_index_rows_filtered.add(total_skip);
+        Ok(Some(final_selection))
+    }
+}
+
+/// Returns the column index in the row group metadata for the single
+/// column of a single column pruning predicate.
+///
+/// For example, give the predicate `y > 5`
+///
+/// And columns in the RowGroupMetadata like `['x', 'y', 'z']` will
+/// return 1.
+///
+/// Returns `None` if the column is not found, or if there are no
+/// required columns, which is the case for predicate like `abs(i) =
+/// 1` which are rewritten to `lit(true)`
+///
+/// Panics:
+///
+/// If the predicate contains more than one column reference (assumes
+/// that `extract_page_index_push_down_predicates` only return
+/// predicate with one col)
+///
+fn find_column_index(
+    predicate: &PruningPredicate,
+    row_group_metadata: &RowGroupMetaData,
+) -> Option<usize> {
+    let mut found_required_column: Option<&Column> = None;
+
+    for required_column_details in predicate.required_columns().iter() {
+        let column = &required_column_details.0;
+        if let Some(found_required_column) = found_required_column.as_ref() {
+            // make sure it is the same name we have seen previously
+            assert_eq!(
+                column.name, found_required_column.name,
+                "Unexpected multi column predicate"
+            );
         } else {
-            Ok(None)
+            found_required_column = Some(column);
         }
     }
+
+    let column = if let Some(found_required_column) = found_required_column.as_ref() {
+        found_required_column
+    } else {
+        trace!("No column references in pruning predicate");
+        return None;
+    };
+
+    let col_idx = row_group_metadata
+        .columns()
+        .iter()
+        .enumerate()
+        .find(|(_idx, c)| c.column_descr().name() == column.name)
+        .map(|(idx, _c)| idx);
+
+    if col_idx.is_none() {
+        trace!("Can not find column {} in row group meta", column.name);
+    }
+
+    col_idx
 }
 
 /// Intersects the [`RowSelector`]s
@@ -385,7 +460,10 @@ macro_rules! get_min_max_values_for_page_index {
                     let vec = &index.indexes;
                     Decimal128Array::from(
                         vec.iter()
-                            .map(|x| x.$func().and_then(|x| Some(from_bytes_to_i128(x))))
+                            .map(|x| {
+                                x.$func()
+                                    .and_then(|x| Some(from_bytes_to_i128(x.as_ref())))
+                            })
                             .collect::<Vec<Option<i128>>>(),
                     )
                     .with_precision_and_scale(*precision, *scale)
@@ -397,7 +475,7 @@ macro_rules! get_min_max_values_for_page_index {
                     let array: StringArray = vec
                         .iter()
                         .map(|x| x.$func())
-                        .map(|x| x.and_then(|x| std::str::from_utf8(x).ok()))
+                        .map(|x| x.and_then(|x| std::str::from_utf8(x.as_ref()).ok()))
                         .collect();
                     Some(Arc::new(array))
                 }
@@ -411,7 +489,10 @@ macro_rules! get_min_max_values_for_page_index {
                     let vec = &index.indexes;
                     Decimal128Array::from(
                         vec.iter()
-                            .map(|x| x.$func().and_then(|x| Some(from_bytes_to_i128(x))))
+                            .map(|x| {
+                                x.$func()
+                                    .and_then(|x| Some(from_bytes_to_i128(x.as_ref())))
+                            })
                             .collect::<Vec<Option<i128>>>(),
                     )
                     .with_precision_and_scale(*precision, *scale)

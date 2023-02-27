@@ -24,6 +24,7 @@ use datafusion_physical_expr::PhysicalExpr;
 use fmt::Debug;
 use std::any::Any;
 use std::collections::HashSet;
+use std::cmp::min;
 use std::fmt;
 use std::fs;
 use std::ops::Range;
@@ -39,6 +40,7 @@ use crate::physical_plan::file_format::FileMeta;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::repartition::REVERSE_HASH;
 use crate::{
+    datasource::listing::FileRange,
     error::{DataFusionError, Result},
     execution::context::{SessionState, TaskContext},
     physical_optimizer::pruning::PruningPredicate,
@@ -55,6 +57,7 @@ use bytes::Bytes;
 use datafusion_expr::Expr;
 use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryFutureExt, TryStreamExt};
+use itertools::Itertools;
 use log::{debug, info, trace};
 use object_store::{ObjectMeta, ObjectStore};
 use parquet::arrow::arrow_reader::ArrowReaderOptions;
@@ -70,10 +73,17 @@ mod page_filter;
 mod row_filter;
 mod row_groups;
 
+use crate::physical_plan::common::AbortOnDropSingle;
 use crate::physical_plan::file_format::parquet::page_filter::PagePruningPredicate;
 pub use metrics::ParquetFileMetrics;
 
 use super::get_output_ordering;
+
+#[derive(Default)]
+struct RepartitionState {
+    current_partition_index: usize,
+    current_partition_size: usize,
+}
 
 /// Execution plan for scanning one or more Parquet partitions
 #[derive(Debug, Clone)]
@@ -239,6 +249,78 @@ impl ParquetExec {
         self.enable_page_index
             .unwrap_or(config_options.execution.parquet.enable_page_index)
     }
+
+    /// Redistribute files across partitions according to their size
+    pub fn get_repartitioned(
+        &self,
+        target_partitions: usize,
+        repartition_file_min_size: usize,
+    ) -> Self {
+        let flattened_files = self
+            .base_config()
+            .file_groups
+            .iter()
+            .flatten()
+            .collect::<Vec<_>>();
+
+        // Perform redistribution only in case all files should be read from beginning to end
+        let has_ranges = flattened_files.iter().any(|f| f.range.is_some());
+        if has_ranges {
+            return self.clone();
+        }
+
+        let total_size = flattened_files
+            .iter()
+            .map(|f| f.object_meta.size as i64)
+            .sum::<i64>();
+        if total_size < (repartition_file_min_size as i64) {
+            return self.clone();
+        }
+
+        let target_partition_size =
+            (total_size as usize + (target_partitions) - 1) / (target_partitions);
+
+        let repartitioned_files = flattened_files
+            .into_iter()
+            .scan(RepartitionState::default(), |state, source_file| {
+                let mut produced_files = vec![];
+                let mut range_start = 0;
+                while range_start < source_file.object_meta.size {
+                    let range_end = min(
+                        range_start
+                            + (target_partition_size - state.current_partition_size),
+                        source_file.object_meta.size,
+                    );
+
+                    let mut produced_file = source_file.clone();
+                    produced_file.range = Some(FileRange {
+                        start: range_start as i64,
+                        end: range_end as i64,
+                    });
+                    produced_files.push((state.current_partition_index, produced_file));
+
+                    if state.current_partition_size + (range_end - range_start)
+                        >= target_partition_size
+                    {
+                        state.current_partition_index += 1;
+                        state.current_partition_size = 0;
+                    } else {
+                        state.current_partition_size += range_end - range_start;
+                    }
+                    range_start = range_end;
+                }
+                Some(produced_files)
+            })
+            .flatten()
+            .group_by(|(partition_idx, _)| *partition_idx)
+            .into_iter()
+            .map(|(_, group)| group.map(|(_, vals)| vals).collect_vec())
+            .collect_vec();
+
+        let mut new_parquet_exec = self.clone();
+        new_parquet_exec.base_config.file_groups = repartitioned_files;
+        new_parquet_exec
+    }
 }
 
 impl ExecutionPlan for ParquetExec {
@@ -301,6 +383,7 @@ impl ExecutionPlan for ParquetExec {
             partition_index,
             projection: Arc::from(projection),
             batch_size: ctx.session_config().batch_size(),
+            limit: self.base_config.limit,
             predicate: self.predicate.clone(),
             pruning_predicate: self.pruning_predicate.clone(),
             page_pruning_predicate: self.page_pruning_predicate.clone(),
@@ -313,12 +396,8 @@ impl ExecutionPlan for ParquetExec {
             enable_page_index: self.enable_page_index(config_options),
         };
 
-        let stream = FileStream::new(
-            &self.base_config,
-            partition_index,
-            opener,
-            self.metrics.clone(),
-        )?;
+        let stream =
+            FileStream::new(&self.base_config, partition_index, opener, &self.metrics)?;
 
         Ok(Box::pin(stream))
     }
@@ -389,6 +468,7 @@ struct ParquetOpener {
     partition_index: usize,
     projection: Arc<[usize]>,
     batch_size: usize,
+    limit: Option<usize>,
     predicate: Option<Arc<Expr>>,
     pruning_predicate: Option<Arc<PruningPredicate>>,
     page_pruning_predicate: Option<Arc<PagePruningPredicate>>,
@@ -429,6 +509,7 @@ impl FileOpener for ParquetOpener {
         let reorder_predicates = self.reorder_filters;
         let pushdown_filters = self.pushdown_filters;
         let enable_page_index = self.enable_page_index;
+        let limit = self.limit;
 
         Ok(Box::pin(async move {
             let options = ArrowReaderOptions::new().with_page_index(enable_page_index);
@@ -489,6 +570,10 @@ impl FileOpener for ParquetOpener {
                         builder = builder.with_row_selection(row_selection);
                     }
                 }
+            }
+
+            if let Some(limit) = limit {
+                builder = builder.with_limit(limit)
             }
 
             let stream = builder
@@ -756,44 +841,44 @@ async fn plan_to_parquet_(
     let path = path.as_ref();
     // create directory to contain the Parquet files (one per partition)
     let fs_path = std::path::Path::new(path);
-    match fs::create_dir_all(fs_path) {
-        Ok(()) => {
-            let mut tasks = vec![];
-            for i in 0..plan.output_partitioning().partition_count() {
-                let plan = plan.clone();
-                let filename = format!("part-{i}.parquet");
-                let path = fs_path.join(filename);
-                let file = fs::File::create(path)?;
-                let mut writer = ArrowWriter::try_new(
-                    file,
-                    schema.to_owned(),
-                    writer_properties.clone(),
-                )?;
-                let task_ctx = Arc::new(TaskContext::from(state));
-                let stream = plan.execute(i, task_ctx)?;
-                let handle: tokio::task::JoinHandle<Result<()>> =
-                    tokio::task::spawn(async move {
-                        stream
-                            .map(|batch| writer.write(&batch?))
-                            .try_collect()
-                            .await
-                            .map_err(DataFusionError::from)?;
-                        writer.close().map_err(DataFusionError::from).map(|_| ())
-                    });
-                tasks.push(handle);
-            }
-            futures::future::join_all(tasks)
-                .await
-                .into_iter()
-                .try_for_each(|result| {
-                    result.map_err(|e| DataFusionError::Execution(format!("{e}")))?
-                })?;
-            Ok(())
-        }
-        Err(e) => Err(DataFusionError::Execution(format!(
+    if let Err(e) = fs::create_dir_all(fs_path) {
+        return Err(DataFusionError::Execution(format!(
             "Could not create directory {path}: {e:?}"
-        ))),
+        )));
     }
+
+    let mut tasks = vec![];
+    for i in 0..plan.output_partitioning().partition_count() {
+        let plan = plan.clone();
+        let filename = format!("part-{i}.parquet");
+        let path = fs_path.join(filename);
+        let file = fs::File::create(path)?;
+        let mut writer =
+            ArrowWriter::try_new(file, plan.schema(), writer_properties.clone())?;
+        let task_ctx = Arc::new(TaskContext::from(state));
+        let stream = plan.execute(i, task_ctx)?;
+        let handle: tokio::task::JoinHandle<Result<()>> =
+            tokio::task::spawn(async move {
+                stream
+                    .map(|batch| {
+                        writer.write(&batch?).map_err(DataFusionError::ParquetError)
+                    })
+                    .try_collect()
+                    .await
+                    .map_err(DataFusionError::from)?;
+
+                writer.close().map_err(DataFusionError::from).map(|_| ())
+            });
+        tasks.push(AbortOnDropSingle::new(handle));
+    }
+
+    futures::future::join_all(tasks)
+        .await
+        .into_iter()
+        .try_for_each(|result| {
+            result.map_err(|e| DataFusionError::Execution(format!("{e}")))?
+        })?;
+    Ok(())
 }
 
 // Copy from the arrow-rs
@@ -883,82 +968,116 @@ mod tests {
         parquet_exec: Arc<ParquetExec>,
     }
 
-    /// writes each RecordBatch as an individual parquet file and re-reads
-    /// the data back. Returns the data as [RecordBatch]es
-    async fn round_trip_to_parquet(
-        batches: Vec<RecordBatch>,
-        projection: Option<Vec<usize>>,
-        schema: Option<SchemaRef>,
-        predicate: Option<Expr>,
-        pushdown_predicate: bool,
-    ) -> Result<Vec<RecordBatch>> {
-        round_trip(
-            batches,
-            projection,
-            schema,
-            predicate,
-            pushdown_predicate,
-            false,
-        )
-        .await
-        .batches
-    }
-
-    /// Writes each RecordBatch as an individual parquet file and then
-    /// reads them back. Returns the parquet exec as well as the data
-    /// as [RecordBatch]es
-    async fn round_trip(
-        batches: Vec<RecordBatch>,
+    /// round-trip record batches by writing each individual RecordBatch to
+    /// a parquet file and then reading that parquet file with the specified
+    /// options.
+    #[derive(Debug, Default)]
+    struct RoundTrip {
         projection: Option<Vec<usize>>,
         schema: Option<SchemaRef>,
         predicate: Option<Expr>,
         pushdown_predicate: bool,
         page_index_predicate: bool,
-    ) -> RoundTripResult {
-        let file_schema = match schema {
-            Some(schema) => schema,
-            None => Arc::new(
-                Schema::try_merge(batches.iter().map(|b| b.schema().as_ref().clone()))
-                    .unwrap(),
-            ),
-        };
+    }
 
-        let (meta, _files) = store_parquet(batches, page_index_predicate).await.unwrap();
-        let file_groups = meta.into_iter().map(Into::into).collect();
+    impl RoundTrip {
+        fn new() -> Self {
+            Default::default()
+        }
 
-        // prepare the scan
-        let mut parquet_exec = ParquetExec::new(
-            FileScanConfig {
-                object_store_url: ObjectStoreUrl::local_filesystem(),
-                file_groups: vec![file_groups],
-                file_schema,
-                statistics: Statistics::default(),
+        fn with_projection(mut self, projection: Vec<usize>) -> Self {
+            self.projection = Some(projection);
+            self
+        }
+
+        fn with_schema(mut self, schema: SchemaRef) -> Self {
+            self.schema = Some(schema);
+            self
+        }
+
+        fn with_predicate(mut self, predicate: Expr) -> Self {
+            self.predicate = Some(predicate);
+            self
+        }
+
+        fn with_pushdown_predicate(mut self) -> Self {
+            self.pushdown_predicate = true;
+            self
+        }
+
+        fn with_page_index_predicate(mut self) -> Self {
+            self.page_index_predicate = true;
+            self
+        }
+
+        /// run the test, returning only the resulting RecordBatches
+        async fn round_trip_to_batches(
+            self,
+            batches: Vec<RecordBatch>,
+        ) -> Result<Vec<RecordBatch>> {
+            self.round_trip(batches).await.batches
+        }
+
+        /// run the test, returning the `RoundTripResult`
+        async fn round_trip(self, batches: Vec<RecordBatch>) -> RoundTripResult {
+            let Self {
                 projection,
-                limit: None,
-                table_partition_cols: vec![],
-                output_ordering: None,
-                infinite_source: false,
-            },
-            predicate,
-            None,
-        );
+                schema,
+                predicate,
+                pushdown_predicate,
+                page_index_predicate,
+            } = self;
 
-        if pushdown_predicate {
-            parquet_exec = parquet_exec
-                .with_pushdown_filters(true)
-                .with_reorder_filters(true);
-        }
+            let file_schema = match schema {
+                Some(schema) => schema,
+                None => Arc::new(
+                    Schema::try_merge(
+                        batches.iter().map(|b| b.schema().as_ref().clone()),
+                    )
+                    .unwrap(),
+                ),
+            };
 
-        if page_index_predicate {
-            parquet_exec = parquet_exec.with_enable_page_index(true);
-        }
+            // If testing with page_index_predicate, write parquet
+            // files with multiple pages
+            let multi_page = page_index_predicate;
+            let (meta, _files) = store_parquet(batches, multi_page).await.unwrap();
+            let file_groups = meta.into_iter().map(Into::into).collect();
 
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
-        let parquet_exec = Arc::new(parquet_exec);
-        RoundTripResult {
-            batches: collect(parquet_exec.clone(), task_ctx).await,
-            parquet_exec,
+            // prepare the scan
+            let mut parquet_exec = ParquetExec::new(
+                FileScanConfig {
+                    object_store_url: ObjectStoreUrl::local_filesystem(),
+                    file_groups: vec![file_groups],
+                    file_schema,
+                    statistics: Statistics::default(),
+                    projection,
+                    limit: None,
+                    table_partition_cols: vec![],
+                    output_ordering: None,
+                    infinite_source: false,
+                },
+                predicate,
+                None,
+            );
+
+            if pushdown_predicate {
+                parquet_exec = parquet_exec
+                    .with_pushdown_filters(true)
+                    .with_reorder_filters(true);
+            }
+
+            if page_index_predicate {
+                parquet_exec = parquet_exec.with_enable_page_index(true);
+            }
+
+            let session_ctx = SessionContext::new();
+            let task_ctx = session_ctx.task_ctx();
+            let parquet_exec = Arc::new(parquet_exec);
+            RoundTripResult {
+                batches: collect(parquet_exec.clone(), task_ctx).await,
+                parquet_exec,
+            }
         }
     }
 
@@ -997,7 +1116,7 @@ mod tests {
             .write_parquet(&out_dir, None)
             .await
             .expect_err("should fail because input file does not match inferred schema");
-        assert_eq!("Parquet error: Arrow: underlying Arrow error: Parser error: Error while parsing value d for column 0 at line 4", format!("{e}"));
+        assert_eq!("Arrow error: Parser error: Error while parsing value d for column 0 at line 4", format!("{e}"));
         Ok(())
     }
 
@@ -1021,10 +1140,10 @@ mod tests {
         let batch3 = add_to_batch(&batch1, "c3", c3);
 
         // read/write them files:
-        let read =
-            round_trip_to_parquet(vec![batch1, batch2, batch3], None, None, None, false)
-                .await
-                .unwrap();
+        let read = RoundTrip::new()
+            .round_trip_to_batches(vec![batch1, batch2, batch3])
+            .await
+            .unwrap();
         let expected = vec![
             "+-----+----+----+",
             "| c1  | c2 | c3 |",
@@ -1063,7 +1182,8 @@ mod tests {
         let batch2 = create_batch(vec![("c3", c3), ("c2", c2), ("c1", c1)]);
 
         // read/write them files:
-        let read = round_trip_to_parquet(vec![batch1, batch2], None, None, None, false)
+        let read = RoundTrip::new()
+            .round_trip_to_batches(vec![batch1, batch2])
             .await
             .unwrap();
         let expected = vec![
@@ -1097,7 +1217,8 @@ mod tests {
         let batch2 = create_batch(vec![("c3", c3), ("c2", c2)]);
 
         // read/write them files:
-        let read = round_trip_to_parquet(vec![batch1, batch2], None, None, None, false)
+        let read = RoundTrip::new()
+            .round_trip_to_batches(vec![batch1, batch2])
             .await
             .unwrap();
         let expected = vec![
@@ -1133,10 +1254,11 @@ mod tests {
         let filter = col("c2").eq(lit(2_i64));
 
         // read/write them files:
-        let read =
-            round_trip_to_parquet(vec![batch1, batch2], None, None, Some(filter), false)
-                .await
-                .unwrap();
+        let read = RoundTrip::new()
+            .with_predicate(filter)
+            .round_trip_to_batches(vec![batch1, batch2])
+            .await
+            .unwrap();
         let expected = vec![
             "+-----+----+----+",
             "| c1  | c3 | c2 |",
@@ -1170,8 +1292,12 @@ mod tests {
         let filter = col("c2").eq(lit(2_i64)).or(col("c2").eq(lit(1_i64)));
 
         // read/write them files:
-        let rt =
-            round_trip(vec![batch1, batch2], None, None, Some(filter), true, false).await;
+        let rt = RoundTrip::new()
+            .with_predicate(filter)
+            .with_pushdown_predicate()
+            .round_trip(vec![batch1, batch2])
+            .await;
+
         let expected = vec![
             "+----+----+----+",
             "| c1 | c3 | c2 |",
@@ -1209,15 +1335,11 @@ mod tests {
         let batch2 = create_batch(vec![("c3", c3), ("c2", c2), ("c1", c1), ("c4", c4)]);
 
         // read/write them files:
-        let read = round_trip_to_parquet(
-            vec![batch1, batch2],
-            Some(vec![0, 3]),
-            None,
-            None,
-            false,
-        )
-        .await
-        .unwrap();
+        let read = RoundTrip::new()
+            .with_projection(vec![0, 3])
+            .round_trip_to_batches(vec![batch1, batch2])
+            .await
+            .unwrap();
         let expected = vec![
             "+-----+-----+",
             "| c1  | c4  |",
@@ -1255,10 +1377,11 @@ mod tests {
         let filter = col("c3").eq(lit(0_i8));
 
         // read/write them files:
-        let read =
-            round_trip_to_parquet(vec![batch1, batch2], None, None, Some(filter), false)
-                .await
-                .unwrap();
+        let read = RoundTrip::new()
+            .with_predicate(filter)
+            .round_trip_to_batches(vec![batch1, batch2])
+            .await
+            .unwrap();
 
         // Predicate should prune all row groups
         assert_eq!(read.len(), 0);
@@ -1280,10 +1403,11 @@ mod tests {
         let filter = col("c2").eq(lit(1_i64));
 
         // read/write them files:
-        let read =
-            round_trip_to_parquet(vec![batch1, batch2], None, None, Some(filter), false)
-                .await
-                .unwrap();
+        let read = RoundTrip::new()
+            .with_predicate(filter)
+            .round_trip_to_batches(vec![batch1, batch2])
+            .await
+            .unwrap();
 
         // This does not look correct since the "c2" values in the result do not in fact match the predicate `c2 == 0`
         // but parquet pruning is not exact. If the min/max values are not defined (which they are not in this case since the it is
@@ -1321,8 +1445,11 @@ mod tests {
         let filter = col("c2").eq(lit(1_i64));
 
         // read/write them files:
-        let rt =
-            round_trip(vec![batch1, batch2], None, None, Some(filter), true, false).await;
+        let rt = RoundTrip::new()
+            .with_predicate(filter)
+            .with_pushdown_predicate()
+            .round_trip(vec![batch1, batch2])
+            .await;
 
         let expected = vec![
             "+----+----+",
@@ -1338,6 +1465,80 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn evolved_schema_disjoint_schema_with_page_index_pushdown() {
+        let c1: ArrayRef = Arc::new(StringArray::from(vec![
+            // Page 1
+            Some("Foo"),
+            Some("Bar"),
+            // Page 2
+            Some("Foo2"),
+            Some("Bar2"),
+            // Page 3
+            Some("Foo3"),
+            Some("Bar3"),
+        ]));
+
+        let c2: ArrayRef = Arc::new(Int64Array::from(vec![
+            // Page 1:
+            Some(1),
+            Some(2),
+            // Page 2: (pruned)
+            Some(3),
+            Some(4),
+            // Page 3: (pruned)
+            Some(5),
+            None,
+        ]));
+
+        // batch1: c1(string)
+        let batch1 = create_batch(vec![("c1", c1.clone())]);
+
+        // batch2: c2(int64)
+        let batch2 = create_batch(vec![("c2", c2.clone())]);
+
+        // batch3 (has c2, c1) -- both columns, should still prune
+        let batch3 = create_batch(vec![("c1", c1.clone()), ("c2", c2.clone())]);
+
+        // batch4 (has c2, c1) -- different column order, should still prune
+        let batch4 = create_batch(vec![("c2", c2), ("c1", c1)]);
+
+        let filter = col("c2").eq(lit(1_i64));
+
+        // read/write them files:
+        let rt = RoundTrip::new()
+            .with_predicate(filter)
+            .with_page_index_predicate()
+            .round_trip(vec![batch1, batch2, batch3, batch4])
+            .await;
+
+        let expected = vec![
+            "+------+----+",
+            "| c1   | c2 |",
+            "+------+----+",
+            "|      | 1  |",
+            "|      | 2  |",
+            "| Bar  |    |",
+            "| Bar  | 2  |",
+            "| Bar  | 2  |",
+            "| Bar2 |    |",
+            "| Bar3 |    |",
+            "| Foo  |    |",
+            "| Foo  | 1  |",
+            "| Foo  | 1  |",
+            "| Foo2 |    |",
+            "| Foo3 |    |",
+            "+------+----+",
+        ];
+        assert_batches_sorted_eq!(expected, &rt.batches.unwrap());
+        let metrics = rt.parquet_exec.metrics().unwrap();
+
+        // There are 4 rows pruned in each of batch2, batch3, and
+        // batch4 for a total of 12. batch1 had no pruning as c2 was
+        // filled in as null
+        assert_eq!(get_value(&metrics, "page_index_rows_filtered"), 12);
+    }
+
+    #[tokio::test]
     async fn multi_column_predicate_pushdown() {
         let c1: ArrayRef =
             Arc::new(StringArray::from(vec![Some("Foo"), None, Some("bar")]));
@@ -1350,7 +1551,10 @@ mod tests {
         let filter = col("c2").eq(lit(1_i64)).or(col("c1").eq(lit("bar")));
 
         // read/write them files:
-        let read = round_trip_to_parquet(vec![batch1], None, None, Some(filter), true)
+        let read = RoundTrip::new()
+            .with_predicate(filter)
+            .with_pushdown_predicate()
+            .round_trip_to_batches(vec![batch1])
             .await
             .unwrap();
 
@@ -1358,6 +1562,38 @@ mod tests {
             "+-----+----+",
             "| c1  | c2 |",
             "+-----+----+",
+            "| Foo | 1  |",
+            "| bar |    |",
+            "+-----+----+",
+        ];
+        assert_batches_sorted_eq!(expected, &read);
+    }
+
+    #[tokio::test]
+    async fn multi_column_predicate_pushdown_page_index_pushdown() {
+        let c1: ArrayRef =
+            Arc::new(StringArray::from(vec![Some("Foo"), None, Some("bar")]));
+
+        let c2: ArrayRef = Arc::new(Int64Array::from(vec![Some(1), Some(2), None]));
+
+        let batch1 = create_batch(vec![("c1", c1.clone()), ("c2", c2.clone())]);
+
+        // Columns in different order to schema
+        let filter = col("c2").eq(lit(1_i64)).or(col("c1").eq(lit("bar")));
+
+        // read/write them files:
+        let read = RoundTrip::new()
+            .with_predicate(filter)
+            .with_page_index_predicate()
+            .round_trip_to_batches(vec![batch1])
+            .await
+            .unwrap();
+
+        let expected = vec![
+            "+-----+----+",
+            "| c1  | c2 |",
+            "+-----+----+",
+            "|     | 2  |",
             "| Foo | 1  |",
             "| bar |    |",
             "+-----+----+",
@@ -1394,14 +1630,10 @@ mod tests {
         ]);
 
         // read/write them files:
-        let read = round_trip_to_parquet(
-            vec![batch1, batch2],
-            None,
-            Some(Arc::new(schema)),
-            None,
-            false,
-        )
-        .await;
+        let read = RoundTrip::new()
+            .with_schema(Arc::new(schema))
+            .round_trip_to_batches(vec![batch1, batch2])
+            .await;
         assert_contains!(read.unwrap_err().to_string(),
                          "Execution error: Failed to map column projection for field c3. Incompatible data types Float32 and Int8");
     }
@@ -1642,24 +1874,38 @@ mod tests {
 
     #[tokio::test]
     async fn parquet_page_index_exec_metrics() {
-        let c1: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), None, Some(2)]));
-        let c2: ArrayRef = Arc::new(Int32Array::from(vec![Some(3), Some(4), Some(5)]));
+        let c1: ArrayRef = Arc::new(Int32Array::from(vec![
+            Some(1),
+            None,
+            Some(2),
+            Some(3),
+            Some(4),
+            Some(5),
+        ]));
         let batch1 = create_batch(vec![("int", c1.clone())]);
-        let batch2 = create_batch(vec![("int", c2.clone())]);
 
         let filter = col("int").eq(lit(4_i32));
 
-        let rt =
-            round_trip(vec![batch1, batch2], None, None, Some(filter), false, true).await;
+        let rt = RoundTrip::new()
+            .with_predicate(filter)
+            .with_page_index_predicate()
+            .round_trip(vec![batch1])
+            .await;
 
         let metrics = rt.parquet_exec.metrics().unwrap();
 
         // assert the batches and some metrics
+        #[rustfmt::skip]
         let expected = vec![
-            "+-----+", "| int |", "+-----+", "| 3   |", "| 4   |", "| 5   |", "+-----+",
+            "+-----+",
+            "| int |",
+            "+-----+",
+            "| 4   |",
+            "| 5   |",
+            "+-----+",
         ];
         assert_batches_sorted_eq!(expected, &rt.batches.unwrap());
-        assert_eq!(get_value(&metrics, "page_index_rows_filtered"), 3);
+        assert_eq!(get_value(&metrics, "page_index_rows_filtered"), 4);
         assert!(
             get_value(&metrics, "page_index_eval_time") > 0,
             "no eval time in metrics: {metrics:#?}"
@@ -1685,7 +1931,11 @@ mod tests {
         let filter = col("c1").not_eq(lit("bar"));
 
         // read/write them files:
-        let rt = round_trip(vec![batch1], None, None, Some(filter), true, false).await;
+        let rt = RoundTrip::new()
+            .with_predicate(filter)
+            .with_pushdown_predicate()
+            .round_trip(vec![batch1])
+            .await;
 
         let metrics = rt.parquet_exec.metrics().unwrap();
 
@@ -1722,7 +1972,11 @@ mod tests {
         // on
         let filter = col("c1").not_eq(lit("bar"));
 
-        let rt = round_trip(vec![batch1], None, None, Some(filter), true, false).await;
+        let rt = RoundTrip::new()
+            .with_predicate(filter)
+            .with_pushdown_predicate()
+            .round_trip(vec![batch1])
+            .await;
 
         // should have a pruning predicate
         let pruning_predicate = &rt.parquet_exec.pruning_predicate;
@@ -1761,8 +2015,11 @@ mod tests {
             .otherwise(lit(false))
             .unwrap();
 
-        let rt =
-            round_trip(vec![batch1], None, None, Some(filter.clone()), true, false).await;
+        let rt = RoundTrip::new()
+            .with_predicate(filter.clone())
+            .with_pushdown_predicate()
+            .round_trip(vec![batch1])
+            .await;
 
         // Should not contain a pruning predicate
         let pruning_predicate = &rt.parquet_exec.pruning_predicate;
@@ -1774,6 +2031,242 @@ mod tests {
         // but does still has a pushdown down predicate
         let predicate = rt.parquet_exec.predicate.as_ref();
         assert_eq!(predicate.unwrap().as_ref(), &filter);
+    }
+
+    #[tokio::test]
+    async fn parquet_exec_repartition_single_file() {
+        // Single file, single partition into multiple partitions
+        let partitioned_file = PartitionedFile::new("a".to_string(), 123);
+        let single_partition = vec![vec![partitioned_file]];
+        let parquet_exec = ParquetExec::new(
+            FileScanConfig {
+                object_store_url: ObjectStoreUrl::local_filesystem(),
+                file_groups: single_partition,
+                file_schema: Arc::new(Schema::empty()),
+                statistics: Statistics::default(),
+                projection: None,
+                limit: None,
+                table_partition_cols: vec![],
+                output_ordering: None,
+                infinite_source: false,
+            },
+            None,
+            None,
+        );
+
+        let actual = file_groups_to_vec(
+            parquet_exec
+                .get_repartitioned(4, 10)
+                .base_config()
+                .file_groups
+                .clone(),
+        );
+        let expected = vec![
+            (0, "a".to_string(), 0, 31),
+            (1, "a".to_string(), 31, 62),
+            (2, "a".to_string(), 62, 93),
+            (3, "a".to_string(), 93, 123),
+        ];
+        assert_eq!(expected, actual);
+    }
+
+    #[tokio::test]
+    async fn parquet_exec_repartition_too_much_partitions() {
+        // Single file, single parittion into 96 partitions
+        let partitioned_file = PartitionedFile::new("a".to_string(), 8);
+        let single_partition = vec![vec![partitioned_file]];
+        let parquet_exec = ParquetExec::new(
+            FileScanConfig {
+                object_store_url: ObjectStoreUrl::local_filesystem(),
+                file_groups: single_partition,
+                file_schema: Arc::new(Schema::empty()),
+                statistics: Statistics::default(),
+                projection: None,
+                limit: None,
+                table_partition_cols: vec![],
+                output_ordering: None,
+                infinite_source: false,
+            },
+            None,
+            None,
+        );
+
+        let actual = file_groups_to_vec(
+            parquet_exec
+                .get_repartitioned(96, 5)
+                .base_config()
+                .file_groups
+                .clone(),
+        );
+        let expected = vec![
+            (0, "a".to_string(), 0, 1),
+            (1, "a".to_string(), 1, 2),
+            (2, "a".to_string(), 2, 3),
+            (3, "a".to_string(), 3, 4),
+            (4, "a".to_string(), 4, 5),
+            (5, "a".to_string(), 5, 6),
+            (6, "a".to_string(), 6, 7),
+            (7, "a".to_string(), 7, 8),
+        ];
+        assert_eq!(expected, actual);
+    }
+
+    #[tokio::test]
+    async fn parquet_exec_repartition_multiple_partitions() {
+        // Multiple files in single partition after redistribution
+        let partitioned_file_1 = PartitionedFile::new("a".to_string(), 40);
+        let partitioned_file_2 = PartitionedFile::new("b".to_string(), 60);
+        let source_partitions = vec![vec![partitioned_file_1], vec![partitioned_file_2]];
+        let parquet_exec = ParquetExec::new(
+            FileScanConfig {
+                object_store_url: ObjectStoreUrl::local_filesystem(),
+                file_groups: source_partitions,
+                file_schema: Arc::new(Schema::empty()),
+                statistics: Statistics::default(),
+                projection: None,
+                limit: None,
+                table_partition_cols: vec![],
+                output_ordering: None,
+                infinite_source: false,
+            },
+            None,
+            None,
+        );
+
+        let actual = file_groups_to_vec(
+            parquet_exec
+                .get_repartitioned(3, 10)
+                .base_config()
+                .file_groups
+                .clone(),
+        );
+        let expected = vec![
+            (0, "a".to_string(), 0, 34),
+            (1, "a".to_string(), 34, 40),
+            (1, "b".to_string(), 0, 28),
+            (2, "b".to_string(), 28, 60),
+        ];
+        assert_eq!(expected, actual);
+    }
+
+    #[tokio::test]
+    async fn parquet_exec_repartition_same_num_partitions() {
+        // "Rebalance" files across partitions
+        let partitioned_file_1 = PartitionedFile::new("a".to_string(), 40);
+        let partitioned_file_2 = PartitionedFile::new("b".to_string(), 60);
+        let source_partitions = vec![vec![partitioned_file_1], vec![partitioned_file_2]];
+        let parquet_exec = ParquetExec::new(
+            FileScanConfig {
+                object_store_url: ObjectStoreUrl::local_filesystem(),
+                file_groups: source_partitions,
+                file_schema: Arc::new(Schema::empty()),
+                statistics: Statistics::default(),
+                projection: None,
+                limit: None,
+                table_partition_cols: vec![],
+                output_ordering: None,
+                infinite_source: false,
+            },
+            None,
+            None,
+        );
+
+        let actual = file_groups_to_vec(
+            parquet_exec
+                .get_repartitioned(2, 10)
+                .base_config()
+                .file_groups
+                .clone(),
+        );
+        let expected = vec![
+            (0, "a".to_string(), 0, 40),
+            (0, "b".to_string(), 0, 10),
+            (1, "b".to_string(), 10, 60),
+        ];
+        assert_eq!(expected, actual);
+    }
+
+    #[tokio::test]
+    async fn parquet_exec_repartition_no_action_ranges() {
+        // No action due to Some(range) in second file
+        let partitioned_file_1 = PartitionedFile::new("a".to_string(), 123);
+        let mut partitioned_file_2 = PartitionedFile::new("b".to_string(), 144);
+        partitioned_file_2.range = Some(FileRange { start: 1, end: 50 });
+
+        let source_partitions = vec![vec![partitioned_file_1], vec![partitioned_file_2]];
+        let parquet_exec = ParquetExec::new(
+            FileScanConfig {
+                object_store_url: ObjectStoreUrl::local_filesystem(),
+                file_groups: source_partitions,
+                file_schema: Arc::new(Schema::empty()),
+                statistics: Statistics::default(),
+                projection: None,
+                limit: None,
+                table_partition_cols: vec![],
+                output_ordering: None,
+                infinite_source: false,
+            },
+            None,
+            None,
+        );
+
+        let actual = parquet_exec
+            .get_repartitioned(65, 10)
+            .base_config()
+            .file_groups
+            .clone();
+        assert_eq!(2, actual.len());
+    }
+
+    #[tokio::test]
+    async fn parquet_exec_repartition_no_action_min_size() {
+        // No action due to target_partition_size
+        let partitioned_file = PartitionedFile::new("a".to_string(), 123);
+        let single_partition = vec![vec![partitioned_file]];
+        let parquet_exec = ParquetExec::new(
+            FileScanConfig {
+                object_store_url: ObjectStoreUrl::local_filesystem(),
+                file_groups: single_partition,
+                file_schema: Arc::new(Schema::empty()),
+                statistics: Statistics::default(),
+                projection: None,
+                limit: None,
+                table_partition_cols: vec![],
+                output_ordering: None,
+                infinite_source: false,
+            },
+            None,
+            None,
+        );
+
+        let actual = parquet_exec
+            .get_repartitioned(65, 500)
+            .base_config()
+            .file_groups
+            .clone();
+        assert_eq!(1, actual.len());
+    }
+
+    fn file_groups_to_vec(
+        file_groups: Vec<Vec<PartitionedFile>>,
+    ) -> Vec<(usize, String, i64, i64)> {
+        file_groups
+            .iter()
+            .enumerate()
+            .flat_map(|(part_idx, files)| {
+                files
+                    .iter()
+                    .map(|f| {
+                        (
+                            part_idx,
+                            f.object_meta.location.to_string(),
+                            f.range.as_ref().unwrap().start,
+                            f.range.as_ref().unwrap().end,
+                        )
+                    })
+                    .collect_vec()
+            })
+            .collect_vec()
     }
 
     /// returns the sum of all the metrics with the specified name

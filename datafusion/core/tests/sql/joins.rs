@@ -1354,10 +1354,9 @@ async fn hash_join_with_date32() -> Result<()> {
     let plan = dataframe.into_optimized_plan()?;
     let expected = vec![
         "Explain [plan_type:Utf8, plan:Utf8]",
-        "  Projection: t1.c1, t1.c2, t1.c3, t1.c4, t2.c1, t2.c2, t2.c3, t2.c4 [c1:Date32;N, c2:Date64;N, c3:Decimal128(5, 2);N, c4:Dictionary(Int32, Utf8);N, c1:Date32;N, c2:Date64;N, c3:Decimal128(10, 2);N, c4:Dictionary(Int32, Utf8);N]",
-        "    Inner Join: t1.c1 = t2.c1 [c1:Date32;N, c2:Date64;N, c3:Decimal128(5, 2);N, c4:Dictionary(Int32, Utf8);N, c1:Date32;N, c2:Date64;N, c3:Decimal128(10, 2);N, c4:Dictionary(Int32, Utf8);N]",
-        "      TableScan: t1 projection=[c1, c2, c3, c4] [c1:Date32;N, c2:Date64;N, c3:Decimal128(5, 2);N, c4:Dictionary(Int32, Utf8);N]",
-        "      TableScan: t2 projection=[c1, c2, c3, c4] [c1:Date32;N, c2:Date64;N, c3:Decimal128(10, 2);N, c4:Dictionary(Int32, Utf8);N]",
+        "  Inner Join: t1.c1 = t2.c1 [c1:Date32;N, c2:Date64;N, c3:Decimal128(5, 2);N, c4:Dictionary(Int32, Utf8);N, c1:Date32;N, c2:Date64;N, c3:Decimal128(10, 2);N, c4:Dictionary(Int32, Utf8);N]",
+        "    TableScan: t1 projection=[c1, c2, c3, c4] [c1:Date32;N, c2:Date64;N, c3:Decimal128(5, 2);N, c4:Dictionary(Int32, Utf8);N]",
+        "    TableScan: t2 projection=[c1, c2, c3, c4] [c1:Date32;N, c2:Date64;N, c3:Decimal128(10, 2);N, c4:Dictionary(Int32, Utf8);N]",
     ];
     let formatted = plan.display_indent_schema().to_string();
     let actual: Vec<&str> = formatted.trim().lines().collect();
@@ -1367,12 +1366,12 @@ async fn hash_join_with_date32() -> Result<()> {
     );
 
     let expected = vec![
-        "+------------+------------+---------+-----+------------+------------+---------+-----+",
-        "| c1         | c2         | c3      | c4  | c1         | c2         | c3      | c4  |",
-        "+------------+------------+---------+-----+------------+------------+---------+-----+",
-        "| 1970-01-02 | 1970-01-02 | 1.23    | abc | 1970-01-02 | 1970-01-02 | -123.12 | abc |",
-        "| 1970-01-04 |            | -123.12 | jkl | 1970-01-04 |            | 789.00  |     |",
-        "+------------+------------+---------+-----+------------+------------+---------+-----+",
+        "+------------+---------------------+---------+-----+------------+---------------------+---------+-----+",
+        "| c1         | c2                  | c3      | c4  | c1         | c2                  | c3      | c4  |",
+        "+------------+---------------------+---------+-----+------------+---------------------+---------+-----+",
+        "| 1970-01-02 | 1970-01-02T00:00:00 | 1.23    | abc | 1970-01-02 | 1970-01-02T00:00:00 | -123.12 | abc |",
+        "| 1970-01-04 |                     | -123.12 | jkl | 1970-01-04 |                     | 789.00  |     |",
+        "+------------+---------------------+---------+-----+------------+---------------------+---------+-----+",
     ];
 
     let results = execute_to_batches(&ctx, sql).await;
@@ -1392,10 +1391,9 @@ async fn hash_join_with_date64() -> Result<()> {
     let plan = dataframe.into_optimized_plan()?;
     let expected = vec![
         "Explain [plan_type:Utf8, plan:Utf8]",
-        "  Projection: t1.c1, t1.c2, t1.c3, t1.c4, t2.c1, t2.c2, t2.c3, t2.c4 [c1:Date32;N, c2:Date64;N, c3:Decimal128(5, 2);N, c4:Dictionary(Int32, Utf8);N, c1:Date32;N, c2:Date64;N, c3:Decimal128(10, 2);N, c4:Dictionary(Int32, Utf8);N]",
-        "    Left Join: t1.c2 = t2.c2 [c1:Date32;N, c2:Date64;N, c3:Decimal128(5, 2);N, c4:Dictionary(Int32, Utf8);N, c1:Date32;N, c2:Date64;N, c3:Decimal128(10, 2);N, c4:Dictionary(Int32, Utf8);N]",
-        "      TableScan: t1 projection=[c1, c2, c3, c4] [c1:Date32;N, c2:Date64;N, c3:Decimal128(5, 2);N, c4:Dictionary(Int32, Utf8);N]",
-        "      TableScan: t2 projection=[c1, c2, c3, c4] [c1:Date32;N, c2:Date64;N, c3:Decimal128(10, 2);N, c4:Dictionary(Int32, Utf8);N]",
+        "  Left Join: t1.c2 = t2.c2 [c1:Date32;N, c2:Date64;N, c3:Decimal128(5, 2);N, c4:Dictionary(Int32, Utf8);N, c1:Date32;N, c2:Date64;N, c3:Decimal128(10, 2);N, c4:Dictionary(Int32, Utf8);N]",
+        "    TableScan: t1 projection=[c1, c2, c3, c4] [c1:Date32;N, c2:Date64;N, c3:Decimal128(5, 2);N, c4:Dictionary(Int32, Utf8);N]",
+        "    TableScan: t2 projection=[c1, c2, c3, c4] [c1:Date32;N, c2:Date64;N, c3:Decimal128(10, 2);N, c4:Dictionary(Int32, Utf8);N]",
     ];
     let formatted = plan.display_indent_schema().to_string();
     let actual: Vec<&str> = formatted.trim().lines().collect();
@@ -1405,14 +1403,14 @@ async fn hash_join_with_date64() -> Result<()> {
     );
 
     let expected = vec![
-        "+------------+------------+---------+-----+------------+------------+---------+--------+",
-        "| c1         | c2         | c3      | c4  | c1         | c2         | c3      | c4     |",
-        "+------------+------------+---------+-----+------------+------------+---------+--------+",
-        "|            | 1970-01-04 | 789.00  | ghi |            | 1970-01-04 | 0.00    | qwerty |",
-        "| 1970-01-02 | 1970-01-02 | 1.23    | abc | 1970-01-02 | 1970-01-02 | -123.12 | abc    |",
-        "| 1970-01-03 | 1970-01-03 | 456.00  | def |            |            |         |        |",
-        "| 1970-01-04 |            | -123.12 | jkl |            |            |         |        |",
-        "+------------+------------+---------+-----+------------+------------+---------+--------+",
+        "+------------+---------------------+---------+-----+------------+---------------------+---------+--------+",
+        "| c1         | c2                  | c3      | c4  | c1         | c2                  | c3      | c4     |",
+        "+------------+---------------------+---------+-----+------------+---------------------+---------+--------+",
+        "|            | 1970-01-04T00:00:00 | 789.00  | ghi |            | 1970-01-04T00:00:00 | 0.00    | qwerty |",
+        "| 1970-01-02 | 1970-01-02T00:00:00 | 1.23    | abc | 1970-01-02 | 1970-01-02T00:00:00 | -123.12 | abc    |",
+        "| 1970-01-03 | 1970-01-03T00:00:00 | 456.00  | def |            |                     |         |        |",
+        "| 1970-01-04 |                     | -123.12 | jkl |            |                     |         |        |",
+        "+------------+---------------------+---------+-----+------------+---------------------+---------+--------+",
     ];
 
     let results = execute_to_batches(&ctx, sql).await;
@@ -1432,10 +1430,9 @@ async fn hash_join_with_decimal() -> Result<()> {
     let plan = dataframe.into_optimized_plan()?;
     let expected = vec![
         "Explain [plan_type:Utf8, plan:Utf8]",
-        "  Projection: t1.c1, t1.c2, t1.c3, t1.c4, t2.c1, t2.c2, t2.c3, t2.c4 [c1:Date32;N, c2:Date64;N, c3:Decimal128(5, 2);N, c4:Dictionary(Int32, Utf8);N, c1:Date32;N, c2:Date64;N, c3:Decimal128(10, 2);N, c4:Dictionary(Int32, Utf8);N]",
-        "    Right Join: CAST(t1.c3 AS Decimal128(10, 2)) = t2.c3 [c1:Date32;N, c2:Date64;N, c3:Decimal128(5, 2);N, c4:Dictionary(Int32, Utf8);N, c1:Date32;N, c2:Date64;N, c3:Decimal128(10, 2);N, c4:Dictionary(Int32, Utf8);N]",
-        "      TableScan: t1 projection=[c1, c2, c3, c4] [c1:Date32;N, c2:Date64;N, c3:Decimal128(5, 2);N, c4:Dictionary(Int32, Utf8);N]",
-        "      TableScan: t2 projection=[c1, c2, c3, c4] [c1:Date32;N, c2:Date64;N, c3:Decimal128(10, 2);N, c4:Dictionary(Int32, Utf8);N]",
+        "  Right Join: CAST(t1.c3 AS Decimal128(10, 2)) = t2.c3 [c1:Date32;N, c2:Date64;N, c3:Decimal128(5, 2);N, c4:Dictionary(Int32, Utf8);N, c1:Date32;N, c2:Date64;N, c3:Decimal128(10, 2);N, c4:Dictionary(Int32, Utf8);N]",
+        "    TableScan: t1 projection=[c1, c2, c3, c4] [c1:Date32;N, c2:Date64;N, c3:Decimal128(5, 2);N, c4:Dictionary(Int32, Utf8);N]",
+        "    TableScan: t2 projection=[c1, c2, c3, c4] [c1:Date32;N, c2:Date64;N, c3:Decimal128(10, 2);N, c4:Dictionary(Int32, Utf8);N]",
     ];
     let formatted = plan.display_indent_schema().to_string();
     let actual: Vec<&str> = formatted.trim().lines().collect();
@@ -1445,14 +1442,14 @@ async fn hash_join_with_decimal() -> Result<()> {
     );
 
     let expected = vec![
-    "+------------+------------+---------+-----+------------+------------+-----------+---------+",
-    "| c1         | c2         | c3      | c4  | c1         | c2         | c3        | c4      |",
-    "+------------+------------+---------+-----+------------+------------+-----------+---------+",
-    "|            |            |         |     |            |            | 100000.00 | abcdefg |",
-    "|            |            |         |     |            | 1970-01-04 | 0.00      | qwerty  |",
-    "|            | 1970-01-04 | 789.00  | ghi | 1970-01-04 |            | 789.00    |         |",
-    "| 1970-01-04 |            | -123.12 | jkl | 1970-01-02 | 1970-01-02 | -123.12   | abc     |",
-    "+------------+------------+---------+-----+------------+------------+-----------+---------+",
+        "+------------+---------------------+---------+-----+------------+---------------------+-----------+---------+",
+        "| c1         | c2                  | c3      | c4  | c1         | c2                  | c3        | c4      |",
+        "+------------+---------------------+---------+-----+------------+---------------------+-----------+---------+",
+        "|            |                     |         |     |            |                     | 100000.00 | abcdefg |",
+        "|            |                     |         |     |            | 1970-01-04T00:00:00 | 0.00      | qwerty  |",
+        "|            | 1970-01-04T00:00:00 | 789.00  | ghi | 1970-01-04 |                     | 789.00    |         |",
+        "| 1970-01-04 |                     | -123.12 | jkl | 1970-01-02 | 1970-01-02T00:00:00 | -123.12   | abc     |",
+        "+------------+---------------------+---------+-----+------------+---------------------+-----------+---------+",
     ];
 
     let results = execute_to_batches(&ctx, sql).await;
@@ -1472,10 +1469,9 @@ async fn hash_join_with_dictionary() -> Result<()> {
     let plan = dataframe.into_optimized_plan()?;
     let expected = vec![
         "Explain [plan_type:Utf8, plan:Utf8]",
-        "  Projection: t1.c1, t1.c2, t1.c3, t1.c4, t2.c1, t2.c2, t2.c3, t2.c4 [c1:Date32;N, c2:Date64;N, c3:Decimal128(5, 2);N, c4:Dictionary(Int32, Utf8);N, c1:Date32;N, c2:Date64;N, c3:Decimal128(10, 2);N, c4:Dictionary(Int32, Utf8);N]",
-        "    Inner Join: t1.c4 = t2.c4 [c1:Date32;N, c2:Date64;N, c3:Decimal128(5, 2);N, c4:Dictionary(Int32, Utf8);N, c1:Date32;N, c2:Date64;N, c3:Decimal128(10, 2);N, c4:Dictionary(Int32, Utf8);N]",
-        "      TableScan: t1 projection=[c1, c2, c3, c4] [c1:Date32;N, c2:Date64;N, c3:Decimal128(5, 2);N, c4:Dictionary(Int32, Utf8);N]",
-        "      TableScan: t2 projection=[c1, c2, c3, c4] [c1:Date32;N, c2:Date64;N, c3:Decimal128(10, 2);N, c4:Dictionary(Int32, Utf8);N]",
+        "  Inner Join: t1.c4 = t2.c4 [c1:Date32;N, c2:Date64;N, c3:Decimal128(5, 2);N, c4:Dictionary(Int32, Utf8);N, c1:Date32;N, c2:Date64;N, c3:Decimal128(10, 2);N, c4:Dictionary(Int32, Utf8);N]",
+        "    TableScan: t1 projection=[c1, c2, c3, c4] [c1:Date32;N, c2:Date64;N, c3:Decimal128(5, 2);N, c4:Dictionary(Int32, Utf8);N]",
+        "    TableScan: t2 projection=[c1, c2, c3, c4] [c1:Date32;N, c2:Date64;N, c3:Decimal128(10, 2);N, c4:Dictionary(Int32, Utf8);N]",
     ];
     let formatted = plan.display_indent_schema().to_string();
     let actual: Vec<&str> = formatted.trim().lines().collect();
@@ -1485,11 +1481,11 @@ async fn hash_join_with_dictionary() -> Result<()> {
     );
 
     let expected = vec![
-        "+------------+------------+------+-----+------------+------------+---------+-----+",
-        "| c1         | c2         | c3   | c4  | c1         | c2         | c3      | c4  |",
-        "+------------+------------+------+-----+------------+------------+---------+-----+",
-        "| 1970-01-02 | 1970-01-02 | 1.23 | abc | 1970-01-02 | 1970-01-02 | -123.12 | abc |",
-        "+------------+------------+------+-----+------------+------------+---------+-----+",
+        "+------------+---------------------+------+-----+------------+---------------------+---------+-----+",
+        "| c1         | c2                  | c3   | c4  | c1         | c2                  | c3      | c4  |",
+        "+------------+---------------------+------+-----+------------+---------------------+---------+-----+",
+        "| 1970-01-02 | 1970-01-02T00:00:00 | 1.23 | abc | 1970-01-02 | 1970-01-02T00:00:00 | -123.12 | abc |",
+        "+------------+---------------------+------+-----+------------+---------------------+---------+-----+",
     ];
 
     let results = execute_to_batches(&ctx, sql).await;
@@ -1512,12 +1508,11 @@ async fn reduce_left_join_1() -> Result<()> {
         let plan = dataframe.into_optimized_plan()?;
         let expected = vec![
             "Explain [plan_type:Utf8, plan:Utf8]",
-            "  Projection: t1.t1_id, t1.t1_name, t1.t1_int, t2.t2_id, t2.t2_name, t2.t2_int [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-            "    Inner Join: t1.t1_id = t2.t2_id [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-            "      Filter: t1.t1_id < UInt32(100) [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
-            "        TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
-            "      Filter: t2.t2_id < UInt32(100) [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-            "        TableScan: t2 projection=[t2_id, t2_name, t2_int] [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+            "  Inner Join: t1.t1_id = t2.t2_id [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+            "    Filter: t1.t1_id < UInt32(100) [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+            "      TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+            "    Filter: t2.t2_id < UInt32(100) [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+            "      TableScan: t2 projection=[t2_id, t2_name, t2_int] [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
         ];
         let formatted = plan.display_indent_schema().to_string();
         let actual: Vec<&str> = formatted.trim().lines().collect();
@@ -1560,12 +1555,11 @@ async fn reduce_left_join_2() -> Result<()> {
 
         let expected = vec![
             "Explain [plan_type:Utf8, plan:Utf8]",
-            "  Projection: t1.t1_id, t1.t1_name, t1.t1_int, t2.t2_id, t2.t2_name, t2.t2_int [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-            "    Filter: t2.t2_int < UInt32(10) OR t1.t1_int > UInt32(2) AND t2.t2_name != Utf8(\"w\") [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-            "      Inner Join: t1.t1_id = t2.t2_id [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-            "        TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
-            "        Filter: t2.t2_int < UInt32(10) OR t2.t2_name != Utf8(\"w\") [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-            "          TableScan: t2 projection=[t2_id, t2_name, t2_int] [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+            "  Filter: t2.t2_int < UInt32(10) OR t1.t1_int > UInt32(2) AND t2.t2_name != Utf8(\"w\") [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+            "    Inner Join: t1.t1_id = t2.t2_id [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+            "      TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+            "      Filter: t2.t2_int < UInt32(10) OR t2.t2_name != Utf8(\"w\") [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+            "        TableScan: t2 projection=[t2_id, t2_name, t2_int] [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
         ];
         let formatted = plan.display_indent_schema().to_string();
         let actual: Vec<&str> = formatted.trim().lines().collect();
@@ -1603,16 +1597,15 @@ async fn reduce_left_join_3() -> Result<()> {
         let plan = dataframe.into_optimized_plan()?;
         let expected = vec![
             "Explain [plan_type:Utf8, plan:Utf8]",
-            "  Projection: t3.t1_id, t3.t1_name, t3.t1_int, t2.t2_id, t2.t2_name, t2.t2_int [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-            "    Left Join: t3.t1_int = t2.t2_int [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-            "      SubqueryAlias: t3 [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
-            "        Projection: t1.t1_id, t1.t1_name, t1.t1_int [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
-            "          Inner Join: t1.t1_id = t2.t2_id [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_int:UInt32;N]",
-            "            Filter: t1.t1_id < UInt32(100) [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
-            "              TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
-            "            Filter: t2.t2_int < UInt32(3) AND t2.t2_id < UInt32(100) [t2_id:UInt32;N, t2_int:UInt32;N]",
-            "              TableScan: t2 projection=[t2_id, t2_int] [t2_id:UInt32;N, t2_int:UInt32;N]",
-            "      TableScan: t2 projection=[t2_id, t2_name, t2_int] [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+            "  Left Join: t3.t1_int = t2.t2_int [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+            "    SubqueryAlias: t3 [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+            "      Projection: t1.t1_id, t1.t1_name, t1.t1_int [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+            "        Inner Join: t1.t1_id = t2.t2_id [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_int:UInt32;N]",
+            "          Filter: t1.t1_id < UInt32(100) [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+            "            TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+            "          Filter: t2.t2_int < UInt32(3) AND t2.t2_id < UInt32(100) [t2_id:UInt32;N, t2_int:UInt32;N]",
+            "            TableScan: t2 projection=[t2_id, t2_int] [t2_id:UInt32;N, t2_int:UInt32;N]",
+            "    TableScan: t2 projection=[t2_id, t2_name, t2_int] [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
         ];
         let formatted = plan.display_indent_schema().to_string();
         let actual: Vec<&str> = formatted.trim().lines().collect();
@@ -1648,11 +1641,10 @@ async fn reduce_right_join_1() -> Result<()> {
         let plan = dataframe.into_optimized_plan()?;
         let expected = vec![
             "Explain [plan_type:Utf8, plan:Utf8]",
-            "  Projection: t1.t1_id, t1.t1_name, t1.t1_int, t2.t2_id, t2.t2_name, t2.t2_int [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-            "    Inner Join: t1.t1_id = t2.t2_id [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-            "      Filter: t1.t1_int IS NOT NULL [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
-            "        TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
-            "      TableScan: t2 projection=[t2_id, t2_name, t2_int] [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+            "  Inner Join: t1.t1_id = t2.t2_id [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+            "    Filter: t1.t1_int IS NOT NULL [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+            "      TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+            "    TableScan: t2 projection=[t2_id, t2_name, t2_int] [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
         ];
         let formatted = plan.display_indent_schema().to_string();
         let actual: Vec<&str> = formatted.trim().lines().collect();
@@ -1690,11 +1682,10 @@ async fn reduce_right_join_2() -> Result<()> {
         let plan = dataframe.into_optimized_plan()?;
         let expected = vec![
             "Explain [plan_type:Utf8, plan:Utf8]",
-            "  Projection: t1.t1_id, t1.t1_name, t1.t1_int, t2.t2_id, t2.t2_name, t2.t2_int [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-            "    Filter: t1.t1_int != t2.t2_int [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-            "      Inner Join: t1.t1_id = t2.t2_id [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-            "        TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
-            "        TableScan: t2 projection=[t2_id, t2_name, t2_int] [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+            "  Filter: t1.t1_int != t2.t2_int [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+            "    Inner Join: t1.t1_id = t2.t2_id [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+            "      TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+            "      TableScan: t2 projection=[t2_id, t2_name, t2_int] [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
         ];
         let formatted = plan.display_indent_schema().to_string();
         let actual: Vec<&str> = formatted.trim().lines().collect();
@@ -1732,11 +1723,10 @@ async fn reduce_full_join_to_right_join() -> Result<()> {
         let plan = dataframe.into_optimized_plan()?;
         let expected = vec![
             "Explain [plan_type:Utf8, plan:Utf8]",
-            "  Projection: t1.t1_id, t1.t1_name, t1.t1_int, t2.t2_id, t2.t2_name, t2.t2_int [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-            "    Right Join: t1.t1_id = t2.t2_id [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-            "      TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
-            "      Filter: t2.t2_name IS NOT NULL [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-            "        TableScan: t2 projection=[t2_id, t2_name, t2_int] [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+            "  Right Join: t1.t1_id = t2.t2_id [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+            "    TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+            "    Filter: t2.t2_name IS NOT NULL [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+            "      TableScan: t2 projection=[t2_id, t2_name, t2_int] [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
         ];
         let formatted = plan.display_indent_schema().to_string();
         let actual: Vec<&str> = formatted.trim().lines().collect();
@@ -1776,11 +1766,10 @@ async fn reduce_full_join_to_left_join() -> Result<()> {
         let plan = dataframe.into_optimized_plan()?;
         let expected = vec![
             "Explain [plan_type:Utf8, plan:Utf8]",
-            "  Projection: t1.t1_id, t1.t1_name, t1.t1_int, t2.t2_id, t2.t2_name, t2.t2_int [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-            "    Left Join: t1.t1_id = t2.t2_id [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-            "      Filter: t1.t1_name != Utf8(\"b\") [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
-            "        TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
-            "      TableScan: t2 projection=[t2_id, t2_name, t2_int] [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+            "  Left Join: t1.t1_id = t2.t2_id [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+            "    Filter: t1.t1_name != Utf8(\"b\") [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+            "      TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+            "    TableScan: t2 projection=[t2_id, t2_name, t2_int] [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
         ];
         let formatted = plan.display_indent_schema().to_string();
         let actual: Vec<&str> = formatted.trim().lines().collect();
@@ -1817,12 +1806,11 @@ async fn reduce_full_join_to_inner_join() -> Result<()> {
         let plan = dataframe.into_optimized_plan()?;
         let expected = vec![
             "Explain [plan_type:Utf8, plan:Utf8]",
-            "  Projection: t1.t1_id, t1.t1_name, t1.t1_int, t2.t2_id, t2.t2_name, t2.t2_int [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-            "    Inner Join: t1.t1_id = t2.t2_id [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-            "      Filter: t1.t1_name != Utf8(\"b\") [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
-            "        TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
-            "      Filter: t2.t2_name = Utf8(\"x\") [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-            "        TableScan: t2 projection=[t2_id, t2_name, t2_int] [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+            "  Inner Join: t1.t1_id = t2.t2_id [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+            "    Filter: t1.t1_name != Utf8(\"b\") [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+            "      TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+            "    Filter: t2.t2_name = Utf8(\"x\") [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+            "      TableScan: t2 projection=[t2_id, t2_name, t2_int] [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
         ];
         let formatted = plan.display_indent_schema().to_string();
         let actual: Vec<&str> = formatted.trim().lines().collect();
@@ -1879,18 +1867,17 @@ async fn sort_merge_join_on_date32() -> Result<()> {
     let dataframe = ctx.sql(sql).await.expect(&msg);
     let physical_plan = dataframe.create_physical_plan().await?;
     let expected = vec![
-        "ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c3@2 as c3, c4@3 as c4, c1@4 as c1, c2@5 as c2, c3@6 as c3, c4@7 as c4]",
-        "  SortMergeJoin: join_type=Inner, on=[(Column { name: \"c1\", index: 0 }, Column { name: \"c1\", index: 0 })]",
-        "    SortExec: [c1@0 ASC]",
-        "      CoalesceBatchesExec: target_batch_size=4096",
-        "        RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 2)",
-        "          RepartitionExec: partitioning=RoundRobinBatch(2)",
-        "            MemoryExec: partitions=1, partition_sizes=[1]",
-        "    SortExec: [c1@0 ASC]",
-        "      CoalesceBatchesExec: target_batch_size=4096",
-        "        RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 2)",
-        "          RepartitionExec: partitioning=RoundRobinBatch(2)",
-        "            MemoryExec: partitions=1, partition_sizes=[1]",
+        "SortMergeJoin: join_type=Inner, on=[(Column { name: \"c1\", index: 0 }, Column { name: \"c1\", index: 0 })]",
+        "  SortExec: expr=[c1@0 ASC]",
+        "    CoalesceBatchesExec: target_batch_size=4096",
+        "      RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 2), input_partitions=2",
+        "        RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+        "          MemoryExec: partitions=1, partition_sizes=[1]",
+        "  SortExec: expr=[c1@0 ASC]",
+        "    CoalesceBatchesExec: target_batch_size=4096",
+        "      RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 2), input_partitions=2",
+        "        RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+        "          MemoryExec: partitions=1, partition_sizes=[1]",
     ];
     let formatted = displayable(physical_plan.as_ref()).indent().to_string();
     let actual: Vec<&str> = formatted.trim().lines().collect();
@@ -1900,12 +1887,12 @@ async fn sort_merge_join_on_date32() -> Result<()> {
     );
 
     let expected = vec![
-        "+------------+------------+---------+-----+------------+------------+---------+-----+",
-        "| c1         | c2         | c3      | c4  | c1         | c2         | c3      | c4  |",
-        "+------------+------------+---------+-----+------------+------------+---------+-----+",
-        "| 1970-01-02 | 1970-01-02 | 1.23    | abc | 1970-01-02 | 1970-01-02 | -123.12 | abc |",
-        "| 1970-01-04 |            | -123.12 | jkl | 1970-01-04 |            | 789.00  |     |",
-        "+------------+------------+---------+-----+------------+------------+---------+-----+",
+        "+------------+---------------------+---------+-----+------------+---------------------+---------+-----+",
+        "| c1         | c2                  | c3      | c4  | c1         | c2                  | c3      | c4  |",
+        "+------------+---------------------+---------+-----+------------+---------------------+---------+-----+",
+        "| 1970-01-02 | 1970-01-02T00:00:00 | 1.23    | abc | 1970-01-02 | 1970-01-02T00:00:00 | -123.12 | abc |",
+        "| 1970-01-04 |                     | -123.12 | jkl | 1970-01-04 |                     | 789.00  |     |",
+        "+------------+---------------------+---------+-----+------------+---------------------+---------+-----+",
     ];
 
     let results = execute_to_batches(&ctx, sql).await;
@@ -1924,20 +1911,19 @@ async fn sort_merge_join_on_decimal() -> Result<()> {
     let dataframe = ctx.sql(sql).await.expect(&msg);
     let physical_plan = dataframe.create_physical_plan().await?;
     let expected = vec![
-        "ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c3@2 as c3, c4@3 as c4, c1@4 as c1, c2@5 as c2, c3@6 as c3, c4@7 as c4]",
-        "  ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c3@2 as c3, c4@3 as c4, c1@5 as c1, c2@6 as c2, c3@7 as c3, c4@8 as c4]",
-        "    SortMergeJoin: join_type=Right, on=[(Column { name: \"CAST(t1.c3 AS Decimal128(10, 2))\", index: 4 }, Column { name: \"c3\", index: 2 })]",
-        "      SortExec: [CAST(t1.c3 AS Decimal128(10, 2))@4 ASC]",
-        "        CoalesceBatchesExec: target_batch_size=4096",
-        "          RepartitionExec: partitioning=Hash([Column { name: \"CAST(t1.c3 AS Decimal128(10, 2))\", index: 4 }], 2)",
-        "            ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c3@2 as c3, c4@3 as c4, CAST(c3@2 AS Decimal128(10, 2)) as CAST(t1.c3 AS Decimal128(10, 2))]",
-        "              RepartitionExec: partitioning=RoundRobinBatch(2)",
-        "                MemoryExec: partitions=1, partition_sizes=[1]",
-        "      SortExec: [c3@2 ASC]",
-        "        CoalesceBatchesExec: target_batch_size=4096",
-        "          RepartitionExec: partitioning=Hash([Column { name: \"c3\", index: 2 }], 2)",
-        "            RepartitionExec: partitioning=RoundRobinBatch(2)",
+        "ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c3@2 as c3, c4@3 as c4, c1@5 as c1, c2@6 as c2, c3@7 as c3, c4@8 as c4]",
+        "  SortMergeJoin: join_type=Right, on=[(Column { name: \"CAST(t1.c3 AS Decimal128(10, 2))\", index: 4 }, Column { name: \"c3\", index: 2 })]",
+        "    SortExec: expr=[CAST(t1.c3 AS Decimal128(10, 2))@4 ASC]",
+        "      CoalesceBatchesExec: target_batch_size=4096",
+        "        RepartitionExec: partitioning=Hash([Column { name: \"CAST(t1.c3 AS Decimal128(10, 2))\", index: 4 }], 2), input_partitions=2",
+        "          ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c3@2 as c3, c4@3 as c4, CAST(c3@2 AS Decimal128(10, 2)) as CAST(t1.c3 AS Decimal128(10, 2))]",
+        "            RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
         "              MemoryExec: partitions=1, partition_sizes=[1]",
+        "    SortExec: expr=[c3@2 ASC]",
+        "      CoalesceBatchesExec: target_batch_size=4096",
+        "        RepartitionExec: partitioning=Hash([Column { name: \"c3\", index: 2 }], 2), input_partitions=2",
+        "          RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+        "            MemoryExec: partitions=1, partition_sizes=[1]",
     ];
     let formatted = displayable(physical_plan.as_ref()).indent().to_string();
     let actual: Vec<&str> = formatted.trim().lines().collect();
@@ -1947,14 +1933,14 @@ async fn sort_merge_join_on_decimal() -> Result<()> {
     );
 
     let expected = vec![
-        "+------------+------------+---------+-----+------------+------------+-----------+---------+",
-        "| c1         | c2         | c3      | c4  | c1         | c2         | c3        | c4      |",
-        "+------------+------------+---------+-----+------------+------------+-----------+---------+",
-        "|            |            |         |     |            |            | 100000.00 | abcdefg |",
-        "|            |            |         |     |            | 1970-01-04 | 0.00      | qwerty  |",
-        "|            | 1970-01-04 | 789.00  | ghi | 1970-01-04 |            | 789.00    |         |",
-        "| 1970-01-04 |            | -123.12 | jkl | 1970-01-02 | 1970-01-02 | -123.12   | abc     |",
-        "+------------+------------+---------+-----+------------+------------+-----------+---------+",
+        "+------------+---------------------+---------+-----+------------+---------------------+-----------+---------+",
+        "| c1         | c2                  | c3      | c4  | c1         | c2                  | c3        | c4      |",
+        "+------------+---------------------+---------+-----+------------+---------------------+-----------+---------+",
+        "|            |                     |         |     |            |                     | 100000.00 | abcdefg |",
+        "|            |                     |         |     |            | 1970-01-04T00:00:00 | 0.00      | qwerty  |",
+        "|            | 1970-01-04T00:00:00 | 789.00  | ghi | 1970-01-04 |                     | 789.00    |         |",
+        "| 1970-01-04 |                     | -123.12 | jkl | 1970-01-02 | 1970-01-02T00:00:00 | -123.12   | abc     |",
+        "+------------+---------------------+---------+-----+------------+---------------------+-----------+---------+",
     ];
 
     let results = execute_to_batches(&ctx, sql).await;
@@ -1980,32 +1966,28 @@ async fn left_semi_join() -> Result<()> {
         let physical_plan = dataframe.create_physical_plan().await?;
         let expected = if repartition_joins {
             vec![
-                "SortExec: [t1_id@0 ASC NULLS LAST]",
-                "  CoalescePartitionsExec",
-                "    ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name]",
-                "      CoalesceBatchesExec: target_batch_size=4096",
-                "        HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(Column { name: \"t1_id\", index: 0 }, Column { name: \"t2_id\", index: 0 })]",
-                "          CoalesceBatchesExec: target_batch_size=4096",
-                "            RepartitionExec: partitioning=Hash([Column { name: \"t1_id\", index: 0 }], 2)",
-                "              RepartitionExec: partitioning=RoundRobinBatch(2)",
-                "                MemoryExec: partitions=1, partition_sizes=[1]",
-                "          CoalesceBatchesExec: target_batch_size=4096",
-                "            RepartitionExec: partitioning=Hash([Column { name: \"t2_id\", index: 0 }], 2)",
+                "SortPreservingMergeExec: [t1_id@0 ASC NULLS LAST]",
+                "  SortExec: expr=[t1_id@0 ASC NULLS LAST]",
+                "    CoalesceBatchesExec: target_batch_size=4096",
+                "      HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(Column { name: \"t1_id\", index: 0 }, Column { name: \"t2_id\", index: 0 })]",
+                "        CoalesceBatchesExec: target_batch_size=4096",
+                "          RepartitionExec: partitioning=Hash([Column { name: \"t1_id\", index: 0 }], 2), input_partitions=2",
+                "            RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+                "              MemoryExec: partitions=1, partition_sizes=[1]",
+                "        CoalesceBatchesExec: target_batch_size=4096",
+                "          RepartitionExec: partitioning=Hash([Column { name: \"t2_id\", index: 0 }], 2), input_partitions=2",
+                "            RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
                 "              ProjectionExec: expr=[t2_id@0 as t2_id]",
-                "                RepartitionExec: partitioning=RoundRobinBatch(2)",
-                "                  MemoryExec: partitions=1, partition_sizes=[1]",
+                "                MemoryExec: partitions=1, partition_sizes=[1]",
             ]
         } else {
             vec![
-                "SortExec: [t1_id@0 ASC NULLS LAST]",
-                "  CoalescePartitionsExec",
-                "    ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name]",
-                "      CoalesceBatchesExec: target_batch_size=4096",
-                "        HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(Column { name: \"t1_id\", index: 0 }, Column { name: \"t2_id\", index: 0 })]",
-                "          MemoryExec: partitions=1, partition_sizes=[1]",
-                "          ProjectionExec: expr=[t2_id@0 as t2_id]",
-                "            RepartitionExec: partitioning=RoundRobinBatch(2)",
-                "              MemoryExec: partitions=1, partition_sizes=[1]",
+                "SortExec: expr=[t1_id@0 ASC NULLS LAST]",
+                "  CoalesceBatchesExec: target_batch_size=4096",
+                "    HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(Column { name: \"t1_id\", index: 0 }, Column { name: \"t2_id\", index: 0 })]",
+                "      MemoryExec: partitions=1, partition_sizes=[1]",
+                "      ProjectionExec: expr=[t2_id@0 as t2_id]",
+                "        MemoryExec: partitions=1, partition_sizes=[1]",
             ]
         };
         let formatted = displayable(physical_plan.as_ref()).indent().to_string();
@@ -2055,7 +2037,82 @@ async fn left_semi_join() -> Result<()> {
             "+-------+",
         ];
         assert_batches_eq!(expected, &actual);
+
+        let sql = "SELECT t1_id, t1_name FROM t1 LEFT SEMI JOIN t2 ON (t1_id = t2_id) ORDER BY t1_id";
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(sql).await.expect(&msg);
+        let physical_plan = dataframe.create_physical_plan().await?;
+        let expected = if repartition_joins {
+            vec![
+                "SortPreservingMergeExec: [t1_id@0 ASC NULLS LAST]",
+                "  SortExec: expr=[t1_id@0 ASC NULLS LAST]",
+                "    CoalesceBatchesExec: target_batch_size=4096",
+                "      HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(Column { name: \"t1_id\", index: 0 }, Column { name: \"t2_id\", index: 0 })]",
+                "        CoalesceBatchesExec: target_batch_size=4096",
+                "          RepartitionExec: partitioning=Hash([Column { name: \"t1_id\", index: 0 }], 2), input_partitions=2",
+                "            RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+                "              MemoryExec: partitions=1, partition_sizes=[1]",
+                "        CoalesceBatchesExec: target_batch_size=4096",
+                "          RepartitionExec: partitioning=Hash([Column { name: \"t2_id\", index: 0 }], 2), input_partitions=2",
+                "            RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+                "              MemoryExec: partitions=1, partition_sizes=[1]",
+            ]
+        } else {
+            vec![
+                "SortExec: expr=[t1_id@0 ASC NULLS LAST]",
+                "  CoalesceBatchesExec: target_batch_size=4096",
+                "    HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(Column { name: \"t1_id\", index: 0 }, Column { name: \"t2_id\", index: 0 })]",
+                "      MemoryExec: partitions=1, partition_sizes=[1]",
+                "      MemoryExec: partitions=1, partition_sizes=[1]",
+            ]
+        };
+        let formatted = displayable(physical_plan.as_ref()).indent().to_string();
+        let actual: Vec<&str> = formatted.trim().lines().collect();
+        assert_eq!(
+            expected, actual,
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+
+        let actual = execute_to_batches(&ctx, sql).await;
+        let expected = vec![
+            "+-------+---------+",
+            "| t1_id | t1_name |",
+            "+-------+---------+",
+            "| 11    | a       |",
+            "| 11    | a       |",
+            "| 22    | b       |",
+            "| 44    | d       |",
+            "+-------+---------+",
+        ];
+        assert_batches_eq!(expected, &actual);
     }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn left_semi_join_pushdown() -> Result<()> {
+    let ctx = create_left_semi_anti_join_context_with_null_ids("t1_id", "t2_id", false)
+        .unwrap();
+
+    // assert logical plan
+    let sql = "SELECT t1.t1_id, t1.t1_name FROM t1 LEFT SEMI JOIN t2 ON (t1.t1_id = t2.t2_id and t2.t2_int > 1)";
+    let msg = format!("Creating logical plan for '{sql}'");
+    let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
+    let plan = dataframe.into_optimized_plan()?;
+    let expected = vec![
+        "Explain [plan_type:Utf8, plan:Utf8]",
+        "  LeftSemi Join: t1.t1_id = t2.t2_id [t1_id:UInt32;N, t1_name:Utf8;N]",
+        "    TableScan: t1 projection=[t1_id, t1_name] [t1_id:UInt32;N, t1_name:Utf8;N]",
+        "    Filter: t2.t2_int > UInt32(1) [t2_id:UInt32;N, t2_int:UInt32;N]",
+        "      TableScan: t2 projection=[t2_id, t2_int] [t2_id:UInt32;N, t2_int:UInt32;N]",
+    ];
+    let formatted = plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
 
     Ok(())
 }
@@ -2093,15 +2150,26 @@ async fn left_anti_join() -> Result<()> {
             "+-------+",
         ];
         assert_batches_eq!(expected, &actual);
+
+        let sql = "SELECT t1_id, t1_name FROM t1 LEFT ANTI JOIN t2 ON (t1_id = t2_id) ORDER BY t1_id";
+        let actual = execute_to_batches(&ctx, sql).await;
+        let expected = vec![
+            "+-------+---------+",
+            "| t1_id | t1_name |",
+            "+-------+---------+",
+            "| 33    | c       |",
+            "|       | e       |",
+            "+-------+---------+",
+        ];
+        assert_batches_eq!(expected, &actual);
     }
 
     Ok(())
 }
 
 #[tokio::test]
-#[ignore = "Test ignored, will be enabled after fixing the anti join plan bug"]
-// https://github.com/apache/arrow-datafusion/issues/4366
 async fn error_left_anti_join() -> Result<()> {
+    // https://github.com/apache/arrow-datafusion/issues/4366
     let test_repartition_joins = vec![true, false];
     for repartition_joins in test_repartition_joins {
         let ctx = create_left_semi_anti_join_context_with_null_ids(
@@ -2167,30 +2235,70 @@ async fn right_semi_join() -> Result<()> {
         let dataframe = ctx.sql(sql).await.expect(&msg);
         let physical_plan = dataframe.create_physical_plan().await?;
         let expected = if repartition_joins {
-            vec![ "SortExec: [t1_id@0 ASC NULLS LAST]",
-                  "  CoalescePartitionsExec",
-                  "    ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int]",
-                  "      CoalesceBatchesExec: target_batch_size=4096",
-                  "        HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(Column { name: \"t2_id\", index: 0 }, Column { name: \"t1_id\", index: 0 })], filter=BinaryExpr { left: Column { name: \"t2_name\", index: 1 }, op: NotEq, right: Column { name: \"t1_name\", index: 0 } }",
-                  "          CoalesceBatchesExec: target_batch_size=4096",
-                  "            RepartitionExec: partitioning=Hash([Column { name: \"t2_id\", index: 0 }], 2)",
-                  "              RepartitionExec: partitioning=RoundRobinBatch(2)",
-                  "                MemoryExec: partitions=1, partition_sizes=[1]",
-                  "          CoalesceBatchesExec: target_batch_size=4096",
-                  "            RepartitionExec: partitioning=Hash([Column { name: \"t1_id\", index: 0 }], 2)",
-                  "              RepartitionExec: partitioning=RoundRobinBatch(2)",
-                  "                MemoryExec: partitions=1, partition_sizes=[1]",
+            vec!["SortPreservingMergeExec: [t1_id@0 ASC NULLS LAST]",
+                "  SortExec: expr=[t1_id@0 ASC NULLS LAST]",
+                "    CoalesceBatchesExec: target_batch_size=4096",
+                "      HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(Column { name: \"t2_id\", index: 0 }, Column { name: \"t1_id\", index: 0 })], filter=BinaryExpr { left: Column { name: \"t2_name\", index: 1 }, op: NotEq, right: Column { name: \"t1_name\", index: 0 } }",
+                "        CoalesceBatchesExec: target_batch_size=4096",
+                "          RepartitionExec: partitioning=Hash([Column { name: \"t2_id\", index: 0 }], 2), input_partitions=2",
+                "            RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+                "              MemoryExec: partitions=1, partition_sizes=[1]",
+                "        CoalesceBatchesExec: target_batch_size=4096",
+                "          RepartitionExec: partitioning=Hash([Column { name: \"t1_id\", index: 0 }], 2), input_partitions=2",
+                "            RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+                "              MemoryExec: partitions=1, partition_sizes=[1]",
             ]
         } else {
             vec![
-                "SortExec: [t1_id@0 ASC NULLS LAST]",
-                "  CoalescePartitionsExec",
-                "    ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int]",
-                "      RepartitionExec: partitioning=RoundRobinBatch(2)",
+                "SortExec: expr=[t1_id@0 ASC NULLS LAST]",
+                "  CoalesceBatchesExec: target_batch_size=4096",
+                "    HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(Column { name: \"t2_id\", index: 0 }, Column { name: \"t1_id\", index: 0 })], filter=BinaryExpr { left: Column { name: \"t2_name\", index: 1 }, op: NotEq, right: Column { name: \"t1_name\", index: 0 } }",
+                "      MemoryExec: partitions=1, partition_sizes=[1]",
+                "      MemoryExec: partitions=1, partition_sizes=[1]",
+            ]
+        };
+        let formatted = displayable(physical_plan.as_ref()).indent().to_string();
+        let actual: Vec<&str> = formatted.trim().lines().collect();
+        assert_eq!(
+            expected, actual,
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+
+        let actual = execute_to_batches(&ctx, sql).await;
+        let expected = vec![
+            "+-------+---------+--------+",
+            "| t1_id | t1_name | t1_int |",
+            "+-------+---------+--------+",
+            "| 11    | a       | 1      |",
+            "+-------+---------+--------+",
+        ];
+        assert_batches_eq!(expected, &actual);
+
+        let sql = "SELECT t1_id, t1_name, t1_int FROM t2 RIGHT SEMI JOIN t1 on (t2.t2_id = t1.t1_id and t2.t2_name <> t1.t1_name) ORDER BY t1_id";
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(sql).await.expect(&msg);
+        let physical_plan = dataframe.create_physical_plan().await?;
+        let expected = if repartition_joins {
+            vec!["SortPreservingMergeExec: [t1_id@0 ASC NULLS LAST]",
+                "  SortExec: expr=[t1_id@0 ASC NULLS LAST]",
+                "    CoalesceBatchesExec: target_batch_size=4096",
+                "      HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(Column { name: \"t2_id\", index: 0 }, Column { name: \"t1_id\", index: 0 })], filter=BinaryExpr { left: Column { name: \"t2_name\", index: 0 }, op: NotEq, right: Column { name: \"t1_name\", index: 1 } }",
                 "        CoalesceBatchesExec: target_batch_size=4096",
-                "          HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(Column { name: \"t2_id\", index: 0 }, Column { name: \"t1_id\", index: 0 })], filter=BinaryExpr { left: Column { name: \"t2_name\", index: 1 }, op: NotEq, right: Column { name: \"t1_name\", index: 0 } }",
-                "            MemoryExec: partitions=1, partition_sizes=[1]",
-                "            MemoryExec: partitions=1, partition_sizes=[1]",
+                "          RepartitionExec: partitioning=Hash([Column { name: \"t2_id\", index: 0 }], 2), input_partitions=2",
+                "            RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+                "              MemoryExec: partitions=1, partition_sizes=[1]",
+                "        CoalesceBatchesExec: target_batch_size=4096",
+                "          RepartitionExec: partitioning=Hash([Column { name: \"t1_id\", index: 0 }], 2), input_partitions=2",
+                "            RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+                "              MemoryExec: partitions=1, partition_sizes=[1]",
+            ]
+        } else {
+            vec![
+                "SortExec: expr=[t1_id@0 ASC NULLS LAST]",
+                "  CoalesceBatchesExec: target_batch_size=4096",
+                "    HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(Column { name: \"t2_id\", index: 0 }, Column { name: \"t1_id\", index: 0 })], filter=BinaryExpr { left: Column { name: \"t2_name\", index: 0 }, op: NotEq, right: Column { name: \"t1_name\", index: 1 } }",
+                "      MemoryExec: partitions=1, partition_sizes=[1]",
+                "      MemoryExec: partitions=1, partition_sizes=[1]",
             ]
         };
         let formatted = displayable(physical_plan.as_ref()).indent().to_string();
@@ -2252,10 +2360,9 @@ async fn reduce_cross_join_with_expr_join_key_all() -> Result<()> {
         let plan = dataframe.into_optimized_plan()?;
         let expected = vec![
             "Explain [plan_type:Utf8, plan:Utf8]",
-            "  Projection: t1.t1_id, t1.t1_name, t1.t1_int, t2.t2_id, t2.t2_name, t2.t2_int [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-            "    Inner Join: CAST(t1.t1_id AS Int64) + Int64(12) = CAST(t2.t2_id AS Int64) + Int64(1) [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-            "      TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
-            "      TableScan: t2 projection=[t2_id, t2_name, t2_int] [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+            "  Inner Join: CAST(t1.t1_id AS Int64) + Int64(12) = CAST(t2.t2_id AS Int64) + Int64(1) [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+            "    TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+            "    TableScan: t2 projection=[t2_id, t2_name, t2_int] [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
         ];
 
         let formatted = plan.display_indent_schema().to_string();
@@ -2362,14 +2469,14 @@ async fn reduce_cross_join_with_wildcard_and_expr() -> Result<()> {
                 "    CoalesceBatchesExec: target_batch_size=4096",
                 "      HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: \"t1.t1_id + Int64(11)\", index: 3 }, Column { name: \"CAST(t2.t2_id AS Int64)\", index: 3 })]",
                 "        CoalesceBatchesExec: target_batch_size=4096",
-                "          RepartitionExec: partitioning=Hash([Column { name: \"t1.t1_id + Int64(11)\", index: 3 }], 2)",
+                "          RepartitionExec: partitioning=Hash([Column { name: \"t1.t1_id + Int64(11)\", index: 3 }], 2), input_partitions=2",
                 "            ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int, CAST(t1_id@0 AS Int64) + 11 as t1.t1_id + Int64(11)]",
-                "              RepartitionExec: partitioning=RoundRobinBatch(2)",
+                "              RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
                 "                MemoryExec: partitions=1, partition_sizes=[1]",
                 "        CoalesceBatchesExec: target_batch_size=4096",
-                "          RepartitionExec: partitioning=Hash([Column { name: \"CAST(t2.t2_id AS Int64)\", index: 3 }], 2)",
+                "          RepartitionExec: partitioning=Hash([Column { name: \"CAST(t2.t2_id AS Int64)\", index: 3 }], 2), input_partitions=2",
                 "            ProjectionExec: expr=[t2_id@0 as t2_id, t2_name@1 as t2_name, t2_int@2 as t2_int, CAST(t2_id@0 AS Int64) as CAST(t2.t2_id AS Int64)]",
-                "              RepartitionExec: partitioning=RoundRobinBatch(2)",
+                "              RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
                 "                MemoryExec: partitions=1, partition_sizes=[1]",
            ]
         } else {
@@ -2380,10 +2487,10 @@ async fn reduce_cross_join_with_wildcard_and_expr() -> Result<()> {
                 "      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(Column { name: \"t1.t1_id + Int64(11)\", index: 3 }, Column { name: \"CAST(t2.t2_id AS Int64)\", index: 3 })]",
                 "        CoalescePartitionsExec",
                 "          ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int, CAST(t1_id@0 AS Int64) + 11 as t1.t1_id + Int64(11)]",
-                "            RepartitionExec: partitioning=RoundRobinBatch(2)",
+                "            RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
                 "              MemoryExec: partitions=1, partition_sizes=[1]",
                 "        ProjectionExec: expr=[t2_id@0 as t2_id, t2_name@1 as t2_name, t2_int@2 as t2_int, CAST(t2_id@0 AS Int64) as CAST(t2.t2_id AS Int64)]",
-                "          RepartitionExec: partitioning=RoundRobinBatch(2)",
+                "          RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
                 "            MemoryExec: partitions=1, partition_sizes=[1]",
             ]
         };
@@ -2434,14 +2541,14 @@ async fn both_side_expr_key_inner_join() -> Result<()> {
                 "    CoalesceBatchesExec: target_batch_size=4096",
                 "      HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: \"t1.t1_id + UInt32(12)\", index: 2 }, Column { name: \"t2.t2_id + UInt32(1)\", index: 1 })]",
                 "        CoalesceBatchesExec: target_batch_size=4096",
-                "          RepartitionExec: partitioning=Hash([Column { name: \"t1.t1_id + UInt32(12)\", index: 2 }], 2)",
+                "          RepartitionExec: partitioning=Hash([Column { name: \"t1.t1_id + UInt32(12)\", index: 2 }], 2), input_partitions=2",
                 "            ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_id@0 + 12 as t1.t1_id + UInt32(12)]",
-                "              RepartitionExec: partitioning=RoundRobinBatch(2)",
+                "              RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
                 "                MemoryExec: partitions=1, partition_sizes=[1]",
                 "        CoalesceBatchesExec: target_batch_size=4096",
-                "          RepartitionExec: partitioning=Hash([Column { name: \"t2.t2_id + UInt32(1)\", index: 1 }], 2)",
+                "          RepartitionExec: partitioning=Hash([Column { name: \"t2.t2_id + UInt32(1)\", index: 1 }], 2), input_partitions=2",
                 "            ProjectionExec: expr=[t2_id@0 as t2_id, t2_id@0 + 1 as t2.t2_id + UInt32(1)]",
-                "              RepartitionExec: partitioning=RoundRobinBatch(2)",
+                "              RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
                 "                MemoryExec: partitions=1, partition_sizes=[1]",
             ]
         } else {
@@ -2452,10 +2559,10 @@ async fn both_side_expr_key_inner_join() -> Result<()> {
                 "      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(Column { name: \"t1.t1_id + UInt32(12)\", index: 2 }, Column { name: \"t2.t2_id + UInt32(1)\", index: 1 })]",
                 "        CoalescePartitionsExec",
                 "          ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_id@0 + 12 as t1.t1_id + UInt32(12)]",
-                "            RepartitionExec: partitioning=RoundRobinBatch(2)",
+                "            RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
                 "              MemoryExec: partitions=1, partition_sizes=[1]",
                 "        ProjectionExec: expr=[t2_id@0 as t2_id, t2_id@0 + 1 as t2.t2_id + UInt32(1)]",
-                "          RepartitionExec: partitioning=RoundRobinBatch(2)",
+                "          RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
                 "            MemoryExec: partitions=1, partition_sizes=[1]",
             ]
         };
@@ -2505,27 +2612,26 @@ async fn left_side_expr_key_inner_join() -> Result<()> {
                 "    CoalesceBatchesExec: target_batch_size=4096",
                 "      HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: \"t1.t1_id + UInt32(11)\", index: 2 }, Column { name: \"t2_id\", index: 0 })]",
                 "        CoalesceBatchesExec: target_batch_size=4096",
-                "          RepartitionExec: partitioning=Hash([Column { name: \"t1.t1_id + UInt32(11)\", index: 2 }], 2)",
+                "          RepartitionExec: partitioning=Hash([Column { name: \"t1.t1_id + UInt32(11)\", index: 2 }], 2), input_partitions=2",
                 "            ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_id@0 + 11 as t1.t1_id + UInt32(11)]",
-                "              RepartitionExec: partitioning=RoundRobinBatch(2)",
+                "              RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
                 "                MemoryExec: partitions=1, partition_sizes=[1]",
                 "        CoalesceBatchesExec: target_batch_size=4096",
-                "          RepartitionExec: partitioning=Hash([Column { name: \"t2_id\", index: 0 }], 2)",
-                "            RepartitionExec: partitioning=RoundRobinBatch(2)",
+                "          RepartitionExec: partitioning=Hash([Column { name: \"t2_id\", index: 0 }], 2), input_partitions=2",
+                "            RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
                 "              MemoryExec: partitions=1, partition_sizes=[1]",
            ]
         } else {
             vec![
                 "ProjectionExec: expr=[t1_id@0 as t1_id, t2_id@2 as t2_id, t1_name@1 as t1_name]",
                 "  ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t2_id@3 as t2_id]",
-                "    RepartitionExec: partitioning=RoundRobinBatch(2)",
-                "      CoalesceBatchesExec: target_batch_size=4096",
-                "        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(Column { name: \"t1.t1_id + UInt32(11)\", index: 2 }, Column { name: \"t2_id\", index: 0 })]",
-                "          CoalescePartitionsExec",
-                "            ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_id@0 + 11 as t1.t1_id + UInt32(11)]",
-                "              RepartitionExec: partitioning=RoundRobinBatch(2)",
-                "                MemoryExec: partitions=1, partition_sizes=[1]",
-                "          MemoryExec: partitions=1, partition_sizes=[1]",
+                "    CoalesceBatchesExec: target_batch_size=4096",
+                "      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(Column { name: \"t1.t1_id + UInt32(11)\", index: 2 }, Column { name: \"t2_id\", index: 0 })]",
+                "        CoalescePartitionsExec",
+                "          ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_id@0 + 11 as t1.t1_id + UInt32(11)]",
+                "            RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+                "              MemoryExec: partitions=1, partition_sizes=[1]",
+                "        MemoryExec: partitions=1, partition_sizes=[1]",
             ]
         };
         let formatted = displayable(physical_plan.as_ref()).indent().to_string();
@@ -2574,13 +2680,13 @@ async fn right_side_expr_key_inner_join() -> Result<()> {
                 "    CoalesceBatchesExec: target_batch_size=4096",
                 "      HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: \"t1_id\", index: 0 }, Column { name: \"t2.t2_id - UInt32(11)\", index: 1 })]",
                 "        CoalesceBatchesExec: target_batch_size=4096",
-                "          RepartitionExec: partitioning=Hash([Column { name: \"t1_id\", index: 0 }], 2)",
-                "            RepartitionExec: partitioning=RoundRobinBatch(2)",
+                "          RepartitionExec: partitioning=Hash([Column { name: \"t1_id\", index: 0 }], 2), input_partitions=2",
+                "            RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
                 "              MemoryExec: partitions=1, partition_sizes=[1]",
                 "        CoalesceBatchesExec: target_batch_size=4096",
-                "          RepartitionExec: partitioning=Hash([Column { name: \"t2.t2_id - UInt32(11)\", index: 1 }], 2)",
+                "          RepartitionExec: partitioning=Hash([Column { name: \"t2.t2_id - UInt32(11)\", index: 1 }], 2), input_partitions=2",
                 "            ProjectionExec: expr=[t2_id@0 as t2_id, t2_id@0 - 11 as t2.t2_id - UInt32(11)]",
-                "              RepartitionExec: partitioning=RoundRobinBatch(2)",
+                "              RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
                 "                MemoryExec: partitions=1, partition_sizes=[1]",
            ]
         } else {
@@ -2591,7 +2697,7 @@ async fn right_side_expr_key_inner_join() -> Result<()> {
                 "      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(Column { name: \"t1_id\", index: 0 }, Column { name: \"t2.t2_id - UInt32(11)\", index: 1 })]",
                 "        MemoryExec: partitions=1, partition_sizes=[1]",
                 "        ProjectionExec: expr=[t2_id@0 as t2_id, t2_id@0 - 11 as t2.t2_id - UInt32(11)]",
-                "          RepartitionExec: partitioning=RoundRobinBatch(2)",
+                "          RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
                 "            MemoryExec: partitions=1, partition_sizes=[1]",
             ]
         };
@@ -2637,29 +2743,27 @@ async fn select_wildcard_with_expr_key_inner_join() -> Result<()> {
         let expected = if repartition_joins {
             vec![
                 "ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int, t2_id@3 as t2_id, t2_name@4 as t2_name, t2_int@5 as t2_int]",
-                "  ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int, t2_id@3 as t2_id, t2_name@4 as t2_name, t2_int@5 as t2_int]",
-                "    CoalesceBatchesExec: target_batch_size=4096",
-                "      HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: \"t1_id\", index: 0 }, Column { name: \"t2.t2_id - UInt32(11)\", index: 3 })]",
-                "        CoalesceBatchesExec: target_batch_size=4096",
-                "          RepartitionExec: partitioning=Hash([Column { name: \"t1_id\", index: 0 }], 2)",
-                "            RepartitionExec: partitioning=RoundRobinBatch(2)",
+                "  CoalesceBatchesExec: target_batch_size=4096",
+                "    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: \"t1_id\", index: 0 }, Column { name: \"t2.t2_id - UInt32(11)\", index: 3 })]",
+                "      CoalesceBatchesExec: target_batch_size=4096",
+                "        RepartitionExec: partitioning=Hash([Column { name: \"t1_id\", index: 0 }], 2), input_partitions=2",
+                "          RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+                "            MemoryExec: partitions=1, partition_sizes=[1]",
+                "      CoalesceBatchesExec: target_batch_size=4096",
+                "        RepartitionExec: partitioning=Hash([Column { name: \"t2.t2_id - UInt32(11)\", index: 3 }], 2), input_partitions=2",
+                "          ProjectionExec: expr=[t2_id@0 as t2_id, t2_name@1 as t2_name, t2_int@2 as t2_int, t2_id@0 - 11 as t2.t2_id - UInt32(11)]",
+                "            RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
                 "              MemoryExec: partitions=1, partition_sizes=[1]",
-                "        CoalesceBatchesExec: target_batch_size=4096",
-                "          RepartitionExec: partitioning=Hash([Column { name: \"t2.t2_id - UInt32(11)\", index: 3 }], 2)",
-                "            ProjectionExec: expr=[t2_id@0 as t2_id, t2_name@1 as t2_name, t2_int@2 as t2_int, t2_id@0 - 11 as t2.t2_id - UInt32(11)]",
-                "              RepartitionExec: partitioning=RoundRobinBatch(2)",
-                "                MemoryExec: partitions=1, partition_sizes=[1]",
-           ]
+            ]
         } else {
             vec![
                 "ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int, t2_id@3 as t2_id, t2_name@4 as t2_name, t2_int@5 as t2_int]",
-                "  ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int, t2_id@3 as t2_id, t2_name@4 as t2_name, t2_int@5 as t2_int]",
-                "    CoalesceBatchesExec: target_batch_size=4096",
-                "      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(Column { name: \"t1_id\", index: 0 }, Column { name: \"t2.t2_id - UInt32(11)\", index: 3 })]",
-                "        MemoryExec: partitions=1, partition_sizes=[1]",
-                "        ProjectionExec: expr=[t2_id@0 as t2_id, t2_name@1 as t2_name, t2_int@2 as t2_int, t2_id@0 - 11 as t2.t2_id - UInt32(11)]",
-                "          RepartitionExec: partitioning=RoundRobinBatch(2)",
-                "            MemoryExec: partitions=1, partition_sizes=[1]",
+                "  CoalesceBatchesExec: target_batch_size=4096",
+                "    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(Column { name: \"t1_id\", index: 0 }, Column { name: \"t2.t2_id - UInt32(11)\", index: 3 })]",
+                "      MemoryExec: partitions=1, partition_sizes=[1]",
+                "      ProjectionExec: expr=[t2_id@0 as t2_id, t2_name@1 as t2_name, t2_int@2 as t2_int, t2_id@0 - 11 as t2.t2_id - UInt32(11)]",
+                "        RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+                "          MemoryExec: partitions=1, partition_sizes=[1]",
             ]
         };
         let formatted = displayable(physical_plan.as_ref()).indent().to_string();
@@ -2699,10 +2803,9 @@ async fn join_with_type_coercion_for_equi_expr() -> Result<()> {
 
     let expected = vec![
         "Explain [plan_type:Utf8, plan:Utf8]",
-        "  Projection: t1.t1_id, t1.t1_name, t2.t2_id [t1_id:UInt32;N, t1_name:Utf8;N, t2_id:UInt32;N]",
-        "    Inner Join: CAST(t1.t1_id AS Int64) + Int64(11) = CAST(t2.t2_id AS Int64) [t1_id:UInt32;N, t1_name:Utf8;N, t2_id:UInt32;N]",
-        "      TableScan: t1 projection=[t1_id, t1_name] [t1_id:UInt32;N, t1_name:Utf8;N]",
-        "      TableScan: t2 projection=[t2_id] [t2_id:UInt32;N]",
+        "  Inner Join: CAST(t1.t1_id AS Int64) + Int64(11) = CAST(t2.t2_id AS Int64) [t1_id:UInt32;N, t1_name:Utf8;N, t2_id:UInt32;N]",
+        "    TableScan: t1 projection=[t1_id, t1_name] [t1_id:UInt32;N, t1_name:Utf8;N]",
+        "    TableScan: t2 projection=[t2_id] [t2_id:UInt32;N]",
     ];
 
     let formatted = plan.display_indent_schema().to_string();
@@ -2741,10 +2844,9 @@ async fn join_only_with_filter() -> Result<()> {
 
     let expected = vec![
         "Explain [plan_type:Utf8, plan:Utf8]",
-        "  Projection: t1.t1_id, t1.t1_name, t2.t2_id [t1_id:UInt32;N, t1_name:Utf8;N, t2_id:UInt32;N]",
-        "    Inner Join:  Filter: CAST(t1.t1_id AS Int64) * Int64(4) < CAST(t2.t2_id AS Int64) [t1_id:UInt32;N, t1_name:Utf8;N, t2_id:UInt32;N]",
-        "      TableScan: t1 projection=[t1_id, t1_name] [t1_id:UInt32;N, t1_name:Utf8;N]",
-        "      TableScan: t2 projection=[t2_id] [t2_id:UInt32;N]",
+        "  Inner Join:  Filter: CAST(t1.t1_id AS Int64) * Int64(4) < CAST(t2.t2_id AS Int64) [t1_id:UInt32;N, t1_name:Utf8;N, t2_id:UInt32;N]",
+        "    TableScan: t1 projection=[t1_id, t1_name] [t1_id:UInt32;N, t1_name:Utf8;N]",
+        "    TableScan: t2 projection=[t2_id] [t2_id:UInt32;N]",
     ];
 
     let formatted = plan.display_indent_schema().to_string();
@@ -2784,10 +2886,9 @@ async fn type_coercion_join_with_filter_and_equi_expr() -> Result<()> {
 
     let expected = vec![
         "Explain [plan_type:Utf8, plan:Utf8]",
-        "  Projection: t1.t1_id, t1.t1_name, t2.t2_id [t1_id:UInt32;N, t1_name:Utf8;N, t2_id:UInt32;N]",
-        "    Inner Join: CAST(t1.t1_id AS Int64) * Int64(5) = CAST(t2.t2_id AS Int64) Filter: CAST(t1.t1_id AS Int64) * Int64(4) < CAST(t2.t2_id AS Int64) [t1_id:UInt32;N, t1_name:Utf8;N, t2_id:UInt32;N]",
-        "      TableScan: t1 projection=[t1_id, t1_name] [t1_id:UInt32;N, t1_name:Utf8;N]",
-        "      TableScan: t2 projection=[t2_id] [t2_id:UInt32;N]",
+        "  Inner Join: CAST(t1.t1_id AS Int64) * Int64(5) = CAST(t2.t2_id AS Int64) Filter: CAST(t1.t1_id AS Int64) * Int64(4) < CAST(t2.t2_id AS Int64) [t1_id:UInt32;N, t1_name:Utf8;N, t2_id:UInt32;N]",
+        "    TableScan: t1 projection=[t1_id, t1_name] [t1_id:UInt32;N, t1_name:Utf8;N]",
+        "    TableScan: t2 projection=[t2_id] [t2_id:UInt32;N]",
     ];
 
     let formatted = plan.display_indent_schema().to_string();
@@ -2807,6 +2908,611 @@ async fn type_coercion_join_with_filter_and_equi_expr() -> Result<()> {
 
     let results = execute_to_batches(&ctx, sql).await;
     assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_cross_join_to_groupby_with_different_key_ordering() -> Result<()> {
+    // Regression test for GH #4873
+    let col1 = Arc::new(StringArray::from(vec![
+        "A", "A", "A", "A", "A", "A", "A", "A", "BB", "BB", "BB", "BB",
+    ])) as ArrayRef;
+
+    let col2 =
+        Arc::new(UInt64Array::from(vec![1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6])) as ArrayRef;
+
+    let col3 =
+        Arc::new(UInt64Array::from(vec![1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1])) as ArrayRef;
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("col1", DataType::Utf8, true),
+        Field::new("col2", DataType::UInt64, true),
+        Field::new("col3", DataType::UInt64, true),
+    ])) as SchemaRef;
+
+    let batch = RecordBatch::try_new(schema.clone(), vec![col1, col2, col3]).unwrap();
+    let mem_table = MemTable::try_new(schema, vec![vec![batch]]).unwrap();
+
+    // Create context and register table
+    let ctx = SessionContext::new();
+    ctx.register_table("tbl", Arc::new(mem_table)).unwrap();
+
+    let sql = "select col1, col2, coalesce(sum_col3, 0) as sum_col3 \
+                     from (select distinct col2 from tbl) AS q1 \
+                     cross join (select distinct col1 from tbl) AS q2 \
+                     left outer join (SELECT col1, col2, sum(col3) as sum_col3 FROM tbl GROUP BY col1, col2) AS q3 \
+                     USING(col2, col1) \
+                     ORDER BY col1, col2";
+
+    let expected = vec![
+        "+------+------+----------+",
+        "| col1 | col2 | sum_col3 |",
+        "+------+------+----------+",
+        "| A    | 1    | 2.0      |",
+        "| A    | 2    | 2.0      |",
+        "| A    | 3    | 2.0      |",
+        "| A    | 4    | 2.0      |",
+        "| A    | 5    | 0.0      |",
+        "| A    | 6    | 0.0      |",
+        "| BB   | 1    | 0.0      |",
+        "| BB   | 2    | 0.0      |",
+        "| BB   | 3    | 0.0      |",
+        "| BB   | 4    | 0.0      |",
+        "| BB   | 5    | 2.0      |",
+        "| BB   | 6    | 2.0      |",
+        "+------+------+----------+",
+    ];
+
+    let results = execute_to_batches(&ctx, sql).await;
+    assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn subquery_to_join_with_both_side_expr() -> Result<()> {
+    let ctx = create_join_context("t1_id", "t2_id", false)?;
+
+    let sql = "select t1.t1_id, t1.t1_name, t1.t1_int from t1 where t1.t1_id + 12 in (select t2.t2_id + 1 from t2)";
+
+    // assert logical plan
+    let msg = format!("Creating logical plan for '{sql}'");
+    let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
+    let plan = dataframe.into_optimized_plan().unwrap();
+
+    let expected = vec![
+        "Explain [plan_type:Utf8, plan:Utf8]",
+        "  LeftSemi Join: CAST(t1.t1_id AS Int64) + Int64(12) = __correlated_sq_1.CAST(t2_id AS Int64) + Int64(1) [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+        "    TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+        "    SubqueryAlias: __correlated_sq_1 [CAST(t2_id AS Int64) + Int64(1):Int64;N]",
+        "      Projection: CAST(t2.t2_id AS Int64) + Int64(1) AS CAST(t2_id AS Int64) + Int64(1) [CAST(t2_id AS Int64) + Int64(1):Int64;N]",
+        "        TableScan: t2 projection=[t2_id] [t2_id:UInt32;N]",
+    ];
+
+    let formatted = plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+
+    let expected = vec![
+        "+-------+---------+--------+",
+        "| t1_id | t1_name | t1_int |",
+        "+-------+---------+--------+",
+        "| 11    | a       | 1      |",
+        "| 33    | c       | 3      |",
+        "| 44    | d       | 4      |",
+        "+-------+---------+--------+",
+    ];
+
+    let results = execute_to_batches(&ctx, sql).await;
+    assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn subquery_to_join_with_muti_filter() -> Result<()> {
+    let ctx = create_join_context("t1_id", "t2_id", false)?;
+
+    let sql = "select t1.t1_id, t1.t1_name, t1.t1_int from t1 where t1.t1_id + 12 in
+                         (select t2.t2_id + 1 from t2 where t1.t1_int <= t2.t2_int and t2.t2_int > 0)";
+
+    // assert logical plan
+    let msg = format!("Creating logical plan for '{sql}'");
+    let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
+    let plan = dataframe.into_optimized_plan().unwrap();
+
+    let expected = vec![
+        "Explain [plan_type:Utf8, plan:Utf8]",
+        "  LeftSemi Join: CAST(t1.t1_id AS Int64) + Int64(12) = __correlated_sq_1.CAST(t2_id AS Int64) + Int64(1) Filter: t1.t1_int <= __correlated_sq_1.t2_int [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+        "    TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+        "    SubqueryAlias: __correlated_sq_1 [CAST(t2_id AS Int64) + Int64(1):Int64;N, t2_int:UInt32;N]",
+        "      Projection: CAST(t2.t2_id AS Int64) + Int64(1) AS CAST(t2_id AS Int64) + Int64(1), t2.t2_int [CAST(t2_id AS Int64) + Int64(1):Int64;N, t2_int:UInt32;N]",
+        "        Filter: t2.t2_int > UInt32(0) [t2_id:UInt32;N, t2_int:UInt32;N]",
+        "          TableScan: t2 projection=[t2_id, t2_int] [t2_id:UInt32;N, t2_int:UInt32;N]",
+    ];
+
+    let formatted = plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+
+    let expected = vec![
+        "+-------+---------+--------+",
+        "| t1_id | t1_name | t1_int |",
+        "+-------+---------+--------+",
+        "| 11    | a       | 1      |",
+        "| 33    | c       | 3      |",
+        "+-------+---------+--------+",
+    ];
+
+    let results = execute_to_batches(&ctx, sql).await;
+    assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn three_projection_exprs_subquery_to_join() -> Result<()> {
+    let ctx = create_join_context("t1_id", "t2_id", false)?;
+
+    let sql = "select t1.t1_id, t1.t1_name, t1.t1_int from t1 where t1.t1_id + 12 in
+                         (select t2.t2_id + 1 from t2 where t1.t1_int <= t2.t2_int and t1.t1_name != t2.t2_name and t2.t2_int > 0)";
+
+    // assert logical plan
+    let msg = format!("Creating logical plan for '{sql}'");
+    let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
+    let plan = dataframe.into_optimized_plan().unwrap();
+
+    let expected = vec![
+        "Explain [plan_type:Utf8, plan:Utf8]",
+        "  LeftSemi Join: CAST(t1.t1_id AS Int64) + Int64(12) = __correlated_sq_1.CAST(t2_id AS Int64) + Int64(1) Filter: t1.t1_int <= __correlated_sq_1.t2_int AND t1.t1_name != __correlated_sq_1.t2_name [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+        "    TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+        "    SubqueryAlias: __correlated_sq_1 [CAST(t2_id AS Int64) + Int64(1):Int64;N, t2_int:UInt32;N, t2_name:Utf8;N]",
+        "      Projection: CAST(t2.t2_id AS Int64) + Int64(1) AS CAST(t2_id AS Int64) + Int64(1), t2.t2_int, t2.t2_name [CAST(t2_id AS Int64) + Int64(1):Int64;N, t2_int:UInt32;N, t2_name:Utf8;N]",
+        "        Filter: t2.t2_int > UInt32(0) [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+        "          TableScan: t2 projection=[t2_id, t2_name, t2_int] [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+    ];
+
+    let formatted = plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+
+    let expected = vec![
+        "+-------+---------+--------+",
+        "| t1_id | t1_name | t1_int |",
+        "+-------+---------+--------+",
+        "| 11    | a       | 1      |",
+        "| 33    | c       | 3      |",
+        "+-------+---------+--------+",
+    ];
+
+    let results = execute_to_batches(&ctx, sql).await;
+    assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn in_subquery_to_join_with_correlated_outer_filter() -> Result<()> {
+    let ctx = create_join_context("t1_id", "t2_id", false)?;
+
+    let sql = "select t1.t1_id, t1.t1_name, t1.t1_int from t1 where t1.t1_id + 12 in
+                         (select t2.t2_id + 1 from t2 where t1.t1_int > 0)";
+
+    // assert logical plan
+    let msg = format!("Creating logical plan for '{sql}'");
+    let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
+    let plan = dataframe.into_optimized_plan().unwrap();
+    let expected = vec![
+        "Explain [plan_type:Utf8, plan:Utf8]",
+        "  LeftSemi Join: CAST(t1.t1_id AS Int64) + Int64(12) = __correlated_sq_1.CAST(t2_id AS Int64) + Int64(1) [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+        "    Filter: t1.t1_int > UInt32(0) [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+        "      TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+        "    SubqueryAlias: __correlated_sq_1 [CAST(t2_id AS Int64) + Int64(1):Int64;N]",
+        "      Projection: CAST(t2.t2_id AS Int64) + Int64(1) AS CAST(t2_id AS Int64) + Int64(1) [CAST(t2_id AS Int64) + Int64(1):Int64;N]",
+        "        TableScan: t2 projection=[t2_id] [t2_id:UInt32;N]",
+    ];
+
+    let formatted = plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn not_in_subquery_to_join_with_correlated_outer_filter() -> Result<()> {
+    let ctx = create_join_context("t1_id", "t2_id", false)?;
+
+    let sql = "select t1.t1_id, t1.t1_name, t1.t1_int from t1 where t1.t1_id + 12 not in
+                         (select t2.t2_id + 1 from t2 where t1.t1_int > 0)";
+
+    // assert logical plan
+    let msg = format!("Creating logical plan for '{sql}'");
+    let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
+    let plan = dataframe.into_optimized_plan().unwrap();
+    let expected = vec![
+        "Explain [plan_type:Utf8, plan:Utf8]",
+        "  LeftAnti Join: CAST(t1.t1_id AS Int64) + Int64(12) = __correlated_sq_1.CAST(t2_id AS Int64) + Int64(1) Filter: t1.t1_int > UInt32(0) [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+        "    TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+        "    SubqueryAlias: __correlated_sq_1 [CAST(t2_id AS Int64) + Int64(1):Int64;N]",
+        "      Projection: CAST(t2.t2_id AS Int64) + Int64(1) AS CAST(t2_id AS Int64) + Int64(1) [CAST(t2_id AS Int64) + Int64(1):Int64;N]",
+        "        TableScan: t2 projection=[t2_id] [t2_id:UInt32;N]",
+    ];
+
+    let formatted = plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn in_subquery_to_join_with_outer_filter() -> Result<()> {
+    let ctx = create_join_context("t1_id", "t2_id", false)?;
+
+    let sql = "select t1.t1_id, t1.t1_name, t1.t1_int from t1 where t1.t1_id + 12 in
+                         (select t2.t2_id + 1 from t2 where t1.t1_int <= t2.t2_int and t1.t1_name != t2.t2_name) and t1.t1_id > 0";
+
+    // assert logical plan
+    let msg = format!("Creating logical plan for '{sql}'");
+    let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
+    let plan = dataframe.into_optimized_plan().unwrap();
+
+    let expected = vec![
+        "Explain [plan_type:Utf8, plan:Utf8]",
+        "  LeftSemi Join: CAST(t1.t1_id AS Int64) + Int64(12) = __correlated_sq_1.CAST(t2_id AS Int64) + Int64(1) Filter: t1.t1_int <= __correlated_sq_1.t2_int AND t1.t1_name != __correlated_sq_1.t2_name [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+        "    Filter: t1.t1_id > UInt32(0) [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+        "      TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+        "    SubqueryAlias: __correlated_sq_1 [CAST(t2_id AS Int64) + Int64(1):Int64;N, t2_int:UInt32;N, t2_name:Utf8;N]",
+        "      Projection: CAST(t2.t2_id AS Int64) + Int64(1) AS CAST(t2_id AS Int64) + Int64(1), t2.t2_int, t2.t2_name [CAST(t2_id AS Int64) + Int64(1):Int64;N, t2_int:UInt32;N, t2_name:Utf8;N]",
+        "        TableScan: t2 projection=[t2_id, t2_name, t2_int] [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+    ];
+
+    let formatted = plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+
+    let expected = vec![
+        "+-------+---------+--------+",
+        "| t1_id | t1_name | t1_int |",
+        "+-------+---------+--------+",
+        "| 11    | a       | 1      |",
+        "| 33    | c       | 3      |",
+        "+-------+---------+--------+",
+    ];
+
+    let results = execute_to_batches(&ctx, sql).await;
+    assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn two_in_subquery_to_join_with_outer_filter() -> Result<()> {
+    let ctx = create_join_context("t1_id", "t2_id", false)?;
+
+    let sql = "select t1.t1_id, t1.t1_name, t1.t1_int from t1 where t1.t1_id + 12 in
+                         (select t2.t2_id + 1 from t2)
+                         and t1.t1_int in(select t2.t2_int + 1 from t2)
+                         and t1.t1_id > 0";
+
+    // assert logical plan
+    let msg = format!("Creating logical plan for '{sql}'");
+    let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
+    let plan = dataframe.into_optimized_plan().unwrap();
+
+    let expected = vec![
+        "Explain [plan_type:Utf8, plan:Utf8]",
+        "  LeftSemi Join: CAST(t1.t1_int AS Int64) = __correlated_sq_2.CAST(t2_int AS Int64) + Int64(1) [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+        "    LeftSemi Join: CAST(t1.t1_id AS Int64) + Int64(12) = __correlated_sq_1.CAST(t2_id AS Int64) + Int64(1) [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+        "      Filter: t1.t1_id > UInt32(0) [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+        "        TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+        "      SubqueryAlias: __correlated_sq_1 [CAST(t2_id AS Int64) + Int64(1):Int64;N]",
+        "        Projection: CAST(t2.t2_id AS Int64) + Int64(1) AS CAST(t2_id AS Int64) + Int64(1) [CAST(t2_id AS Int64) + Int64(1):Int64;N]",
+        "          TableScan: t2 projection=[t2_id] [t2_id:UInt32;N]",
+        "    SubqueryAlias: __correlated_sq_2 [CAST(t2_int AS Int64) + Int64(1):Int64;N]",
+        "      Projection: CAST(t2.t2_int AS Int64) + Int64(1) AS CAST(t2_int AS Int64) + Int64(1) [CAST(t2_int AS Int64) + Int64(1):Int64;N]",
+        "        TableScan: t2 projection=[t2_int] [t2_int:UInt32;N]",
+    ];
+
+    let formatted = plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+
+    let expected = vec![
+        "+-------+---------+--------+",
+        "| t1_id | t1_name | t1_int |",
+        "+-------+---------+--------+",
+        "| 44    | d       | 4      |",
+        "+-------+---------+--------+",
+    ];
+
+    let results = execute_to_batches(&ctx, sql).await;
+    assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn right_as_inner_table_nested_loop_join() -> Result<()> {
+    let ctx = create_nested_loop_join_context()?;
+
+    // Distribution: left is `UnspecifiedDistribution`, right is `SinglePartition`.
+    let sql = "SELECT t1.t1_id, t2.t2_id
+                     FROM t1 INNER JOIN t2 ON t1.t1_id > t2.t2_id
+                     WHERE t1.t1_id > 10 AND t2.t2_int > 1";
+
+    let msg = format!("Creating logical plan for '{sql}'");
+    let dataframe = ctx.sql(sql).await.expect(&msg);
+    let physical_plan = dataframe.create_physical_plan().await?;
+
+    // right is single partition side, so it will be visited many times.
+    let expected = vec![
+        "ProjectionExec: expr=[t1_id@0 as t1_id, t2_id@1 as t2_id]",
+        "  NestedLoopJoinExec: join_type=Inner, filter=BinaryExpr { left: Column { name: \"t1_id\", index: 0 }, op: Gt, right: Column { name: \"t2_id\", index: 1 } }",
+        "    CoalesceBatchesExec: target_batch_size=4096",
+        "      FilterExec: t1_id@0 > 10",
+        "        RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1",
+        "          MemoryExec: partitions=1, partition_sizes=[1]",
+        "    CoalescePartitionsExec",
+        "      CoalesceBatchesExec: target_batch_size=4096",
+        "        FilterExec: t2_int@1 > 1",
+        "          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1",
+        "            MemoryExec: partitions=1, partition_sizes=[1]",
+    ];
+    let formatted = displayable(physical_plan.as_ref()).indent().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+
+    let expected = vec![
+        "+-------+-------+",
+        "| t1_id | t2_id |",
+        "+-------+-------+",
+        "| 22    | 11    |",
+        "| 33    | 11    |",
+        "| 44    | 11    |",
+        "+-------+-------+",
+    ];
+
+    let results = execute_to_batches(&ctx, sql).await;
+    assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn left_as_inner_table_nested_loop_join() -> Result<()> {
+    let ctx = create_nested_loop_join_context()?;
+
+    // Distribution: left is `SinglePartition`, right is `UnspecifiedDistribution`.
+    let sql = "SELECT t1.t1_id,t2.t2_id FROM (select t1_id from t1 where t1.t1_id > 22) as t1
+                                                 RIGHT JOIN (select t2_id from t2 where t2.t2_id > 11) as t2
+                                                 ON t1.t1_id < t2.t2_id";
+
+    let msg = format!("Creating logical plan for '{sql}'");
+    let dataframe = ctx.sql(sql).await.expect(&msg);
+    let physical_plan = dataframe.create_physical_plan().await?;
+
+    // left is single partition side, so it will be visited many times.
+    let expected = vec![
+        "NestedLoopJoinExec: join_type=Right, filter=BinaryExpr { left: Column { name: \"t1_id\", index: 0 }, op: Lt, right: Column { name: \"t2_id\", index: 1 } }",
+        "  CoalescePartitionsExec",
+        "    CoalesceBatchesExec: target_batch_size=4096",
+        "      FilterExec: t1_id@0 > 22",
+        "        RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1",
+        "          MemoryExec: partitions=1, partition_sizes=[1]",
+        "  CoalesceBatchesExec: target_batch_size=4096",
+        "    FilterExec: t2_id@0 > 11",
+        "      RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1",
+        "        MemoryExec: partitions=1, partition_sizes=[1]",
+    ];
+    let formatted = displayable(physical_plan.as_ref()).indent().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+
+    let expected = vec![
+        "+-------+-------+",
+        "| t1_id | t2_id |",
+        "+-------+-------+",
+        "|       | 22    |",
+        "| 33    | 44    |",
+        "| 33    | 55    |",
+        "| 44    | 55    |",
+        "+-------+-------+",
+    ];
+
+    let results = execute_to_batches(&ctx, sql).await;
+    assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn exists_subquery_to_join_expr_filter() -> Result<()> {
+    let test_repartition_joins = vec![true, false];
+    for repartition_joins in test_repartition_joins {
+        let ctx = create_join_context("t1_id", "t2_id", repartition_joins)?;
+
+        // exists subquery to LeftSemi join
+        let sql = "SELECT * FROM t1 WHERE EXISTS(SELECT t2_id FROM t2 WHERE t1.t1_id + 1 > t2.t2_id * 2)";
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
+        let plan = dataframe.into_optimized_plan()?;
+
+        let expected = vec![
+            "Explain [plan_type:Utf8, plan:Utf8]",
+            "  LeftSemi Join:  Filter: CAST(t1.t1_id AS Int64) + Int64(1) > CAST(t2.t2_id AS Int64) * Int64(2) [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+            "    TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+            "    TableScan: t2 projection=[t2_id] [t2_id:UInt32;N]",
+        ];
+        let formatted = plan.display_indent_schema().to_string();
+        let actual: Vec<&str> = formatted.trim().lines().collect();
+        assert_eq!(
+            expected, actual,
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+        let expected = vec![
+            "+-------+---------+--------+",
+            "| t1_id | t1_name | t1_int |",
+            "+-------+---------+--------+",
+            "| 22    | b       | 2      |",
+            "| 33    | c       | 3      |",
+            "| 44    | d       | 4      |",
+            "+-------+---------+--------+",
+        ];
+
+        let results = execute_to_batches(&ctx, sql).await;
+        assert_batches_sorted_eq!(expected, &results);
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn exists_subquery_to_join_inner_filter() -> Result<()> {
+    let test_repartition_joins = vec![true, false];
+    for repartition_joins in test_repartition_joins {
+        let ctx = create_join_context("t1_id", "t2_id", repartition_joins)?;
+
+        // exists subquery to LeftSemi join
+        let sql = "SELECT * FROM t1 WHERE EXISTS(SELECT t2_id FROM t2 WHERE t1.t1_id + 1 > t2.t2_id * 2 AND t2.t2_int < 3)";
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
+        let plan = dataframe.into_optimized_plan()?;
+
+        // `t2.t2_int < 3` will be kept in the subquery filter.
+        let expected = vec![
+            "Explain [plan_type:Utf8, plan:Utf8]",
+            "  LeftSemi Join:  Filter: CAST(t1.t1_id AS Int64) + Int64(1) > CAST(t2.t2_id AS Int64) * Int64(2) [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+            "    TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+            "    Projection: t2.t2_id [t2_id:UInt32;N]",
+            "      Filter: t2.t2_int < UInt32(3) [t2_id:UInt32;N, t2_int:UInt32;N]",
+            "        TableScan: t2 projection=[t2_id, t2_int] [t2_id:UInt32;N, t2_int:UInt32;N]",
+        ];
+        let formatted = plan.display_indent_schema().to_string();
+        let actual: Vec<&str> = formatted.trim().lines().collect();
+        assert_eq!(
+            expected, actual,
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+        let expected = vec![
+            "+-------+---------+--------+",
+            "| t1_id | t1_name | t1_int |",
+            "+-------+---------+--------+",
+            "| 44    | d       | 4      |",
+            "+-------+---------+--------+",
+        ];
+
+        let results = execute_to_batches(&ctx, sql).await;
+        assert_batches_sorted_eq!(expected, &results);
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn exists_subquery_to_join_outer_filter() -> Result<()> {
+    let test_repartition_joins = vec![true, false];
+    for repartition_joins in test_repartition_joins {
+        let ctx = create_join_context("t1_id", "t2_id", repartition_joins)?;
+
+        // exists subquery to LeftSemi join
+        let sql = "SELECT * FROM t1 WHERE EXISTS(SELECT t2_id FROM t2 WHERE t1.t1_id + 1 > t2.t2_id * 2 AND t1.t1_int < 3)";
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
+        let plan = dataframe.into_optimized_plan()?;
+
+        // `t1.t1_int < 3` will be moved to the filter of t1.
+        let expected = vec![
+            "Explain [plan_type:Utf8, plan:Utf8]",
+            "  LeftSemi Join:  Filter: CAST(t1.t1_id AS Int64) + Int64(1) > CAST(t2.t2_id AS Int64) * Int64(2) [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+            "    Filter: t1.t1_int < UInt32(3) [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+            "      TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+            "    TableScan: t2 projection=[t2_id] [t2_id:UInt32;N]",
+        ];
+        let formatted = plan.display_indent_schema().to_string();
+        let actual: Vec<&str> = formatted.trim().lines().collect();
+        assert_eq!(
+            expected, actual,
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+        let expected = vec![
+            "+-------+---------+--------+",
+            "| t1_id | t1_name | t1_int |",
+            "+-------+---------+--------+",
+            "| 22    | b       | 2      |",
+            "+-------+---------+--------+",
+        ];
+
+        let results = execute_to_batches(&ctx, sql).await;
+        assert_batches_sorted_eq!(expected, &results);
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn not_exists_subquery_to_join_expr_filter() -> Result<()> {
+    let test_repartition_joins = vec![true, false];
+    for repartition_joins in test_repartition_joins {
+        let ctx = create_join_context("t1_id", "t2_id", repartition_joins)?;
+
+        // not exists subquery to LeftAnti join
+        let sql = "SELECT * FROM t1 WHERE NOT EXISTS(SELECT t2_id FROM t2 WHERE t1.t1_id + 1 > t2.t2_id * 2)";
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
+        let plan = dataframe.into_optimized_plan()?;
+
+        let expected = vec![
+            "Explain [plan_type:Utf8, plan:Utf8]",
+            "  LeftAnti Join:  Filter: CAST(t1.t1_id AS Int64) + Int64(1) > CAST(t2.t2_id AS Int64) * Int64(2) [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+            "    TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+            "    TableScan: t2 projection=[t2_id] [t2_id:UInt32;N]",
+        ];
+        let formatted = plan.display_indent_schema().to_string();
+        let actual: Vec<&str> = formatted.trim().lines().collect();
+        assert_eq!(
+            expected, actual,
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+        let expected = vec![
+            "+-------+---------+--------+",
+            "| t1_id | t1_name | t1_int |",
+            "+-------+---------+--------+",
+            "| 11    | a       | 1      |",
+            "+-------+---------+--------+",
+        ];
+
+        let results = execute_to_batches(&ctx, sql).await;
+        assert_batches_sorted_eq!(expected, &results);
+    }
 
     Ok(())
 }

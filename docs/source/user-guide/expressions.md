@@ -25,8 +25,8 @@ available for creating logical expressions. These are documented below.
 Expressions can be chained together using a fluent-style API:
 
 ```rust
-// create the expression `(a > 5) AND (b < 7)`
-col("a").gt(lit(5)).and(col("b").lt(lit(7)))
+// create the expression `(a > 6) AND (b < 7)`
+col("a").gt(lit(6)).and(col("b").lt(lit(7)))
 ```
 
 ## Identifiers
@@ -77,6 +77,7 @@ expressions such as `col("a") + col("b")` to be used.
 | exp(x)                | exponential                                       |
 | floor(x)              | nearest integer less than or equal to argument    |
 | ln(x)                 | natural logarithm                                 |
+| log(base, x)          | logarithm of x for a particular base              |
 | log10(x)              | base 10 logarithm                                 |
 | log2(x)               | base 2 logarithm                                  |
 | power(base, exponent) | base raised to the power of exponent              |
@@ -86,6 +87,19 @@ expressions such as `col("a") + col("b")` to be used.
 | sqrt(x)               | square root                                       |
 | tan(x)                | tangent                                           |
 | trunc(x)              | truncate toward zero                              |
+
+### Math functions usage notes:
+
+Unlike to some databases the math functions in Datafusion works the same way as Rust math functions, avoiding failing on corner cases e.g
+
+```
+❯ select log(-1), log(0), sqrt(-1);
++----------------+---------------+-----------------+
+| log(Int64(-1)) | log(Int64(0)) | sqrt(Int64(-1)) |
++----------------+---------------+-----------------+
+| NaN            | -inf          | NaN             |
++----------------+---------------+-----------------+
+```
 
 ## Bitwise Operators
 

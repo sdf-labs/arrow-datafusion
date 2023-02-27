@@ -291,6 +291,10 @@ fn optimize_plan(
         // scans:
         // * remove un-used columns from the scan projection
         LogicalPlan::TableScan(scan) => {
+            // filter expr may not exist in expr in projection.
+            // like: TableScan: t1 projection=[bool_col, int_col], full_filters=[t1.id = Int32(1)]
+            // projection=[bool_col, int_col] don't contain `ti.id`.
+            exprlist_to_columns(&scan.filters, &mut new_required_columns)?;
             push_down_scan(scan, &new_required_columns, has_projection)
         }
         LogicalPlan::Explain { .. } => Err(DataFusionError::Internal(
@@ -374,6 +378,24 @@ fn optimize_plan(
             )?;
             from_plan(plan, &plan.expressions(), &[child])
         }
+        // at a distinct, all columns are required
+        LogicalPlan::Distinct(distinct) => {
+            let new_required_columns = distinct
+                .input
+                .schema()
+                .fields()
+                .iter()
+                .map(|f| f.qualified_column())
+                .collect();
+            let child = optimize_plan(
+                _optimizer,
+                distinct.input.as_ref(),
+                &new_required_columns,
+                has_projection,
+                _config,
+            )?;
+            from_plan(plan, &[], &[child])
+        }
         // all other nodes: Add any additional columns used by
         // expressions in this node to the list of required columns
         LogicalPlan::Limit(_)
@@ -391,8 +413,10 @@ fn optimize_plan(
         | LogicalPlan::DropTable(_)
         | LogicalPlan::DropView(_)
         | LogicalPlan::SetVariable(_)
+        | LogicalPlan::DescribeTable(_)
         | LogicalPlan::CrossJoin(_)
-        | LogicalPlan::Distinct(_)
+        | LogicalPlan::Dml(_)
+        | LogicalPlan::Unnest(_)
         | LogicalPlan::Extension { .. }
         | LogicalPlan::Prepare(_) => {
             let expr = plan.expressions();
@@ -499,13 +523,24 @@ fn push_down_scan(
         }
     }
 
+    // Building new projection from BTreeSet
+    // preserving source projection order if it exists
+    let projection = if let Some(original_projection) = &scan.projection {
+        original_projection
+            .clone()
+            .into_iter()
+            .filter(|idx| projection.contains(idx))
+            .collect::<Vec<_>>()
+    } else {
+        projection.into_iter().collect::<Vec<_>>()
+    };
+
     // create the projected schema
     let projected_fields: Vec<DFField> = projection
         .iter()
         .map(|i| DFField::from_qualified(&scan.table_name, schema.fields()[*i].clone()))
         .collect();
 
-    let projection = projection.into_iter().collect::<Vec<_>>();
     let projected_schema = projected_fields.to_dfschema_ref()?;
 
     // return the table scan with projection
@@ -529,7 +564,7 @@ mod tests {
     use datafusion_expr::expr::Cast;
     use datafusion_expr::{
         col, count, lit,
-        logical_plan::{builder::LogicalPlanBuilder, JoinType},
+        logical_plan::{builder::LogicalPlanBuilder, table_scan, JoinType},
         max, min, AggregateFunction, Expr,
     };
     use std::collections::HashMap;
@@ -612,6 +647,33 @@ mod tests {
             .build()?;
         let expected = "Projection: test.a, test.c, test.b\
         \n  TableScan: test projection=[a, b, c]";
+
+        assert_optimized_plan_eq(&plan, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn reorder_scan() -> Result<()> {
+        let schema = Schema::new(test_table_scan_fields());
+
+        let plan = table_scan(Some("test"), &schema, Some(vec![1, 0, 2]))?.build()?;
+        let expected = "TableScan: test projection=[b, a, c]";
+
+        assert_optimized_plan_eq(&plan, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn reorder_scan_projection() -> Result<()> {
+        let schema = Schema::new(test_table_scan_fields());
+
+        let plan = table_scan(Some("test"), &schema, Some(vec![1, 0, 2]))?
+            .project(vec![col("a"), col("b")])?
+            .build()?;
+        let expected = "Projection: test.a, test.b\
+        \n  TableScan: test projection=[b, a]";
 
         assert_optimized_plan_eq(&plan, expected);
 
@@ -1003,6 +1065,25 @@ mod tests {
 
         let expected = "Aggregate: groupBy=[[test.a]], aggr=[[COUNT(test.b), COUNT(test.b) FILTER (WHERE c > Int32(42)) AS count2]]\
         \n  TableScan: test projection=[a, b, c]";
+
+        assert_optimized_plan_eq(&plan, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn pushdown_through_distinct() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a"), col("b")])?
+            .distinct()?
+            .project(vec![col("a")])?
+            .build()?;
+
+        let expected = "Projection: test.a\
+        \n  Distinct:\
+        \n    TableScan: test projection=[a, b]";
 
         assert_optimized_plan_eq(&plan, expected);
 

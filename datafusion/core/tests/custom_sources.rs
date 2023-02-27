@@ -18,12 +18,11 @@
 use arrow::array::{Int32Array, Int64Array};
 use arrow::compute::kernels::aggregate;
 use arrow::datatypes::{DataType, Field, Int32Type, Schema, SchemaRef};
-use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
 use datafusion::execution::context::{SessionContext, SessionState, TaskContext};
 use datafusion::from_slice::FromSlice;
 use datafusion::logical_expr::{
-    col, Expr, LogicalPlan, LogicalPlanBuilder, Projection, TableScan, UNNAMED_TABLE,
+    col, Expr, LogicalPlan, LogicalPlanBuilder, TableScan, UNNAMED_TABLE,
 };
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::expressions::PhysicalSortExpr;
@@ -85,7 +84,7 @@ impl RecordBatchStream for TestCustomRecordBatchStream {
 }
 
 impl Stream for TestCustomRecordBatchStream {
-    type Item = ArrowResult<RecordBatch>;
+    type Item = Result<RecordBatch>;
 
     fn poll_next(
         self: Pin<&mut Self>,
@@ -93,7 +92,7 @@ impl Stream for TestCustomRecordBatchStream {
     ) -> Poll<Option<Self::Item>> {
         if self.nb_batch > 0 {
             self.get_mut().nb_batch -= 1;
-            Poll::Ready(Some(TEST_CUSTOM_RECORD_BATCH!()))
+            Poll::Ready(Some(TEST_CUSTOM_RECORD_BATCH!().map_err(Into::into)))
         } else {
             Poll::Ready(None)
         }
@@ -215,24 +214,18 @@ async fn custom_source_dataframe() -> Result<()> {
 
     let optimized_plan = state.optimize(&logical_plan)?;
     match &optimized_plan {
-        LogicalPlan::Projection(Projection { input, .. }) => match &**input {
-            LogicalPlan::TableScan(TableScan {
-                source,
-                projected_schema,
-                ..
-            }) => {
-                assert_eq!(source.schema().fields().len(), 2);
-                assert_eq!(projected_schema.fields().len(), 1);
-            }
-            _ => panic!("input to projection should be TableScan"),
-        },
-        _ => panic!("expect optimized_plan to be projection"),
+        LogicalPlan::TableScan(TableScan {
+            source,
+            projected_schema,
+            ..
+        }) => {
+            assert_eq!(source.schema().fields().len(), 2);
+            assert_eq!(projected_schema.fields().len(), 1);
+        }
+        _ => panic!("input to projection should be TableScan"),
     }
 
-    let expected = format!(
-        "Projection: {UNNAMED_TABLE}.c2\
-        \n  TableScan: {UNNAMED_TABLE} projection=[c2]"
-    );
+    let expected = format!("TableScan: {UNNAMED_TABLE} projection=[c2]");
     assert_eq!(format!("{optimized_plan:?}"), expected);
 
     let physical_plan = state.create_physical_plan(&optimized_plan).await?;
@@ -243,7 +236,7 @@ async fn custom_source_dataframe() -> Result<()> {
     let batches = collect(physical_plan, state.task_ctx()).await?;
     let origin_rec_batch = TEST_CUSTOM_RECORD_BATCH!()?;
     assert_eq!(1, batches.len());
-    assert_eq!(1, batches[0].num_columns());
+    assert_eq!(2, batches[0].num_columns());
     assert_eq!(origin_rec_batch.num_rows(), batches[0].num_rows());
 
     Ok(())
@@ -271,8 +264,8 @@ async fn optimizers_catch_all_statistics() {
     let expected = RecordBatch::try_new(
         Arc::new(Schema::new(vec![
             Field::new("COUNT(UInt8(1))", DataType::Int64, false),
-            Field::new("MIN(test.c1)", DataType::Int32, false),
-            Field::new("MAX(test.c1)", DataType::Int32, false),
+            Field::new("MIN(c1)", DataType::Int32, false),
+            Field::new("MAX(c1)", DataType::Int32, false),
         ])),
         vec![
             Arc::new(Int64Array::from_slice([4])),

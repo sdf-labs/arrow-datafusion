@@ -14,17 +14,20 @@
 
 //! Push Down Filter optimizer rule ensures that filters are applied as early as possible in the plan
 
+use crate::optimizer::ApplyOrder;
 use crate::utils::{conjunction, split_conjunction};
 use crate::{utils, OptimizerConfig, OptimizerRule};
 use datafusion_common::{Column, DFSchema, DataFusionError, Result};
+use datafusion_expr::expr_rewriter::rewrite_expr;
 use datafusion_expr::{
     and,
-    expr_rewriter::{replace_col, ExprRewritable, ExprRewriter},
+    expr_rewriter::replace_col,
     logical_plan::{CrossJoin, Join, JoinType, LogicalPlan, TableScan, Union},
     or,
     utils::from_plan,
     BinaryExpr, Expr, Filter, Operator, TableProviderFilterPushDown,
 };
+use itertools::Itertools;
 use std::collections::{HashMap, HashSet};
 use std::iter::once;
 use std::sync::Arc;
@@ -107,13 +110,9 @@ fn on_lr_is_preserved(plan: &LogicalPlan) -> Result<(bool, bool)> {
             JoinType::Left => Ok((false, true)),
             JoinType::Right => Ok((true, false)),
             JoinType::Full => Ok((false, false)),
-            JoinType::LeftSemi
-            | JoinType::LeftAnti
-            | JoinType::RightSemi
-            | JoinType::RightAnti => {
-                // filter_push_down does not yet support SEMI/ANTI joins with join conditions
-                Ok((false, false))
-            }
+            JoinType::LeftSemi | JoinType::RightSemi => Ok((true, true)),
+            JoinType::LeftAnti => Ok((false, true)),
+            JoinType::RightAnti => Ok((true, false)),
         },
         LogicalPlan::CrossJoin(_) => Err(DataFusionError::Internal(
             "on_lr_is_preserved cannot be applied to CROSSJOIN nodes".to_string(),
@@ -396,7 +395,7 @@ fn push_down_all_join(
             .chain(once(keep_condition.into_iter().reduce(Expr::and).unwrap()))
             .collect()
     } else {
-        plan.expressions()
+        expr
     };
     let plan = from_plan(plan, &expr, &[left, right])?;
 
@@ -513,26 +512,20 @@ impl OptimizerRule for PushDownFilter {
         "push_down_filter"
     }
 
+    fn apply_order(&self) -> Option<ApplyOrder> {
+        Some(ApplyOrder::TopDown)
+    }
+
     fn try_optimize(
         &self,
         plan: &LogicalPlan,
-        config: &dyn OptimizerConfig,
+        _config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
         let filter = match plan {
             LogicalPlan::Filter(filter) => filter,
             // we also need to pushdown filter in Join.
-            LogicalPlan::Join(join) => {
-                let optimized_plan = push_down_join(plan, join, None)?;
-                return match optimized_plan {
-                    Some(optimized_plan) => Ok(Some(utils::optimize_children(
-                        self,
-                        &optimized_plan,
-                        config,
-                    )?)),
-                    None => Ok(Some(utils::optimize_children(self, plan, config)?)),
-                };
-            }
-            _ => return Ok(Some(utils::optimize_children(self, plan, config)?)),
+            LogicalPlan::Join(join) => return push_down_join(plan, join, None),
+            _ => return Ok(None),
         };
 
         let child_plan = filter.input.as_ref();
@@ -550,23 +543,22 @@ impl OptimizerRule for PushDownFilter {
                     )
                     .map(|e| (*e).clone())
                     .collect::<Vec<_>>();
-                let new_predicate = conjunction(new_predicates).ok_or(
-                    DataFusionError::Plan("at least one expression exists".to_string()),
-                )?;
-                let new_plan = LogicalPlan::Filter(Filter::try_new(
+                let new_predicate = conjunction(new_predicates).ok_or_else(|| {
+                    DataFusionError::Plan("at least one expression exists".to_string())
+                })?;
+                let new_filter = LogicalPlan::Filter(Filter::try_new(
                     new_predicate,
                     child_filter.input.clone(),
                 )?);
-                return self.try_optimize(&new_plan, config);
+                self.try_optimize(&new_filter, _config)?
+                    .unwrap_or(new_filter)
             }
             LogicalPlan::Repartition(_)
             | LogicalPlan::Distinct(_)
             | LogicalPlan::Sort(_) => {
                 // commutable
                 let new_filter =
-                    plan.with_new_inputs(&[
-                        (**(child_plan.inputs().get(0).unwrap())).clone()
-                    ])?;
+                    plan.with_new_inputs(&[child_plan.inputs()[0].clone()])?;
                 child_plan.with_new_inputs(&[new_filter])?
             }
             LogicalPlan::SubqueryAlias(subquery_alias) => {
@@ -696,7 +688,7 @@ impl OptimizerRule for PushDownFilter {
             LogicalPlan::Join(join) => {
                 match push_down_join(&filter.input, join, Some(&filter.predicate))? {
                     Some(optimized_plan) => optimized_plan,
-                    None => plan.clone(),
+                    None => return Ok(None),
                 }
             }
             LogicalPlan::CrossJoin(CrossJoin { left, right, .. }) => {
@@ -704,30 +696,27 @@ impl OptimizerRule for PushDownFilter {
                 push_down_all_join(predicates, &filter.input, left, right, vec![])?
             }
             LogicalPlan::TableScan(scan) => {
-                let mut new_scan_filters = scan.filters.clone();
-                let mut new_predicate = vec![];
+                let filter_predicates = split_conjunction(&filter.predicate);
+                let results = scan
+                    .source
+                    .supports_filters_pushdown(filter_predicates.as_slice())?;
+                let zip = filter_predicates.iter().zip(results.into_iter());
 
-                let filter_predicates =
-                    utils::split_conjunction_owned(filter.predicate.clone());
-
-                for filter_expr in &filter_predicates {
-                    let (preserve_filter_node, add_to_provider) =
-                        match scan.source.supports_filter_pushdown(filter_expr)? {
-                            TableProviderFilterPushDown::Unsupported => (true, false),
-                            TableProviderFilterPushDown::Inexact => (true, true),
-                            TableProviderFilterPushDown::Exact => (false, true),
-                        };
-                    if preserve_filter_node {
-                        new_predicate.push(filter_expr.clone());
-                    }
-                    if add_to_provider {
-                        // avoid reduplicated filter expr.
-                        if new_scan_filters.contains(filter_expr) {
-                            continue;
-                        }
-                        new_scan_filters.push(filter_expr.clone());
-                    }
-                }
+                let new_scan_filters = zip
+                    .clone()
+                    .filter(|(_, res)| res != &TableProviderFilterPushDown::Unsupported)
+                    .map(|(pred, _)| *pred);
+                let new_scan_filters: Vec<Expr> = scan
+                    .filters
+                    .iter()
+                    .chain(new_scan_filters)
+                    .unique()
+                    .cloned()
+                    .collect();
+                let new_predicate: Vec<Expr> = zip
+                    .filter(|(_, res)| res != &TableProviderFilterPushDown::Exact)
+                    .map(|(pred, _)| (*pred).clone())
+                    .collect();
 
                 let new_scan = LogicalPlan::TableScan(TableScan {
                     source: scan.source.clone(),
@@ -746,10 +735,9 @@ impl OptimizerRule for PushDownFilter {
                     None => new_scan,
                 }
             }
-            _ => plan.clone(),
+            _ => return Ok(None),
         };
-
-        Ok(Some(utils::optimize_children(self, &new_plan, config)?))
+        Ok(Some(new_plan))
     }
 }
 
@@ -765,29 +753,22 @@ pub fn replace_cols_by_name(
     e: Expr,
     replace_map: &HashMap<String, Expr>,
 ) -> Result<Expr> {
-    struct ColumnReplacer<'a> {
-        replace_map: &'a HashMap<String, Expr>,
-    }
-
-    impl<'a> ExprRewriter for ColumnReplacer<'a> {
-        fn mutate(&mut self, expr: Expr) -> Result<Expr> {
-            if let Expr::Column(c) = &expr {
-                match self.replace_map.get(&c.flat_name()) {
-                    Some(new_c) => Ok(new_c.clone()),
-                    None => Ok(expr),
-                }
-            } else {
-                Ok(expr)
+    rewrite_expr(e, |expr| {
+        if let Expr::Column(c) = &expr {
+            match replace_map.get(&c.flat_name()) {
+                Some(new_c) => Ok(new_c.clone()),
+                None => Ok(expr),
             }
+        } else {
+            Ok(expr)
         }
-    }
-
-    e.rewrite(&mut ColumnReplacer { replace_map })
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::optimizer::Optimizer;
     use crate::rewrite_disjunctive_predicate::RewriteDisjunctivePredicate;
     use crate::test::*;
     use crate::OptimizerContext;
@@ -802,28 +783,35 @@ mod tests {
     use std::sync::Arc;
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) -> Result<()> {
-        let optimized_plan = PushDownFilter::new()
-            .try_optimize(plan, &OptimizerContext::new())
-            .unwrap()
-            .expect("failed to optimize plan");
-        let formatted_plan = format!("{optimized_plan:?}");
-        assert_eq!(plan.schema(), optimized_plan.schema());
-        assert_eq!(expected, formatted_plan);
-        Ok(())
+        crate::test::assert_optimized_plan_eq(
+            Arc::new(PushDownFilter::new()),
+            plan,
+            expected,
+        )
     }
 
     fn assert_optimized_plan_eq_with_rewrite_predicate(
         plan: &LogicalPlan,
         expected: &str,
     ) -> Result<()> {
-        let mut optimized_plan = RewriteDisjunctivePredicate::new()
-            .try_optimize(plan, &OptimizerContext::new())
-            .unwrap()
-            .expect("failed to optimize plan");
-        optimized_plan = PushDownFilter::new()
-            .try_optimize(&optimized_plan, &OptimizerContext::new())
-            .unwrap()
-            .expect("failed to optimize plan");
+        let optimizer = Optimizer::with_rules(vec![
+            Arc::new(RewriteDisjunctivePredicate::new()),
+            Arc::new(PushDownFilter::new()),
+        ]);
+        let mut optimized_plan = optimizer
+            .optimize_recursively(
+                optimizer.rules.get(0).unwrap(),
+                plan,
+                &OptimizerContext::new(),
+            )?
+            .unwrap_or_else(|| plan.clone());
+        optimized_plan = optimizer
+            .optimize_recursively(
+                optimizer.rules.get(1).unwrap(),
+                &optimized_plan,
+                &OptimizerContext::new(),
+            )?
+            .unwrap_or_else(|| plan.clone());
         let formatted_plan = format!("{optimized_plan:?}");
         assert_eq!(plan.schema(), optimized_plan.schema());
         assert_eq!(expected, formatted_plan);
@@ -1913,7 +1901,7 @@ mod tests {
 
         fn supports_filter_pushdown(
             &self,
-            _: &Expr,
+            _e: &Expr,
         ) -> Result<TableProviderFilterPushDown> {
             Ok(self.filter_support.clone())
         }
@@ -2019,6 +2007,37 @@ mod tests {
         let expected = "Projection: a, b\
             \n  Filter: a = Int64(10) AND b > Int64(11)\
             \n    TableScan: test projection=[a], partial_filters=[a = Int64(10), b > Int64(11)]";
+
+        assert_optimized_plan_eq(&plan, expected)
+    }
+
+    #[test]
+    fn multi_combined_filter_exact() -> Result<()> {
+        let test_provider = PushDownProvider {
+            filter_support: TableProviderFilterPushDown::Exact,
+        };
+
+        let table_scan = LogicalPlan::TableScan(TableScan {
+            table_name: "test".to_string(),
+            filters: vec![],
+            projected_schema: Arc::new(DFSchema::try_from(
+                (*test_provider.schema()).clone(),
+            )?),
+            projection: Some(vec![0]),
+            source: Arc::new(test_provider),
+            fetch: None,
+        });
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .filter(and(col("a").eq(lit(10i64)), col("b").gt(lit(11i64))))?
+            .project(vec![col("a"), col("b")])?
+            .build()?;
+
+        let expected = r#"
+Projection: a, b
+  TableScan: test projection=[a], full_filters=[a = Int64(10), b > Int64(11)]
+        "#
+        .trim();
 
         assert_optimized_plan_eq(&plan, expected)
     }
@@ -2325,5 +2344,184 @@ mod tests {
             .try_optimize(&plan, &OptimizerContext::new())?
             .expect("failed to optimize plan");
         assert_optimized_plan_eq(&optimized_plan, expected)
+    }
+
+    #[test]
+    fn left_semi_join_with_filters() -> Result<()> {
+        let left = test_table_scan_with_name("test1")?;
+        let right_table_scan = test_table_scan_with_name("test2")?;
+        let right = LogicalPlanBuilder::from(right_table_scan)
+            .project(vec![col("a"), col("b")])?
+            .build()?;
+        let plan = LogicalPlanBuilder::from(left)
+            .join(
+                right,
+                JoinType::LeftSemi,
+                (
+                    vec![Column::from_qualified_name("test1.a")],
+                    vec![Column::from_qualified_name("test2.a")],
+                ),
+                Some(
+                    col("test1.b")
+                        .gt(lit(1u32))
+                        .and(col("test2.b").gt(lit(2u32))),
+                ),
+            )?
+            .build()?;
+
+        // not part of the test, just good to know:
+        assert_eq!(
+            format!("{plan:?}"),
+            "LeftSemi Join: test1.a = test2.a Filter: test1.b > UInt32(1) AND test2.b > UInt32(2)\
+            \n  TableScan: test1\
+            \n  Projection: test2.a, test2.b\
+            \n    TableScan: test2",
+        );
+
+        // Both side will be pushed down.
+        let expected = "\
+        LeftSemi Join: test1.a = test2.a\
+        \n  Filter: test1.b > UInt32(1)\
+        \n    TableScan: test1\
+        \n  Projection: test2.a, test2.b\
+        \n    Filter: test2.b > UInt32(2)\
+        \n      TableScan: test2";
+        assert_optimized_plan_eq(&plan, expected)
+    }
+
+    #[test]
+    fn right_semi_join_with_filters() -> Result<()> {
+        let left = test_table_scan_with_name("test1")?;
+        let right_table_scan = test_table_scan_with_name("test2")?;
+        let right = LogicalPlanBuilder::from(right_table_scan)
+            .project(vec![col("a"), col("b")])?
+            .build()?;
+        let plan = LogicalPlanBuilder::from(left)
+            .join(
+                right,
+                JoinType::RightSemi,
+                (
+                    vec![Column::from_qualified_name("test1.a")],
+                    vec![Column::from_qualified_name("test2.a")],
+                ),
+                Some(
+                    col("test1.b")
+                        .gt(lit(1u32))
+                        .and(col("test2.b").gt(lit(2u32))),
+                ),
+            )?
+            .build()?;
+
+        // not part of the test, just good to know:
+        assert_eq!(
+            format!("{plan:?}"),
+            "RightSemi Join: test1.a = test2.a Filter: test1.b > UInt32(1) AND test2.b > UInt32(2)\
+            \n  TableScan: test1\
+            \n  Projection: test2.a, test2.b\
+            \n    TableScan: test2",
+        );
+
+        // Both side will be pushed down.
+        let expected = "\
+        RightSemi Join: test1.a = test2.a\
+        \n  Filter: test1.b > UInt32(1)\
+        \n    TableScan: test1\
+        \n  Projection: test2.a, test2.b\
+        \n    Filter: test2.b > UInt32(2)\
+        \n      TableScan: test2";
+        assert_optimized_plan_eq(&plan, expected)
+    }
+
+    #[test]
+    fn left_anti_join_with_filters() -> Result<()> {
+        let table_scan = test_table_scan_with_name("test1")?;
+        let left = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a"), col("b")])?
+            .build()?;
+        let right_table_scan = test_table_scan_with_name("test2")?;
+        let right = LogicalPlanBuilder::from(right_table_scan)
+            .project(vec![col("a"), col("b")])?
+            .build()?;
+        let plan = LogicalPlanBuilder::from(left)
+            .join(
+                right,
+                JoinType::LeftAnti,
+                (
+                    vec![Column::from_qualified_name("test1.a")],
+                    vec![Column::from_qualified_name("test2.a")],
+                ),
+                Some(
+                    col("test1.b")
+                        .gt(lit(1u32))
+                        .and(col("test2.b").gt(lit(2u32))),
+                ),
+            )?
+            .build()?;
+
+        // not part of the test, just good to know:
+        assert_eq!(
+            format!("{plan:?}"),
+            "LeftAnti Join: test1.a = test2.a Filter: test1.b > UInt32(1) AND test2.b > UInt32(2)\
+            \n  Projection: test1.a, test1.b\
+            \n    TableScan: test1\
+            \n  Projection: test2.a, test2.b\
+            \n    TableScan: test2",
+        );
+
+        // For left anti, filter of the right side filter can be pushed down.
+        let expected = "\
+        LeftAnti Join: test1.a = test2.a Filter: test1.b > UInt32(1)\
+        \n  Projection: test1.a, test1.b\
+        \n    TableScan: test1\
+        \n  Projection: test2.a, test2.b\
+        \n    Filter: test2.b > UInt32(2)\
+        \n      TableScan: test2";
+        assert_optimized_plan_eq(&plan, expected)
+    }
+
+    #[test]
+    fn right_anti_join_with_filters() -> Result<()> {
+        let table_scan = test_table_scan_with_name("test1")?;
+        let left = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a"), col("b")])?
+            .build()?;
+        let right_table_scan = test_table_scan_with_name("test2")?;
+        let right = LogicalPlanBuilder::from(right_table_scan)
+            .project(vec![col("a"), col("b")])?
+            .build()?;
+        let plan = LogicalPlanBuilder::from(left)
+            .join(
+                right,
+                JoinType::RightAnti,
+                (
+                    vec![Column::from_qualified_name("test1.a")],
+                    vec![Column::from_qualified_name("test2.a")],
+                ),
+                Some(
+                    col("test1.b")
+                        .gt(lit(1u32))
+                        .and(col("test2.b").gt(lit(2u32))),
+                ),
+            )?
+            .build()?;
+
+        // not part of the test, just good to know:
+        assert_eq!(
+            format!("{plan:?}"),
+            "RightAnti Join: test1.a = test2.a Filter: test1.b > UInt32(1) AND test2.b > UInt32(2)\
+            \n  Projection: test1.a, test1.b\
+            \n    TableScan: test1\
+            \n  Projection: test2.a, test2.b\
+            \n    TableScan: test2",
+        );
+
+        // For right anti, filter of the left side can be pushed down.
+        let expected = "RightAnti Join: test1.a = test2.a Filter: test2.b > UInt32(2)\
+        \n  Projection: test1.a, test1.b\
+        \n    Filter: test1.b > UInt32(1)\
+        \n      TableScan: test1\
+        \n  Projection: test2.a, test2.b\
+        \n    TableScan: test2";
+        assert_optimized_plan_eq(&plan, expected)
     }
 }

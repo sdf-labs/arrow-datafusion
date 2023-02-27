@@ -63,7 +63,6 @@ use futures::{Stream, StreamExt};
 use arrow::{
     array::{Int64Array, StringArray},
     datatypes::SchemaRef,
-    error::ArrowError,
     record_batch::RecordBatch,
     util::pretty::pretty_format_batches,
 };
@@ -219,8 +218,7 @@ async fn topk_plan() -> Result<()> {
 
     let mut expected = vec![
         "| logical_plan after topk                               | TopK: k=3                                                                     |",
-        "|                                                       |   Projection: sales.customer_id, sales.revenue                              |",
-        "|                                                       |     TableScan: sales projection=[customer_id,revenue]                                  |",
+        "|                                                       |   TableScan: sales projection=[customer_id,revenue]                                  |",
     ].join("\n");
 
     let explain_query = format!("EXPLAIN VERBOSE {QUERY}");
@@ -318,7 +316,7 @@ impl OptimizerRule for TopKOptimizerRule {
 
         // If we didn't find the Limit/Sort combination, recurse as
         // normal and build the result.
-        Ok(Some(optimize_children(self, plan, config)?))
+        optimize_children(self, plan, config)
     }
 
     fn name(&self) -> &str {
@@ -563,7 +561,7 @@ fn accumulate_batch(
 }
 
 impl Stream for TopKReader {
-    type Item = std::result::Result<RecordBatch, ArrowError>;
+    type Item = Result<RecordBatch>;
 
     fn poll_next(
         mut self: std::pin::Pin<&mut Self>,
@@ -590,13 +588,16 @@ impl Stream for TopKReader {
                     self.state.iter().rev().unzip();
 
                 let customer: Vec<&str> = customer.iter().map(|&s| &**s).collect();
-                Poll::Ready(Some(RecordBatch::try_new(
-                    schema,
-                    vec![
-                        Arc::new(StringArray::from(customer)),
-                        Arc::new(Int64Array::from(revenue)),
-                    ],
-                )))
+                Poll::Ready(Some(
+                    RecordBatch::try_new(
+                        schema,
+                        vec![
+                            Arc::new(StringArray::from(customer)),
+                            Arc::new(Int64Array::from(revenue)),
+                        ],
+                    )
+                    .map_err(Into::into),
+                ))
             }
             other => other,
         }

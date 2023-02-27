@@ -18,15 +18,16 @@
 //! Collection of utility functions that are leveraged by the query optimizer rules
 
 use crate::{OptimizerConfig, OptimizerRule};
-use datafusion_common::Result;
 use datafusion_common::{plan_err, Column, DFSchemaRef};
+use datafusion_common::{DFSchema, Result};
 use datafusion_expr::expr::{BinaryExpr, Sort};
 use datafusion_expr::expr_rewriter::{ExprRewritable, ExprRewriter};
-use datafusion_expr::expr_visitor::{ExprVisitable, ExpressionVisitor, Recursion};
+use datafusion_expr::expr_visitor::inspect_expr_pre;
+use datafusion_expr::logical_plan::LogicalPlanBuilder;
+use datafusion_expr::utils::{check_all_columns_from_schema, from_plan};
 use datafusion_expr::{
-    and, col,
+    and,
     logical_plan::{Filter, LogicalPlan},
-    utils::from_plan,
     Expr, Operator,
 };
 use std::collections::HashSet;
@@ -37,18 +38,26 @@ use std::sync::Arc;
 /// type. Useful for optimizer rules which want to leave the type
 /// of plan unchanged but still apply to the children.
 /// This also handles the case when the `plan` is a [`LogicalPlan::Explain`].
+///
+/// Returning `Ok(None)` indicates that the plan can't be optimized by the `optimizer`.
 pub fn optimize_children(
     optimizer: &impl OptimizerRule,
     plan: &LogicalPlan,
     config: &dyn OptimizerConfig,
-) -> Result<LogicalPlan> {
+) -> Result<Option<LogicalPlan>> {
     let new_exprs = plan.expressions();
     let mut new_inputs = Vec::with_capacity(plan.inputs().len());
+    let mut plan_is_changed = false;
     for input in plan.inputs() {
         let new_input = optimizer.try_optimize(input, config)?;
+        plan_is_changed = plan_is_changed || new_input.is_some();
         new_inputs.push(new_input.unwrap_or_else(|| input.clone()))
     }
-    from_plan(plan, &new_exprs, &new_inputs)
+    if plan_is_changed {
+        Ok(Some(from_plan(plan, &new_exprs, &new_inputs)?))
+    } else {
+        Ok(None)
+    }
 }
 
 /// Splits a conjunctive [`Expr`] such as `A AND B AND C` => `[A, B, C]`
@@ -224,28 +233,21 @@ pub fn unalias(expr: Expr) -> Expr {
 ///
 /// A PlanError if a disjunction is found
 pub fn verify_not_disjunction(predicates: &[&Expr]) -> Result<()> {
-    struct DisjunctionVisitor {}
-
-    impl ExpressionVisitor for DisjunctionVisitor {
-        fn pre_visit(self, expr: &Expr) -> Result<Recursion<Self>> {
-            match expr {
-                Expr::BinaryExpr(BinaryExpr {
-                    left: _,
-                    op: Operator::Or,
-                    right: _,
-                }) => {
-                    plan_err!("Optimizing disjunctions not supported!")
-                }
-                _ => Ok(Recursion::Continue(self)),
+    // recursively check for unallowed predicates in expr
+    fn check(expr: &&Expr) -> Result<()> {
+        inspect_expr_pre(expr, |expr| match expr {
+            Expr::BinaryExpr(BinaryExpr {
+                left: _,
+                op: Operator::Or,
+                right: _,
+            }) => {
+                plan_err!("Optimizing disjunctions not supported!")
             }
-        }
+            _ => Ok(()),
+        })
     }
 
-    for predicate in predicates.iter() {
-        predicate.accept(DisjunctionVisitor {})?;
-    }
-
-    Ok(())
+    predicates.iter().try_for_each(check)
 }
 
 /// returns a new [LogicalPlan] that wraps `plan` in a [LogicalPlan::Filter] with
@@ -411,64 +413,10 @@ pub fn only_or_err<T>(slice: &[T]) -> Result<&T> {
     }
 }
 
-/// Merge and deduplicate two sets Column slices
-///
-/// # Arguments
-///
-/// * `a` - A tuple of slices of Columns
-/// * `b` - A tuple of slices of Columns
-///
-/// # Return value
-///
-/// The deduplicated union of the two slices
-pub fn merge_cols(
-    a: (&[Column], &[Column]),
-    b: (&[Column], &[Column]),
-) -> (Vec<Column>, Vec<Column>) {
-    let e =
-        a.0.iter()
-            .map(|it| it.flat_name())
-            .chain(a.1.iter().map(|it| it.flat_name()))
-            .map(|it| Column::from(it.as_str()));
-    let f =
-        b.0.iter()
-            .map(|it| it.flat_name())
-            .chain(b.1.iter().map(|it| it.flat_name()))
-            .map(|it| Column::from(it.as_str()));
-    let mut g = e.zip(f).collect::<Vec<_>>();
-    g.dedup();
-    g.into_iter().unzip()
-}
-
-/// Change the relation on a slice of Columns
-///
-/// # Arguments
-///
-/// * `new_table` - The table/relation for the new columns
-/// * `cols` - A slice of Columns
-///
-/// # Return value
-///
-/// A new slice of columns, now belonging to the new table
-pub fn swap_table(new_table: &str, cols: &[Column]) -> Vec<Column> {
-    cols.iter()
-        .map(|it| Column {
-            relation: Some(new_table.to_string()),
-            name: it.name.clone(),
-        })
-        .collect()
-}
-
-pub fn alias_cols(cols: &[Column]) -> Vec<Expr> {
-    cols.iter()
-        .map(|it| col(it.flat_name().as_str()).alias(it.name.as_str()))
-        .collect()
-}
-
 /// Rewrites `expr` using `rewriter`, ensuring that the output has the
 /// same name as `expr` prior to rewrite, adding an alias if necessary.
 ///
-/// This is important when optimzing plans to ensure the the output
+/// This is important when optimizing plans to ensure the output
 /// schema of plan nodes don't change after optimization
 pub fn rewrite_preserving_name<R>(expr: Expr, rewriter: &mut R) -> Result<Expr>
 where
@@ -488,7 +436,7 @@ fn name_for_alias(expr: &Expr) -> Result<String> {
     }
 }
 
-/// Ensure `expr` has the name name as `original_name` by adding an
+/// Ensure `expr` has the name as `original_name` by adding an
 /// alias if necessary.
 fn add_alias_if_changed(original_name: String, expr: Expr) -> Result<Expr> {
     let new_name = name_for_alias(&expr)?;
@@ -508,6 +456,53 @@ fn add_alias_if_changed(original_name: String, expr: Expr) -> Result<Expr> {
         }
         expr => expr.alias(original_name),
     })
+}
+
+/// merge inputs schema into a single schema.
+pub fn merge_schema(inputs: Vec<&LogicalPlan>) -> DFSchema {
+    inputs
+        .iter()
+        .map(|input| input.schema())
+        .fold(DFSchema::empty(), |mut lhs, rhs| {
+            lhs.merge(rhs);
+            lhs
+        })
+}
+
+/// Extract join predicates from the correclated subquery.
+/// The join predicate means that the expression references columns
+/// from both the subquery and outer table or only from the outer table.
+///
+/// Returns join predicates and subquery(extracted).
+/// ```
+pub(crate) fn extract_join_filters(
+    maybe_filter: &LogicalPlan,
+) -> Result<(Vec<Expr>, LogicalPlan)> {
+    if let LogicalPlan::Filter(plan_filter) = maybe_filter {
+        let input_schema = plan_filter.input.schema();
+        let subquery_filter_exprs = split_conjunction(&plan_filter.predicate);
+
+        let mut join_filters: Vec<Expr> = vec![];
+        let mut subquery_filters: Vec<Expr> = vec![];
+        for expr in subquery_filter_exprs {
+            let cols = expr.to_columns()?;
+            if check_all_columns_from_schema(&cols, input_schema.clone())? {
+                subquery_filters.push(expr.clone());
+            } else {
+                join_filters.push(expr.clone())
+            }
+        }
+
+        // if the subquery still has filter expressions, restore them.
+        let mut plan = LogicalPlanBuilder::from((*plan_filter.input).clone());
+        if let Some(expr) = conjunction(subquery_filters) {
+            plan = plan.filter(expr)?
+        }
+
+        Ok((join_filters, plan.build()?))
+    } else {
+        Ok((vec![], maybe_filter.clone()))
+    }
 }
 
 #[cfg(test)]

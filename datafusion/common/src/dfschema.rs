@@ -191,7 +191,7 @@ impl DFSchema {
         &self,
         qualifier: Option<&str>,
         name: &str,
-    ) -> Result<usize> {
+    ) -> Result<Option<usize>> {
         let mut matches = self
             .fields
             .iter()
@@ -221,13 +221,9 @@ impl DFSchema {
             })
             .map(|(idx, _)| idx);
         match matches.next() {
-            None => Err(field_not_found(
-                qualifier.map(|s| s.to_string()),
-                name,
-                self,
-            )),
+            None => Ok(None),
             Some(idx) => match matches.next() {
-                None => Ok(idx),
+                None => Ok(Some(idx)),
                 // found more than one matches
                 Some(_) => Err(DataFusionError::Internal(format!(
                     "Ambiguous reference to qualified field named '{}.{}'",
@@ -240,7 +236,17 @@ impl DFSchema {
 
     /// Find the index of the column with the given qualifier and name
     pub fn index_of_column(&self, col: &Column) -> Result<usize> {
+        let qualifier = col.relation.as_deref();
+        self.index_of_column_by_name(col.relation.as_deref(), &col.name)?
+            .ok_or_else(|| {
+                field_not_found(qualifier.map(|s| s.to_string()), &col.name, self)
+            })
+    }
+
+    /// Check if the column is in the current schema
+    pub fn is_column_from_schema(&self, col: &Column) -> Result<bool> {
         self.index_of_column_by_name(col.relation.as_deref(), &col.name)
+            .map(|idx| idx.is_some())
     }
 
     /// Find the field with the given name
@@ -278,12 +284,29 @@ impl DFSchema {
         match matches.len() {
             0 => Err(field_not_found(None, name, self)),
             1 => Ok(matches[0]),
-            _ => Err(DataFusionError::SchemaError(
-                SchemaError::AmbiguousReference {
-                    qualifier: None,
-                    name: name.to_string(),
-                },
-            )),
+            _ => {
+                // When `matches` size > 1, it doesn't necessarily mean an `ambiguous name` problem.
+                // Because name may generate from Alias/... . It means that it don't own qualifier.
+                // For example:
+                //             Join on id = b.id
+                // Project a.id as id   TableScan b id
+                // In this case, there isn't `ambiguous name` problem. When `matches` just contains
+                // one field without qualifier, we should return it.
+                let fields_without_qualifier = matches
+                    .iter()
+                    .filter(|f| f.qualifier.is_none())
+                    .collect::<Vec<_>>();
+                if fields_without_qualifier.len() == 1 {
+                    Ok(fields_without_qualifier[0])
+                } else {
+                    Err(DataFusionError::SchemaError(
+                        SchemaError::AmbiguousReference {
+                            qualifier: None,
+                            name: name.to_string(),
+                        },
+                    ))
+                }
+            }
         }
     }
 
@@ -293,7 +316,10 @@ impl DFSchema {
         qualifier: &str,
         name: &str,
     ) -> Result<&DFField> {
-        let idx = self.index_of_column_by_name(Some(qualifier), name)?;
+        let idx = self
+            .index_of_column_by_name(Some(qualifier), name)?
+            .ok_or_else(|| field_not_found(Some(qualifier.to_string()), name, self))?;
+
         Ok(self.field(idx))
     }
 
@@ -452,7 +478,7 @@ impl From<&DFSchema> for Schema {
 /// Create a `DFSchema` from an Arrow schema
 impl TryFrom<Schema> for DFSchema {
     type Error = DataFusionError;
-    fn try_from(schema: Schema) -> std::result::Result<Self, Self::Error> {
+    fn try_from(schema: Schema) -> Result<Self, Self::Error> {
         Self::new_with_metadata(
             schema
                 .fields()
@@ -663,9 +689,10 @@ mod tests {
 
     #[test]
     fn qualifier_in_name() -> Result<()> {
+        let col = Column::from_name("t1.c0");
         let schema = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
         // lookup with unqualified name "t1.c0"
-        let err = schema.index_of_column_by_name(None, "t1.c0").err().unwrap();
+        let err = schema.index_of_column(&col).err().unwrap();
         assert_eq!(
             "Schema error: No field named 't1.c0'. Valid fields are 't1'.'c0', 't1'.'c1'.",
             &format!("{err}")
@@ -823,6 +850,20 @@ mod tests {
             .to_string()
             .contains(expected_err_msg));
         Ok(())
+    }
+
+    #[test]
+    fn select_without_valid_fields() {
+        let schema = DFSchema::empty();
+
+        let col = Column::from_qualified_name("t1.c0");
+        let err = schema.index_of_column(&col).err().unwrap();
+        assert_eq!("Schema error: No field named 't1'.'c0'.", &format!("{err}"));
+
+        // the same check without qualifier
+        let col = Column::from_name("c0");
+        let err = schema.index_of_column(&col).err().unwrap();
+        assert_eq!("Schema error: No field named 'c0'.", &format!("{err}"));
     }
 
     #[test]
@@ -1108,6 +1149,39 @@ mod tests {
         assert_eq!(a_df.metadata(), a_arrow.metadata())
     }
 
+    #[test]
+    fn test_contain_column() -> Result<()> {
+        // qualified exists
+        {
+            let col = Column::from_qualified_name("t1.c0");
+            let schema = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
+            assert!(schema.is_column_from_schema(&col)?);
+        }
+
+        // qualified not exists
+        {
+            let col = Column::from_qualified_name("t1.c2");
+            let schema = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
+            assert!(!schema.is_column_from_schema(&col)?);
+        }
+
+        // unqualified exists
+        {
+            let col = Column::from_name("c0");
+            let schema = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
+            assert!(schema.is_column_from_schema(&col)?);
+        }
+
+        // unqualified not exists
+        {
+            let col = Column::from_name("c2");
+            let schema = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
+            assert!(!schema.is_column_from_schema(&col)?);
+        }
+
+        Ok(())
+    }
+
     fn test_schema_2() -> Schema {
         Schema::new(vec![
             Field::new("c100", DataType::Boolean, true),
@@ -1120,9 +1194,6 @@ mod tests {
     }
 
     fn test_metadata_n(n: usize) -> HashMap<String, String> {
-        (0..n)
-            .into_iter()
-            .map(|i| (format!("k{i}"), format!("v{i}")))
-            .collect()
+        (0..n).map(|i| (format!("k{i}"), format!("v{i}"))).collect()
     }
 }

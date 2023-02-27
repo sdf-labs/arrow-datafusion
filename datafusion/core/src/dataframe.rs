@@ -20,6 +20,9 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use arrow::array::Int64Array;
+use async_trait::async_trait;
+use datafusion_common::DataFusionError;
 use parquet::file::properties::WriterProperties;
 
 use datafusion_common::{Column, DFSchema, ScalarValue};
@@ -52,9 +55,6 @@ use crate::prelude::SessionContext;
 // use arrow::datatypes::GenericStringType;
 
 use arrow::datatypes::DataType;
-use async_trait::async_trait;
-
-use datafusion_common::DataFusionError;
 
 use std::usize;
 
@@ -184,6 +184,26 @@ impl DataFrame {
         let project_plan = LogicalPlanBuilder::from(plan).project(expr_list)?.build()?;
 
         Ok(DataFrame::new(self.session_state, project_plan))
+    }
+
+    /// Expand each list element of a column to multiple rows.
+    ///
+    /// ```
+    /// # use datafusion::prelude::*;
+    /// # use datafusion::error::Result;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let ctx = SessionContext::new();
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
+    /// let df = df.unnest_column("a")?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn unnest_column(self, column: &str) -> Result<DataFrame> {
+        let plan = LogicalPlanBuilder::from(self.plan)
+            .unnest_column(column)?
+            .build()?;
+        Ok(DataFrame::new(self.session_state, plan))
     }
 
     /// Filter a DataFrame to only include rows that match the specified filter expression.
@@ -385,6 +405,55 @@ impl DataFrame {
         Ok(DataFrame::new(self.session_state, plan))
     }
 
+    /// Join this DataFrame with another DataFrame using the specified expressions.
+    ///
+    /// Simply a thin wrapper over [`join`](Self::join) where the join keys are not provided,
+    /// and the provided expressions are AND'ed together to form the filter expression.
+    ///
+    /// ```
+    /// # use datafusion::prelude::*;
+    /// # use datafusion::error::Result;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let ctx = SessionContext::new();
+    /// let left = ctx
+    ///     .read_csv("tests/data/example.csv", CsvReadOptions::new())
+    ///     .await?;
+    /// let right = ctx
+    ///     .read_csv("tests/data/example.csv", CsvReadOptions::new())
+    ///     .await?
+    ///     .select(vec![
+    ///         col("a").alias("a2"),
+    ///         col("b").alias("b2"),
+    ///         col("c").alias("c2"),
+    ///     ])?;
+    /// let join_on = left.join_on(
+    ///     right,
+    ///     JoinType::Inner,
+    ///     [col("a").not_eq(col("a2")), col("b").not_eq(col("b2"))],
+    /// )?;
+    /// let batches = join_on.collect().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn join_on(
+        self,
+        right: DataFrame,
+        join_type: JoinType,
+        on_exprs: impl IntoIterator<Item = Expr>,
+    ) -> Result<DataFrame> {
+        let expr = on_exprs.into_iter().reduce(Expr::and);
+        let plan = LogicalPlanBuilder::from(self.plan)
+            .join(
+                right.plan,
+                join_type,
+                (Vec::<Column>::new(), Vec::<Column>::new()),
+                expr,
+            )?
+            .build()?;
+        Ok(DataFrame::new(self.session_state, plan))
+    }
+
     /// Repartition a DataFrame based on a logical partitioning scheme.
     ///
     /// ```
@@ -403,6 +472,39 @@ impl DataFrame {
             .repartition(partitioning_scheme)?
             .build()?;
         Ok(DataFrame::new(self.session_state, plan))
+    }
+
+    /// Run a count aggregate on the DataFrame and execute the DataFrame to collect this
+    /// count and return it as a usize, to find the total number of rows after executing
+    /// the DataFrame.
+    /// ```
+    /// # use datafusion::prelude::*;
+    /// # use datafusion::error::Result;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let ctx = SessionContext::new();
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
+    /// let count = df.count().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn count(self) -> Result<usize> {
+        let rows = self
+            .aggregate(
+                vec![],
+                vec![datafusion_expr::count(Expr::Literal(ScalarValue::Null))],
+            )?
+            .collect()
+            .await?;
+        let len = *rows
+            .first()
+            .and_then(|r| r.columns().first())
+            .and_then(|c| c.as_any().downcast_ref::<Int64Array>())
+            .and_then(|a| a.values().first())
+            .ok_or(DataFusionError::Internal(
+                "Unexpected output when collecting for count()".to_string(),
+            ))? as usize;
+        Ok(len)
     }
 
     /// Convert the logical plan represented by this DataFrame into a physical plan and
@@ -1058,6 +1160,71 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_distinct() -> Result<()> {
+        let t = test_table().await?;
+        let plan = t
+            .select(vec![col("c1")])
+            .unwrap()
+            .distinct()
+            .unwrap()
+            .plan
+            .clone();
+
+        let sql_plan = create_plan("select distinct c1 from aggregate_test_100").await?;
+
+        assert_same_plan(&plan, &sql_plan);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_distinct_sort_by() -> Result<()> {
+        let t = test_table().await?;
+        let plan = t
+            .select(vec![col("c1")])
+            .unwrap()
+            .distinct()
+            .unwrap()
+            .sort(vec![col("c1").sort(true, true)])
+            .unwrap();
+
+        let df_results = plan.clone().collect().await?;
+
+        #[rustfmt::skip]
+        assert_batches_sorted_eq!(
+            vec![
+                "+----+",
+                "| c1 |",
+                "+----+",
+                "| a  |",
+                "| b  |",
+                "| c  |",
+                "| d  |",
+                "| e  |",
+                "+----+",
+            ],
+            &df_results
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_distinct_sort_by_unprojected() -> Result<()> {
+        let t = test_table().await?;
+        let err = t
+            .select(vec![col("c1")])
+            .unwrap()
+            .distinct()
+            .unwrap()
+            // try to sort on some value not present in input to distinct
+            .sort(vec![col("c2").sort(true, true)])
+            .unwrap_err();
+        assert_eq!(err.to_string(), "Error during planning: For SELECT DISTINCT, ORDER BY expressions c2 must appear in select list");
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn join() -> Result<()> {
         let left = test_table().await?.select_columns(&["c1", "c2"])?;
         let right = test_table_with_name("c2")
@@ -1070,6 +1237,49 @@ mod tests {
         assert_eq!(100, left_rows.iter().map(|x| x.num_rows()).sum::<usize>());
         assert_eq!(100, right_rows.iter().map(|x| x.num_rows()).sum::<usize>());
         assert_eq!(2008, join_rows.iter().map(|x| x.num_rows()).sum::<usize>());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn join_on() -> Result<()> {
+        let left = test_table_with_name("a")
+            .await?
+            .select_columns(&["c1", "c2"])?;
+        let right = test_table_with_name("b")
+            .await?
+            .select_columns(&["c1", "c2"])?;
+        let join = left.join_on(
+            right,
+            JoinType::Inner,
+            [col("a.c1").not_eq(col("b.c1")), col("a.c2").eq(col("b.c2"))],
+        )?;
+
+        let expected_plan = "Inner Join:  Filter: a.c1 != b.c1 AND a.c2 = b.c2\
+        \n  Projection: a.c1, a.c2\
+        \n    TableScan: a\
+        \n  Projection: b.c1, b.c2\
+        \n    TableScan: b";
+        assert_eq!(expected_plan, format!("{:?}", join.logical_plan()));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn join_ambiguous_filter() -> Result<()> {
+        let left = test_table_with_name("a")
+            .await?
+            .select_columns(&["c1", "c2"])?;
+        let right = test_table_with_name("b")
+            .await?
+            .select_columns(&["c1", "c2"])?;
+
+        let join = left
+            .join_on(right, JoinType::Inner, [col("c1").eq(col("c1"))])
+            .expect_err("join didn't fail check");
+        let expected =
+            "Error during planning: reference 'c1' is ambiguous, could be a.c1,b.c1;";
+        assert_eq!(join.to_string(), expected);
+
         Ok(())
     }
 
@@ -1087,6 +1297,13 @@ mod tests {
         // the two plans should be identical
         assert_same_plan(&plan, &sql_plan);
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn df_count() -> Result<()> {
+        let count = test_table().await?.count().await?;
+        assert_eq!(100, count);
         Ok(())
     }
 
@@ -1445,11 +1662,9 @@ mod tests {
         \n    Sort: t1.c1 ASC NULLS FIRST, t1.c2 ASC NULLS FIRST, t1.c3 ASC NULLS FIRST, t2.c1 ASC NULLS FIRST, t2.c2 ASC NULLS FIRST, t2.c3 ASC NULLS FIRST, fetch=1\
         \n      Inner Join: t1.c1 = t2.c1\
         \n        SubqueryAlias: t1\
-        \n          Projection: aggregate_test_100.c1, aggregate_test_100.c2, aggregate_test_100.c3\
-        \n            TableScan: aggregate_test_100 projection=[c1, c2, c3]\
+        \n          TableScan: aggregate_test_100 projection=[c1, c2, c3]\
         \n        SubqueryAlias: t2\
-        \n          Projection: aggregate_test_100.c1, aggregate_test_100.c2, aggregate_test_100.c3\
-        \n            TableScan: aggregate_test_100 projection=[c1, c2, c3]",
+        \n          TableScan: aggregate_test_100 projection=[c1, c2, c3]",
                    format!("{:?}", df_renamed.clone().into_optimized_plan()?)
         );
 
