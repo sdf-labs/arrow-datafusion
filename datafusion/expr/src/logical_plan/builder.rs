@@ -22,14 +22,17 @@ use crate::expr_rewriter::{
     normalize_cols, rewrite_sort_cols_by_aggs,
 };
 use crate::type_coercion::binary::comparison_coercion;
-use crate::utils::{columnize_expr, compare_sort_expr, exprlist_to_fields, from_plan};
+use crate::utils::{
+    columnize_expr, compare_sort_expr, ensure_any_column_reference_is_unambiguous,
+    exprlist_to_fields, from_plan,
+};
 use crate::{and, binary_expr, Operator};
 use crate::{
     logical_plan::{
         Aggregate, Analyze, CrossJoin, Distinct, EmptyRelation, Explain, Filter, Join,
         JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning, PlanType, Prepare,
         Projection, Repartition, Sort, SubqueryAlias, TableScan, ToStringifiedPlan,
-        Union, Values, Window,
+        Union, Unnest, Values, Window,
     },
     utils::{
         can_hash, expand_qualified_wildcard, expand_wildcard,
@@ -273,7 +276,8 @@ impl LogicalPlanBuilder {
         });
         for (_, exprs) in groups {
             let window_exprs = exprs.into_iter().cloned().collect::<Vec<_>>();
-            // the partition and sort itself is done at physical level, see the BasicEnforcement rule
+            // Partition and sorting is done at physical level, see the EnforceDistribution
+            // and EnforceSorting rules.
             plan = LogicalPlanBuilder::from(plan)
                 .window(window_exprs)?
                 .build()?;
@@ -336,9 +340,37 @@ impl LogicalPlanBuilder {
     }
 
     /// Add missing sort columns to all downstream projection
+    ///
+    /// Thus, if you have a LogialPlan that selects A and B and have
+    /// not requested a sort by C, this code will add C recursively to
+    /// all input projections.
+    ///
+    /// Adding a new column is not correct if there is a `Distinct`
+    /// node, which produces only distinct values of its
+    /// inputs. Adding a new column to its input will result in
+    /// potententially different results than with the original column.
+    ///
+    /// For example, if the input is like:
+    ///
+    /// Distinct(A, B)
+    ///
+    /// If the input looks like
+    ///
+    /// a | b | c
+    /// --+---+---
+    /// 1 | 2 | 3
+    /// 1 | 2 | 4
+    ///
+    /// Distinct (A, B) --> (1,2)
+    ///
+    /// But Distinct (A, B, C) --> (1, 2, 3), (1, 2, 4)
+    ///  (which will appear as a (1, 2), (1, 2) if a and b are projected
+    ///
+    /// See <https://github.com/apache/arrow-datafusion/issues/5065> for more details
     fn add_missing_columns(
         curr_plan: LogicalPlan,
         missing_cols: &[Column],
+        is_distinct: bool,
     ) -> Result<LogicalPlan> {
         match curr_plan {
             LogicalPlan::Projection(Projection {
@@ -358,15 +390,24 @@ impl LogicalPlanBuilder {
                 // missing_cols may be already present but without the new
                 // projected alias.
                 missing_exprs.retain(|e| !expr.contains(e));
+                if is_distinct {
+                    Self::ambiguous_distinct_check(&missing_exprs, missing_cols, &expr)?;
+                }
                 expr.extend(missing_exprs);
                 Ok(project((*input).clone(), expr)?)
             }
             _ => {
+                let is_distinct =
+                    is_distinct || matches!(curr_plan, LogicalPlan::Distinct(_));
                 let new_inputs = curr_plan
                     .inputs()
                     .into_iter()
                     .map(|input_plan| {
-                        Self::add_missing_columns((*input_plan).clone(), missing_cols)
+                        Self::add_missing_columns(
+                            (*input_plan).clone(),
+                            missing_cols,
+                            is_distinct,
+                        )
                     })
                     .collect::<Result<Vec<_>>>()?;
 
@@ -374,6 +415,45 @@ impl LogicalPlanBuilder {
                 from_plan(&curr_plan, &expr, &new_inputs)
             }
         }
+    }
+
+    fn ambiguous_distinct_check(
+        missing_exprs: &[Expr],
+        missing_cols: &[Column],
+        projection_exprs: &[Expr],
+    ) -> Result<()> {
+        if missing_exprs.is_empty() {
+            return Ok(());
+        }
+
+        // if the missing columns are all only aliases for things in
+        // the existing select list, it is ok
+        //
+        // This handles the special case for
+        // SELECT col as <alias> ORDER BY <alias>
+        //
+        // As described in https://github.com/apache/arrow-datafusion/issues/5293
+        let all_aliases = missing_exprs.iter().all(|e| {
+            projection_exprs.iter().any(|proj_expr| {
+                if let Expr::Alias(expr, _) = proj_expr {
+                    e == expr.as_ref()
+                } else {
+                    false
+                }
+            })
+        });
+        if all_aliases {
+            return Ok(());
+        }
+
+        let missing_col_names = missing_cols
+            .iter()
+            .map(|col| col.flat_name())
+            .collect::<String>();
+
+        Err(DataFusionError::Plan(format!(
+            "For SELECT DISTINCT, ORDER BY expressions {missing_col_names} must appear in select list",
+        )))
     }
 
     /// Apply a sort
@@ -417,7 +497,8 @@ impl LogicalPlanBuilder {
             .map(|f| Expr::Column(f.qualified_column()))
             .collect();
 
-        let plan = Self::add_missing_columns(self.plan, &missing_cols)?;
+        let is_distinct = false;
+        let plan = Self::add_missing_columns(self.plan, &missing_cols, is_distinct)?;
         let sort_plan = LogicalPlan::Sort(Sort {
             expr: normalize_cols(exprs, &plan)?,
             input: Arc::new(plan),
@@ -500,6 +581,25 @@ impl LogicalPlanBuilder {
                 "left_keys and right_keys were not the same length".to_string(),
             ));
         }
+
+        let filter = if let Some(expr) = filter {
+            // ambiguous check
+            ensure_any_column_reference_is_unambiguous(
+                &expr,
+                &[self.schema(), right.schema()],
+            )?;
+
+            // normalize all columns in expression
+            let using_columns = expr.to_columns()?;
+            let filter = normalize_col_with_schemas(
+                expr,
+                &[self.schema(), right.schema()],
+                &[using_columns],
+            )?;
+            Some(filter)
+        } else {
+            None
+        };
 
         let (left_keys, right_keys): (Vec<Result<Column>>, Vec<Result<Column>>) =
             join_keys
@@ -744,6 +844,7 @@ impl LogicalPlanBuilder {
                 plan: Arc::new(self.plan),
                 stringified_plans,
                 schema,
+                logical_optimization_succeeded: false,
             })))
         }
     }
@@ -889,6 +990,11 @@ impl LogicalPlanBuilder {
             null_equals_null: false,
         })))
     }
+
+    /// Unnest the given column.
+    pub fn unnest_column(self, column: impl Into<Column>) -> Result<Self> {
+        Ok(Self::from(unnest(self.plan, column.into())?))
+    }
 }
 
 /// Creates a schema for a join operation.
@@ -1015,7 +1121,7 @@ pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalP
             match plan {
                 LogicalPlan::Projection(Projection { expr, input, .. }) => {
                     Ok(Arc::new(project_with_column_index(
-                        expr.to_vec(),
+                        expr,
                         input,
                         Arc::new(union_schema.clone()),
                     )?))
@@ -1170,6 +1276,52 @@ impl TableSource for LogicalTableSource {
     fn schema(&self) -> SchemaRef {
         self.table_schema.clone()
     }
+}
+
+/// Create an unnest plan.
+pub fn unnest(input: LogicalPlan, column: Column) -> Result<LogicalPlan> {
+    let unnest_field = input.schema().field_from_column(&column)?;
+
+    // Extract the type of the nested field in the list.
+    let unnested_field = match unnest_field.data_type() {
+        DataType::List(field)
+        | DataType::FixedSizeList(field, _)
+        | DataType::LargeList(field) => DFField::new(
+            unnest_field.qualifier().map(String::as_str),
+            unnest_field.name(),
+            field.data_type().clone(),
+            unnest_field.is_nullable(),
+        ),
+        _ => {
+            // If the unnest field is not a list type return the input plan.
+            return Ok(input);
+        }
+    };
+
+    // Update the schema with the unnest column type changed to contain the nested type.
+    let input_schema = input.schema();
+    let fields = input_schema
+        .fields()
+        .iter()
+        .map(|f| {
+            if f == unnest_field {
+                unnested_field.clone()
+            } else {
+                f.clone()
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let schema = Arc::new(DFSchema::new_with_metadata(
+        fields,
+        input_schema.metadata().clone(),
+    )?);
+
+    Ok(LogicalPlan::Unnest(Unnest {
+        input: Arc::new(input),
+        column: unnested_field.qualified_column(),
+        schema,
+    }))
 }
 
 #[cfg(test)]
@@ -1556,5 +1708,78 @@ mod tests {
         assert_eq!(err_msg1.to_string(), expected);
 
         Ok(())
+    }
+
+    #[test]
+    fn plan_builder_unnest() -> Result<()> {
+        // Unnesting a simple column should return the child plan.
+        let plan = nested_table_scan("test_table")?
+            .unnest_column("scalar")?
+            .build()?;
+
+        let expected = "TableScan: test_table";
+        assert_eq!(expected, format!("{plan:?}"));
+
+        // Unnesting the strings list.
+        let plan = nested_table_scan("test_table")?
+            .unnest_column("strings")?
+            .build()?;
+
+        let expected = "\
+        Unnest: test_table.strings\
+        \n  TableScan: test_table";
+        assert_eq!(expected, format!("{plan:?}"));
+
+        // Check unnested field is a scalar
+        let field = plan
+            .schema()
+            .field_with_name(Some("test_table"), "strings")
+            .unwrap();
+        assert_eq!(&DataType::Utf8, field.data_type());
+
+        // Unnesting multiple fields.
+        let plan = nested_table_scan("test_table")?
+            .unnest_column("strings")?
+            .unnest_column("structs")?
+            .build()?;
+
+        let expected = "\
+        Unnest: test_table.structs\
+        \n  Unnest: test_table.strings\
+        \n    TableScan: test_table";
+        assert_eq!(expected, format!("{plan:?}"));
+
+        // Check unnested struct list field should be a struct.
+        let field = plan
+            .schema()
+            .field_with_name(Some("test_table"), "structs")
+            .unwrap();
+        assert!(matches!(field.data_type(), DataType::Struct(_)));
+
+        // Unnesting missing column should fail.
+        let plan = nested_table_scan("test_table")?.unnest_column("missing");
+        assert!(plan.is_err());
+
+        Ok(())
+    }
+
+    fn nested_table_scan(table_name: &str) -> Result<LogicalPlanBuilder> {
+        // Create a schema with a scalar field, a list of strings, and a list of structs.
+        let struct_field = Box::new(Field::new(
+            "item",
+            DataType::Struct(vec![
+                Field::new("a", DataType::UInt32, false),
+                Field::new("b", DataType::UInt32, false),
+            ]),
+            false,
+        ));
+        let string_field = Box::new(Field::new("item", DataType::Utf8, false));
+        let schema = Schema::new(vec![
+            Field::new("scalar", DataType::UInt32, false),
+            Field::new("strings", DataType::List(string_field), false),
+            Field::new("structs", DataType::List(struct_field), false),
+        ]);
+
+        table_scan(Some(table_name), &schema, None)
     }
 }

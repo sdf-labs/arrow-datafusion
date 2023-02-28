@@ -154,8 +154,7 @@ macro_rules! config_namespace {
 config_namespace! {
     /// Options related to catalog and directory scanning
     pub struct CatalogOptions {
-        /// Number of partitions for query execution. Increasing partitions can increase
-        /// concurrency. Defaults to the number of cpu cores on the system.
+        /// Whether the default catalog and schema should be created automatically.
         pub create_default_catalog_and_schema: bool, default = true
 
         /// The default catalog name - this impacts what SQL queries use if not specified
@@ -180,10 +179,22 @@ config_namespace! {
 }
 
 config_namespace! {
+    /// Options related to SQL parser
+    pub struct SqlParserOptions {
+        /// When set to true, SQL parser will parse float as decimal type
+        pub parse_float_as_decimal: bool, default = false
+
+        /// When set to true, SQL parser will normalize ident (convert ident to lowercase when not quoted)
+        pub enable_ident_normalization: bool, default = true
+
+    }
+}
+
+config_namespace! {
     /// Options related to query execution
     pub struct ExecutionOptions {
         /// Default batch size while creating new batches, it's especially useful for
-        /// buffer-in-memory batches since creating tiny batches would results in too much
+        /// buffer-in-memory batches since creating tiny batches would result in too much
         /// metadata memory consumption
         pub batch_size: usize, default = 8192
 
@@ -197,12 +208,12 @@ config_namespace! {
         pub collect_statistics: bool, default = false
 
         /// Number of partitions for query execution. Increasing partitions can increase
-        /// concurrency. Defaults to the number of cpu cores on the system
+        /// concurrency. Defaults to the number of CPU cores on the system
         pub target_partitions: usize, default = num_cpus::get()
 
         /// The default time zone
         ///
-        /// Some functions, e.g. EXTRACT(HOUR from SOME_TIME), shift the underlying datetime
+        /// Some functions, e.g. `EXTRACT(HOUR from SOME_TIME)`, shift the underlying datetime
         /// according to this time zone, and then extract the hour
         pub time_zone: Option<String>, default = Some("+00:00".into())
 
@@ -229,7 +240,7 @@ config_namespace! {
         pub skip_metadata: bool, default = true
 
         /// If specified, the parquet reader will try and fetch the last `size_hint`
-        /// bytes of the parquet file optimistically. If not specified, two read are required:
+        /// bytes of the parquet file optimistically. If not specified, two reads are required:
         /// One read to fetch the 8-byte parquet footer and
         /// another to fetch the metadata length encoded in the footer
         pub metadata_size_hint: Option<usize>, default = None
@@ -249,7 +260,7 @@ config_namespace! {
     /// Options related to query optimization
     pub struct OptimizerOptions {
         /// When set to true, the physical plan optimizer will try to add round robin
-        /// repartition to increase parallelism to leverage more CPU cores
+        /// repartitioning to increase parallelism to leverage more CPU cores
         pub enable_round_robin_repartition: bool, default = true
 
         /// When set to true, the optimizer will insert filters before a join between
@@ -259,16 +270,37 @@ config_namespace! {
         pub filter_null_join_keys: bool, default = false
 
         /// Should DataFusion repartition data using the aggregate keys to execute aggregates
-        /// in parallel using the provided `target_partitions` level"
+        /// in parallel using the provided `target_partitions` level
         pub repartition_aggregations: bool, default = true
 
+        /// Minimum total files size in bytes to perform file scan repartitioning.
+        pub repartition_file_min_size: usize, default = 10 * 1024 * 1024
+
         /// Should DataFusion repartition data using the join keys to execute joins in parallel
-        /// using the provided `target_partitions` level"
+        /// using the provided `target_partitions` level
         pub repartition_joins: bool, default = true
 
+        /// When set to true, file groups will be repartitioned to achieve maximum parallelism.
+        /// Currently supported only for Parquet format in which case
+        /// multiple row groups from the same file may be read concurrently. If false then each
+        /// row group is read serially, though different files may be read in parallel.
+        pub repartition_file_scans: bool, default = true
+
         /// Should DataFusion repartition data using the partitions keys to execute window
-        /// functions in parallel using the provided `target_partitions` level"
+        /// functions in parallel using the provided `target_partitions` level
         pub repartition_windows: bool, default = true
+
+        /// Should DataFusion execute sorts in a per-partition fashion and merge
+        /// afterwards instead of coalescing first and sorting globally.
+        /// With this flag is enabled, plans in the form below
+        ///      "SortExec: [a@0 ASC]",
+        ///      "  CoalescePartitionsExec",
+        ///      "    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+        /// would turn into the plan below which performs better in multithreaded environments
+        ///      "SortPreservingMergeExec: [a@0 ASC]",
+        ///      "  SortExec: [a@0 ASC]",
+        ///      "    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+        pub repartition_sorts: bool, default = true
 
         /// When set to true, the logical plan optimizer will produce warning
         /// messages if any optimization rules produce errors and then proceed to the next
@@ -324,8 +356,10 @@ pub struct ConfigOptions {
     pub catalog: CatalogOptions,
     /// Execution options
     pub execution: ExecutionOptions,
-    /// Explain options
+    /// Optimizer options
     pub optimizer: OptimizerOptions,
+    /// SQL parser options
+    pub sql_parser: SqlParserOptions,
     /// Explain options
     pub explain: ExplainOptions,
     /// Optional extensions registered using [`Extensions::insert`]
@@ -341,9 +375,9 @@ impl ConfigField for ConfigOptions {
             "execution" => self.execution.set(rem, value),
             "optimizer" => self.optimizer.set(rem, value),
             "explain" => self.explain.set(rem, value),
+            "sql_parser" => self.sql_parser.set(rem, value),
             _ => Err(DataFusionError::Internal(format!(
-                "Config value \"{}\" not found on ConfigOptions",
-                key
+                "Config value \"{key}\" not found on ConfigOptions"
             ))),
         }
     }
@@ -353,6 +387,7 @@ impl ConfigField for ConfigOptions {
         self.execution.visit(v, "datafusion.execution", "");
         self.optimizer.visit(v, "datafusion.optimizer", "");
         self.explain.visit(v, "datafusion.explain", "");
+        self.sql_parser.visit(v, "datafusion.sql_parser", "");
     }
 }
 

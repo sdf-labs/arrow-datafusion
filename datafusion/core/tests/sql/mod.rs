@@ -28,7 +28,7 @@ use chrono::Duration;
 use datafusion::config::ConfigOptions;
 use datafusion::datasource::TableProvider;
 use datafusion::from_slice::FromSlice;
-use datafusion::logical_expr::{Aggregate, LogicalPlan, Projection, TableScan};
+use datafusion::logical_expr::{Aggregate, LogicalPlan, TableScan};
 use datafusion::physical_plan::metrics::MetricValue;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::ExecutionPlanVisitor;
@@ -87,7 +87,6 @@ pub mod explain_analyze;
 pub mod expr;
 pub mod functions;
 pub mod group_by;
-pub mod intersection;
 pub mod joins;
 pub mod json;
 pub mod limit;
@@ -104,8 +103,6 @@ pub mod union;
 pub mod wildcard;
 pub mod window;
 
-pub mod arrow_typeof;
-pub mod decimal;
 pub mod explain;
 pub mod idenfifers;
 pub mod information_schema;
@@ -693,6 +690,75 @@ fn create_sort_merge_join_datatype_context() -> Result<SessionContext> {
     Ok(ctx)
 }
 
+fn create_union_context() -> Result<SessionContext> {
+    let ctx = SessionContext::new();
+    let t1_schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int32, true),
+        Field::new("name", DataType::UInt8, true),
+    ]));
+    let t1_data = RecordBatch::new_empty(t1_schema);
+    ctx.register_batch("t1", t1_data)?;
+
+    let t2_schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::UInt8, true),
+        Field::new("name", DataType::UInt8, true),
+    ]));
+    let t2_data = RecordBatch::new_empty(t2_schema);
+    ctx.register_batch("t2", t2_data)?;
+
+    Ok(ctx)
+}
+
+fn create_nested_loop_join_context() -> Result<SessionContext> {
+    let ctx = SessionContext::with_config(
+        SessionConfig::new()
+            .with_target_partitions(4)
+            .with_batch_size(4096),
+    );
+
+    let t1_schema = Arc::new(Schema::new(vec![
+        Field::new("t1_id", DataType::UInt32, true),
+        Field::new("t1_name", DataType::Utf8, true),
+        Field::new("t1_int", DataType::UInt32, true),
+    ]));
+    let t1_data = RecordBatch::try_new(
+        t1_schema,
+        vec![
+            Arc::new(UInt32Array::from_slice([11, 22, 33, 44])),
+            Arc::new(StringArray::from(vec![
+                Some("a"),
+                Some("b"),
+                Some("c"),
+                Some("d"),
+            ])),
+            Arc::new(UInt32Array::from_slice([1, 2, 3, 4])),
+        ],
+    )?;
+    ctx.register_batch("t1", t1_data)?;
+
+    let t2_schema = Arc::new(Schema::new(vec![
+        Field::new("t2_id", DataType::UInt32, true),
+        Field::new("t2_name", DataType::Utf8, true),
+        Field::new("t2_int", DataType::UInt32, true),
+    ]));
+    let t2_data = RecordBatch::try_new(
+        t2_schema,
+        vec![
+            Arc::new(UInt32Array::from_slice([11, 22, 44, 55])),
+            Arc::new(StringArray::from(vec![
+                Some("z"),
+                Some("y"),
+                Some("x"),
+                Some("w"),
+            ])),
+            Arc::new(UInt32Array::from_slice([3, 1, 3, 3])),
+        ],
+    )?;
+    ctx.register_batch("t2", t2_data)?;
+
+    Ok(ctx)
+}
+
 fn get_tpch_table_schema(table: &str) -> Schema {
     match table {
         "customer" => Schema::new(vec![
@@ -1177,30 +1243,6 @@ fn result_vec(results: &[RecordBatch]) -> Vec<Vec<String>> {
     result
 }
 
-async fn register_decimal_csv_table_by_sql(ctx: &SessionContext) {
-    let df = ctx
-        .sql(
-            "CREATE EXTERNAL TABLE decimal_simple (
-            c1  DECIMAL(10,6) NOT NULL,
-            c2  DOUBLE NOT NULL,
-            c3  BIGINT NOT NULL,
-            c4  BOOLEAN NOT NULL,
-            c5  DECIMAL(12,7) NOT NULL
-            )
-            STORED AS CSV
-            WITH HEADER ROW
-            LOCATION 'tests/data/decimal_data.csv'",
-        )
-        .await
-        .expect("Creating dataframe for CREATE EXTERNAL TABLE with decimal data type");
-
-    let results = df.collect().await.expect("Executing CREATE EXTERNAL TABLE");
-    assert!(
-        results.is_empty(),
-        "Expected no rows from executing CREATE EXTERNAL TABLE"
-    );
-}
-
 async fn register_alltypes_parquet(ctx: &SessionContext) {
     let testdata = datafusion::test_util::parquet_test_data();
     ctx.register_parquet(
@@ -1546,18 +1588,15 @@ async fn nyc() -> Result<()> {
     let optimized_plan = dataframe.into_optimized_plan().unwrap();
 
     match &optimized_plan {
-        LogicalPlan::Projection(Projection { input, .. }) => match input.as_ref() {
-            LogicalPlan::Aggregate(Aggregate { input, .. }) => match input.as_ref() {
-                LogicalPlan::TableScan(TableScan {
-                    ref projected_schema,
-                    ..
-                }) => {
-                    assert_eq!(2, projected_schema.fields().len());
-                    assert_eq!(projected_schema.field(0).name(), "passenger_count");
-                    assert_eq!(projected_schema.field(1).name(), "fare_amount");
-                }
-                _ => unreachable!(),
-            },
+        LogicalPlan::Aggregate(Aggregate { input, .. }) => match input.as_ref() {
+            LogicalPlan::TableScan(TableScan {
+                ref projected_schema,
+                ..
+            }) => {
+                assert_eq!(2, projected_schema.fields().len());
+                assert_eq!(projected_schema.field(0).name(), "passenger_count");
+                assert_eq!(projected_schema.field(1).name(), "fare_amount");
+            }
             _ => unreachable!(),
         },
         _ => unreachable!(),

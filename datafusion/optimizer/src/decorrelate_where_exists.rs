@@ -16,16 +16,14 @@
 // under the License.
 
 use crate::optimizer::ApplyOrder;
-use crate::utils::{
-    conjunction, exprs_to_join_cols, find_join_exprs, split_conjunction,
-    verify_not_disjunction,
-};
+use crate::utils::{conjunction, extract_join_filters, split_conjunction};
 use crate::{OptimizerConfig, OptimizerRule};
-use datafusion_common::{context, Result};
+use datafusion_common::{Column, DataFusionError, Result};
 use datafusion_expr::{
     logical_plan::{Filter, JoinType, Subquery},
     Expr, LogicalPlan, LogicalPlanBuilder,
 };
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 /// Optimizer rule for rewriting subquery filters to joins
@@ -92,13 +90,19 @@ impl OptimizerRule for DecorrelateWhereExists {
                 // iterate through all exists clauses in predicate, turning each into a join
                 let mut cur_input = filter.input.as_ref().clone();
                 for subquery in subqueries {
-                    if let Some(x) = optimize_exists(&subquery, &cur_input, &other_exprs)?
-                    {
+                    if let Some(x) = optimize_exists(&subquery, &cur_input)? {
                         cur_input = x;
                     } else {
                         return Ok(None);
                     }
                 }
+
+                let expr = conjunction(other_exprs);
+                if let Some(expr) = expr {
+                    let new_filter = Filter::try_new(expr, Arc::new(cur_input))?;
+                    cur_input = LogicalPlan::Filter(new_filter);
+                }
+
                 Ok(Some(cur_input))
             }
             _ => Ok(None),
@@ -116,82 +120,91 @@ impl OptimizerRule for DecorrelateWhereExists {
 
 /// Takes a query like:
 ///
-/// ```select c.id from customers c where exists (select * from orders o where o.c_id = c.id)```
+/// SELECT t1.id
+/// FROM t1
+/// WHERE exists
+/// (
+///    SELECT t2.id FROM t2 WHERE t1.id = t2.id
+/// )
 ///
 /// and optimizes it into:
 ///
-/// ```select c.id from customers c
-/// inner join (select o.c_id from orders o group by o.c_id) o on o.c_id = c.c_id```
+/// SELECT t1.id
+/// FROM t1 LEFT SEMI
+/// JOIN t2
+/// ON t1.id = t2.id
 ///
 /// # Arguments
 ///
-/// * subqry - The subquery portion of the `where exists` (select * from orders)
-/// * negated - True if the subquery is a `where not exists`
-/// * filter_input - The non-subquery portion (from customers)
-/// * outer_exprs - Any additional parts to the `where` expression (and c.x = y)
+/// * query_info - The subquery and negated(exists/not exists) info.
+/// * outer_input - The non-subquery portion (relation t1)
 fn optimize_exists(
     query_info: &SubqueryInfo,
     outer_input: &LogicalPlan,
-    outer_other_exprs: &[Expr],
 ) -> Result<Option<LogicalPlan>> {
-    let subqry_filter = match query_info.query.subquery.as_ref() {
+    let maybe_subqury_filter = match query_info.query.subquery.as_ref() {
         LogicalPlan::Distinct(subqry_distinct) => match subqry_distinct.input.as_ref() {
-            LogicalPlan::Projection(subqry_proj) => {
-                Filter::try_from_plan(&subqry_proj.input)
-            }
+            LogicalPlan::Projection(subqry_proj) => &subqry_proj.input,
             _ => {
-                // Subquery currently only supports distinct or projection
                 return Ok(None);
             }
         },
-        LogicalPlan::Projection(subqry_proj) => Filter::try_from_plan(&subqry_proj.input),
+        LogicalPlan::Projection(subqry_proj) => &subqry_proj.input,
         _ => {
             // Subquery currently only supports distinct or projection
             return Ok(None);
         }
     }
-    .map_err(|e| context!("cannot optimize non-correlated subquery", e))?;
+    .as_ref();
 
-    // split into filters
-    let subqry_filter_exprs = split_conjunction(&subqry_filter.predicate);
-    verify_not_disjunction(&subqry_filter_exprs)?;
-
-    // Grab column names to join on
-    let (col_exprs, other_subqry_exprs) =
-        find_join_exprs(subqry_filter_exprs, subqry_filter.input.schema())?;
-    let (outer_cols, subqry_cols, join_filters) =
-        exprs_to_join_cols(&col_exprs, subqry_filter.input.schema(), false)?;
-    if subqry_cols.is_empty() || outer_cols.is_empty() {
-        // cannot optimize non-correlated subquery
+    // extract join filters
+    let (join_filters, subquery_input) = extract_join_filters(maybe_subqury_filter)?;
+    // cannot optimize non-correlated subquery
+    if join_filters.is_empty() {
         return Ok(None);
     }
 
-    // build subquery side of join - the thing the subquery was querying
-    let mut subqry_plan = LogicalPlanBuilder::from(subqry_filter.input.as_ref().clone());
-    if let Some(expr) = conjunction(other_subqry_exprs) {
-        subqry_plan = subqry_plan.filter(expr)? // if the subquery had additional expressions, restore them
-    }
-    let subqry_plan = subqry_plan.build()?;
+    let input_schema = subquery_input.schema();
+    let subquery_cols: BTreeSet<Column> =
+        join_filters
+            .iter()
+            .try_fold(BTreeSet::new(), |mut cols, expr| {
+                let using_cols: Vec<Column> = expr
+                    .to_columns()?
+                    .into_iter()
+                    .filter(|col| input_schema.field_from_column(col).is_ok())
+                    .collect::<_>();
 
-    let join_keys = (subqry_cols, outer_cols);
+                cols.extend(using_cols);
+                Result::<_, DataFusionError>::Ok(cols)
+            })?;
+
+    let projection_exprs: Vec<Expr> =
+        subquery_cols.into_iter().map(Expr::Column).collect();
+
+    let right = LogicalPlanBuilder::from(subquery_input)
+        .project(projection_exprs)?
+        .build()?;
+
+    let join_filter = conjunction(join_filters);
 
     // join our sub query into the main plan
     let join_type = match query_info.negated {
         true => JoinType::LeftAnti,
         false => JoinType::LeftSemi,
     };
-    let mut new_plan = LogicalPlanBuilder::from(outer_input.clone()).join(
-        subqry_plan,
-        join_type,
-        join_keys,
-        join_filters,
-    )?;
-    if let Some(expr) = conjunction(outer_other_exprs.to_vec()) {
-        new_plan = new_plan.filter(expr)? // if the main query had additional expressions, restore them
-    }
 
-    let result = new_plan.build()?;
-    Ok(Some(result))
+    // TODO: add Distinct if the original plan is a Distinct.
+    let new_plan = LogicalPlanBuilder::from(outer_input.clone())
+        .join(
+            right,
+            join_type,
+            (Vec::<Column>::new(), Vec::<Column>::new()),
+            join_filter,
+        )?
+        .build()?;
+
+    Ok(Some(new_plan))
 }
 
 struct SubqueryInfo {
@@ -239,13 +252,14 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        let expected = r#"Projection: customer.c_custkey [c_custkey:Int64]
-  LeftSemi Join: customer.c_custkey = orders.o_custkey [c_custkey:Int64, c_name:Utf8]
-    LeftSemi Join: customer.c_custkey = orders.o_custkey [c_custkey:Int64, c_name:Utf8]
-      TableScan: customer [c_custkey:Int64, c_name:Utf8]
-      TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
-    TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]"#;
-
+        let expected = "Projection: customer.c_custkey [c_custkey:Int64]\
+                        \n  LeftSemi Join:  Filter: orders.o_custkey = customer.c_custkey [c_custkey:Int64, c_name:Utf8]\
+                        \n    LeftSemi Join:  Filter: orders.o_custkey = customer.c_custkey [c_custkey:Int64, c_name:Utf8]\
+                        \n      TableScan: customer [c_custkey:Int64, c_name:Utf8]\
+                        \n      Projection: orders.o_custkey [o_custkey:Int64]\
+                        \n        TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]\
+                        \n    Projection: orders.o_custkey [o_custkey:Int64]\
+                        \n      TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
         assert_plan_eq(&plan, expected)
     }
 
@@ -274,13 +288,14 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        let expected = r#"Projection: customer.c_custkey [c_custkey:Int64]
-  LeftSemi Join: customer.c_custkey = orders.o_custkey [c_custkey:Int64, c_name:Utf8]
-    TableScan: customer [c_custkey:Int64, c_name:Utf8]
-    LeftSemi Join: orders.o_orderkey = lineitem.l_orderkey [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
-      TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
-      TableScan: lineitem [l_orderkey:Int64, l_partkey:Int64, l_suppkey:Int64, l_linenumber:Int32, l_quantity:Float64, l_extendedprice:Float64]"#;
-
+        let expected = "Projection: customer.c_custkey [c_custkey:Int64]\
+                        \n  LeftSemi Join:  Filter: orders.o_custkey = customer.c_custkey [c_custkey:Int64, c_name:Utf8]\
+                        \n    TableScan: customer [c_custkey:Int64, c_name:Utf8]\
+                        \n    Projection: orders.o_custkey [o_custkey:Int64]\
+                        \n      LeftSemi Join:  Filter: lineitem.l_orderkey = orders.o_orderkey [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]\
+                        \n        TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]\
+                        \n        Projection: lineitem.l_orderkey [l_orderkey:Int64]\
+                        \n          TableScan: lineitem [l_orderkey:Int64, l_partkey:Int64, l_suppkey:Int64, l_linenumber:Int32, l_quantity:Float64, l_extendedprice:Float64]";
         assert_plan_eq(&plan, expected)
     }
 
@@ -303,21 +318,21 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        let expected = r#"Projection: customer.c_custkey [c_custkey:Int64]
-  LeftSemi Join: customer.c_custkey = orders.o_custkey [c_custkey:Int64, c_name:Utf8]
-    TableScan: customer [c_custkey:Int64, c_name:Utf8]
-    Filter: orders.o_orderkey = Int32(1) [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
-      TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]"#;
+        let expected = "Projection: customer.c_custkey [c_custkey:Int64]\
+                        \n  LeftSemi Join:  Filter: customer.c_custkey = orders.o_custkey [c_custkey:Int64, c_name:Utf8]\
+                        \n    TableScan: customer [c_custkey:Int64, c_name:Utf8]\
+                        \n    Projection: orders.o_custkey [o_custkey:Int64]\
+                        \n      Filter: orders.o_orderkey = Int32(1) [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]\
+                        \n        TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
 
         assert_plan_eq(&plan, expected)
     }
 
-    /// Test for correlated exists subquery with no columns in schema
     #[test]
     fn exists_subquery_no_cols() -> Result<()> {
         let sq = Arc::new(
             LogicalPlanBuilder::from(scan_tpch_table("orders"))
-                .filter(col("customer.c_custkey").eq(col("customer.c_custkey")))?
+                .filter(col("customer.c_custkey").eq(lit(1u32)))?
                 .project(vec![col("orders.o_custkey")])?
                 .build()?,
         );
@@ -327,7 +342,14 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        assert_optimization_skipped(Arc::new(DecorrelateWhereExists::new()), &plan)
+        // Other rule will pushdown `customer.c_custkey = 1`,
+        let expected = "Projection: customer.c_custkey [c_custkey:Int64]\
+                        \n  LeftSemi Join:  Filter: customer.c_custkey = UInt32(1) [c_custkey:Int64, c_name:Utf8]\
+                        \n    TableScan: customer [c_custkey:Int64, c_name:Utf8]\
+                        \n    Projection:  []\
+                        \n      TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
+
+        assert_plan_eq(&plan, expected)
     }
 
     /// Test for exists subquery with both columns in schema
@@ -363,7 +385,13 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        assert_optimization_skipped(Arc::new(DecorrelateWhereExists::new()), &plan)
+        let expected = "Projection: customer.c_custkey [c_custkey:Int64]\
+                        \n  LeftSemi Join:  Filter: customer.c_custkey != orders.o_custkey [c_custkey:Int64, c_name:Utf8]\
+                        \n    TableScan: customer [c_custkey:Int64, c_name:Utf8]\
+                        \n    Projection: orders.o_custkey [o_custkey:Int64]\
+                        \n      TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
+
+        assert_plan_eq(&plan, expected)
     }
 
     /// Test for correlated exists subquery less than
@@ -381,10 +409,13 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        let expected = r#"can't optimize < column comparison"#;
+        let expected = "Projection: customer.c_custkey [c_custkey:Int64]\
+                        \n  LeftSemi Join:  Filter: customer.c_custkey < orders.o_custkey [c_custkey:Int64, c_name:Utf8]\
+                        \n    TableScan: customer [c_custkey:Int64, c_name:Utf8]\
+                        \n    Projection: orders.o_custkey [o_custkey:Int64]\
+                        \n      TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
 
-        assert_optimizer_err(Arc::new(DecorrelateWhereExists::new()), &plan, expected);
-        Ok(())
+        assert_plan_eq(&plan, expected)
     }
 
     /// Test for correlated exists subquery filter with subquery disjunction
@@ -406,10 +437,13 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        let expected = r#"Optimizing disjunctions not supported!"#;
+        let expected = "Projection: customer.c_custkey [c_custkey:Int64]\
+                        \n  LeftSemi Join:  Filter: customer.c_custkey = orders.o_custkey OR orders.o_orderkey = Int32(1) [c_custkey:Int64, c_name:Utf8]\
+                        \n    TableScan: customer [c_custkey:Int64, c_name:Utf8]\
+                        \n    Projection: orders.o_custkey, orders.o_orderkey [o_custkey:Int64, o_orderkey:Int64]\
+                        \n      TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
 
-        assert_optimizer_err(Arc::new(DecorrelateWhereExists::new()), &plan, expected);
-        Ok(())
+        assert_plan_eq(&plan, expected)
     }
 
     /// Test for correlated exists without projection
@@ -444,11 +478,11 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        // Doesn't matter we projected an expression, just that we returned a result
-        let expected = r#"Projection: customer.c_custkey [c_custkey:Int64]
-  LeftSemi Join: customer.c_custkey = orders.o_custkey [c_custkey:Int64, c_name:Utf8]
-    TableScan: customer [c_custkey:Int64, c_name:Utf8]
-    TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]"#;
+        let expected = "Projection: customer.c_custkey [c_custkey:Int64]\
+                        \n  LeftSemi Join:  Filter: customer.c_custkey = orders.o_custkey [c_custkey:Int64, c_name:Utf8]\
+                        \n    TableScan: customer [c_custkey:Int64, c_name:Utf8]\
+                        \n    Projection: orders.o_custkey [o_custkey:Int64]\
+                        \n      TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
 
         assert_plan_eq(&plan, expected)
     }
@@ -467,11 +501,12 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        let expected = r#"Projection: customer.c_custkey [c_custkey:Int64]
-  Filter: customer.c_custkey = Int32(1) [c_custkey:Int64, c_name:Utf8]
-    LeftSemi Join: customer.c_custkey = orders.o_custkey [c_custkey:Int64, c_name:Utf8]
-      TableScan: customer [c_custkey:Int64, c_name:Utf8]
-      TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]"#;
+        let expected = "Projection: customer.c_custkey [c_custkey:Int64]\
+                        \n  Filter: customer.c_custkey = Int32(1) [c_custkey:Int64, c_name:Utf8]\
+                        \n    LeftSemi Join:  Filter: customer.c_custkey = orders.o_custkey [c_custkey:Int64, c_name:Utf8]\
+                        \n      TableScan: customer [c_custkey:Int64, c_name:Utf8]\
+                        \n      Projection: orders.o_custkey [o_custkey:Int64]\
+                        \n        TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
 
         assert_plan_eq(&plan, expected)
     }
@@ -518,10 +553,11 @@ mod tests {
             .project(vec![col("test.c")])?
             .build()?;
 
-        let expected = r#"Projection: test.c [c:UInt32]
-  LeftSemi Join: test.a = sq.a [a:UInt32, b:UInt32, c:UInt32]
-    TableScan: test [a:UInt32, b:UInt32, c:UInt32]
-    TableScan: sq [a:UInt32, b:UInt32, c:UInt32]"#;
+        let expected  = "Projection: test.c [c:UInt32]\
+                        \n  LeftSemi Join:  Filter: test.a = sq.a [a:UInt32, b:UInt32, c:UInt32]\
+                        \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]\
+                        \n    Projection: sq.a [a:UInt32]\
+                        \n      TableScan: sq [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_plan_eq(&plan, expected)
     }
@@ -535,10 +571,7 @@ mod tests {
             .project(vec![col("test.b")])?
             .build()?;
 
-        let expected = "cannot optimize non-correlated subquery";
-
-        assert_optimizer_err(Arc::new(DecorrelateWhereExists::new()), &plan, expected);
-        Ok(())
+        assert_optimization_skipped(Arc::new(DecorrelateWhereExists::new()), &plan)
     }
 
     /// Test for single NOT exists subquery filter
@@ -550,9 +583,91 @@ mod tests {
             .project(vec![col("test.b")])?
             .build()?;
 
-        let expected = "cannot optimize non-correlated subquery";
+        assert_optimization_skipped(Arc::new(DecorrelateWhereExists::new()), &plan)
+    }
 
-        assert_optimizer_err(Arc::new(DecorrelateWhereExists::new()), &plan, expected);
-        Ok(())
+    #[test]
+    fn two_exists_subquery_with_outer_filter() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let subquery_scan1 = test_table_scan_with_name("sq1")?;
+        let subquery_scan2 = test_table_scan_with_name("sq2")?;
+
+        let subquery1 = LogicalPlanBuilder::from(subquery_scan1)
+            .filter(col("test.a").eq(col("sq1.a")))?
+            .project(vec![col("c")])?
+            .build()?;
+
+        let subquery2 = LogicalPlanBuilder::from(subquery_scan2)
+            .filter(col("test.a").eq(col("sq2.a")))?
+            .project(vec![col("c")])?
+            .build()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .filter(
+                exists(Arc::new(subquery1))
+                    .and(exists(Arc::new(subquery2)).and(col("test.c").gt(lit(1u32)))),
+            )?
+            .project(vec![col("test.b")])?
+            .build()?;
+
+        let expected = "Projection: test.b [b:UInt32]\
+                        \n  Filter: test.c > UInt32(1) [a:UInt32, b:UInt32, c:UInt32]\
+                        \n    LeftSemi Join:  Filter: test.a = sq2.a [a:UInt32, b:UInt32, c:UInt32]\
+                        \n      LeftSemi Join:  Filter: test.a = sq1.a [a:UInt32, b:UInt32, c:UInt32]\
+                        \n        TableScan: test [a:UInt32, b:UInt32, c:UInt32]\
+                        \n        Projection: sq1.a [a:UInt32]\
+                        \n          TableScan: sq1 [a:UInt32, b:UInt32, c:UInt32]\
+                        \n      Projection: sq2.a [a:UInt32]\
+                        \n        TableScan: sq2 [a:UInt32, b:UInt32, c:UInt32]";
+
+        assert_plan_eq(&plan, expected)
+    }
+
+    #[test]
+    fn exists_subquery_expr_filter() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let subquery_scan = test_table_scan_with_name("sq")?;
+        let subquery = LogicalPlanBuilder::from(subquery_scan)
+            .filter((lit(1u32) + col("sq.a")).gt(col("test.a") * lit(2u32)))?
+            .project(vec![lit(1u32)])?
+            .build()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .filter(exists(Arc::new(subquery)))?
+            .project(vec![col("test.b")])?
+            .build()?;
+
+        let expected = "Projection: test.b [b:UInt32]\
+                        \n  LeftSemi Join:  Filter: UInt32(1) + sq.a > test.a * UInt32(2) [a:UInt32, b:UInt32, c:UInt32]\
+                        \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]\
+                        \n    Projection: sq.a [a:UInt32]\
+                        \n      TableScan: sq [a:UInt32, b:UInt32, c:UInt32]";
+
+        assert_plan_eq(&plan, expected)
+    }
+
+    #[test]
+    fn exists_subquery_with_same_table() -> Result<()> {
+        let outer_scan = test_table_scan()?;
+        let subquery_scan = test_table_scan()?;
+        let subquery = LogicalPlanBuilder::from(subquery_scan)
+            .filter(col("test.a").gt(col("test.b")))?
+            .project(vec![col("c")])?
+            .build()?;
+
+        let plan = LogicalPlanBuilder::from(outer_scan)
+            .filter(exists(Arc::new(subquery)))?
+            .project(vec![col("test.b")])?
+            .build()?;
+
+        // Subquery and outer query refer to the same table.
+        let expected = "Projection: test.b [b:UInt32]\
+                      \n  Filter: EXISTS (<subquery>) [a:UInt32, b:UInt32, c:UInt32]\
+                      \n    Subquery: [c:UInt32]\
+                      \n      Projection: test.c [c:UInt32]\
+                      \n        Filter: test.a > test.b [a:UInt32, b:UInt32, c:UInt32]\
+                      \n          TableScan: test [a:UInt32, b:UInt32, c:UInt32]\
+                      \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
+
+        assert_plan_eq(&plan, expected)
     }
 }

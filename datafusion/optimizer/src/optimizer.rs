@@ -24,13 +24,16 @@ use crate::eliminate_cross_join::EliminateCrossJoin;
 use crate::eliminate_filter::EliminateFilter;
 use crate::eliminate_limit::EliminateLimit;
 use crate::eliminate_outer_join::EliminateOuterJoin;
+use crate::eliminate_project::EliminateProjection;
 use crate::extract_equijoin_predicate::ExtractEquijoinPredicate;
 use crate::filter_null_join_keys::FilterNullJoinKeys;
 use crate::inline_table_scan::InlineTableScan;
+use crate::merge_projection::MergeProjection;
 use crate::propagate_empty_relation::PropagateEmptyRelation;
 use crate::push_down_filter::PushDownFilter;
 use crate::push_down_limit::PushDownLimit;
 use crate::push_down_projection::PushDownProjection;
+use crate::replace_distinct_aggregate::ReplaceDistinctWithAggregate;
 use crate::rewrite_disjunctive_predicate::RewriteDisjunctivePredicate;
 use crate::scalar_subquery_to_join::ScalarSubqueryToJoin;
 use crate::simplify_expressions::SimplifyExpressions;
@@ -63,7 +66,7 @@ pub trait OptimizerRule {
 
     /// How should the rule be applied by the optimizer? See comments on [`ApplyOrder`] for details.
     ///
-    /// If a rule use default None, its should traverse recursively plan inside itself
+    /// If a rule use default None, it should traverse recursively plan inside itself
     fn apply_order(&self) -> Option<ApplyOrder> {
         None
     }
@@ -207,6 +210,7 @@ impl Optimizer {
             Arc::new(TypeCoercion::new()),
             Arc::new(SimplifyExpressions::new()),
             Arc::new(UnwrapCastInComparison::new()),
+            Arc::new(ReplaceDistinctWithAggregate::new()),
             Arc::new(DecorrelateWhereExists::new()),
             Arc::new(DecorrelateWhereIn::new()),
             Arc::new(ScalarSubqueryToJoin::new()),
@@ -215,6 +219,7 @@ impl Optimizer {
             // run it again after running the optimizations that potentially converted
             // subqueries to joins
             Arc::new(SimplifyExpressions::new()),
+            Arc::new(MergeProjection::new()),
             Arc::new(RewriteDisjunctivePredicate::new()),
             Arc::new(EliminateFilter::new()),
             Arc::new(EliminateCrossJoin::new()),
@@ -233,6 +238,7 @@ impl Optimizer {
             Arc::new(UnwrapCastInComparison::new()),
             Arc::new(CommonSubexprEliminate::new()),
             Arc::new(PushDownProjection::new()),
+            Arc::new(EliminateProjection::new()),
         ];
 
         Self::with_rules(rules)
@@ -268,12 +274,16 @@ impl Optimizer {
                 match result {
                     Ok(Some(plan)) => {
                         if !plan.schema().equivalent_names_and_types(new_plan.schema()) {
-                            return Err(DataFusionError::Internal(format!(
+                            let e = DataFusionError::Internal(format!(
                                 "Optimizer rule '{}' failed, due to generate a different schema, original schema: {:?}, new schema: {:?}",
                                 rule.name(),
                                 new_plan.schema(),
                                 plan.schema()
-                            )));
+                            ));
+                            return Err(DataFusionError::Context(
+                                rule.name().to_string(),
+                                Box::new(e),
+                            ));
                         }
                         new_plan = plan;
                         observer(&new_plan, rule.as_ref());
@@ -298,11 +308,15 @@ impl Optimizer {
                             e
                         );
                         } else {
-                            return Err(DataFusionError::Internal(format!(
+                            let e = DataFusionError::Internal(format!(
                                 "Optimizer rule '{}' failed due to unexpected error: {}",
                                 rule.name(),
                                 e
-                            )));
+                            ));
+                            return Err(DataFusionError::Context(
+                                rule.name().to_string(),
+                                Box::new(e),
+                            ));
                         }
                     }
                 }
@@ -436,7 +450,8 @@ mod tests {
         });
         let err = opt.optimize(&plan, &config, &observe).unwrap_err();
         assert_eq!(
-            "Internal error: Optimizer rule 'bad rule' failed due to unexpected error: \
+            "bad rule\ncaused by\n\
+            Internal error: Optimizer rule 'bad rule' failed due to unexpected error: \
             Error during planning: rule failed. This was likely caused by a bug in \
             DataFusion's code and we would welcome that you file an bug report in our issue tracker",
             err.to_string()
@@ -453,7 +468,8 @@ mod tests {
         });
         let err = opt.optimize(&plan, &config, &observe).unwrap_err();
         assert_eq!(
-            "Internal error: Optimizer rule 'get table_scan rule' failed, due to generate a different schema, \
+            "get table_scan rule\ncaused by\n\
+             Internal error: Optimizer rule 'get table_scan rule' failed, due to generate a different schema, \
              original schema: DFSchema { fields: [], metadata: {} }, \
              new schema: DFSchema { fields: [\
              DFField { qualifier: Some(\"test\"), field: Field { name: \"a\", data_type: UInt32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, \

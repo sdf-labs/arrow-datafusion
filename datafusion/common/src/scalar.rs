@@ -1526,7 +1526,6 @@ impl ScalarValue {
             DataType::Dictionary(key_type, value_type) => {
                 // create the values array
                 let value_scalars = scalars
-                    .into_iter()
                     .map(|scalar| match scalar {
                         ScalarValue::Dictionary(inner_key_type, scalar) => {
                             if &inner_key_type == key_type {
@@ -1592,7 +1591,8 @@ impl ScalarValue {
             | DataType::Interval(_)
             | DataType::LargeList(_)
             | DataType::Union(_, _, _)
-            | DataType::Map(_, _) => {
+            | DataType::Map(_, _)
+            | DataType::RunEndEncoded(_, _) => {
                 return Err(DataFusionError::Internal(format!(
                     "Unsupported creation of {:?} array from ScalarValue {:?}",
                     data_type,
@@ -1703,7 +1703,6 @@ impl ScalarValue {
     ) -> Decimal128Array {
         std::iter::repeat(value)
             .take(size)
-            .into_iter()
             .collect::<Decimal128Array>()
             .with_precision_and_scale(precision, scale)
             .unwrap()
@@ -2431,7 +2430,7 @@ impl From<Option<&str>> for ScalarValue {
 impl FromStr for ScalarValue {
     type Err = Infallible;
 
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(s.into())
     }
 }

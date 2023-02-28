@@ -27,7 +27,6 @@ use tokio::sync::Barrier;
 
 use arrow::{
     datatypes::{DataType, Field, Schema, SchemaRef},
-    error::{ArrowError, Result as ArrowResult},
     record_batch::RecordBatch,
 };
 use futures::Stream;
@@ -89,7 +88,7 @@ impl TestStream {
 }
 
 impl Stream for TestStream {
-    type Item = ArrowResult<RecordBatch>;
+    type Item = Result<RecordBatch>;
 
     fn poll_next(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let next_batch = self.index.value();
@@ -120,7 +119,7 @@ impl RecordBatchStream for TestStream {
 #[derive(Debug)]
 pub struct MockExec {
     /// the results to send back
-    data: Vec<ArrowResult<RecordBatch>>,
+    data: Vec<Result<RecordBatch>>,
     schema: SchemaRef,
 }
 
@@ -129,7 +128,7 @@ impl MockExec {
     /// record batches in this Exec. Note the batches are not produced
     /// immediately (the caller has to actually yield and another task
     /// must run) to ensure any poll loops are correct.
-    pub fn new(data: Vec<ArrowResult<RecordBatch>>, schema: SchemaRef) -> Self {
+    pub fn new(data: Vec<Result<RecordBatch>>, schema: SchemaRef) -> Self {
         Self { data, schema }
     }
 }
@@ -216,7 +215,7 @@ impl ExecutionPlan for MockExec {
 
     // Panics if one of the batches is an error
     fn statistics(&self) -> Statistics {
-        let data: ArrowResult<Vec<_>> = self
+        let data: Result<Vec<_>> = self
             .data
             .iter()
             .map(|r| match r {
@@ -231,10 +230,10 @@ impl ExecutionPlan for MockExec {
     }
 }
 
-fn clone_error(e: &ArrowError) -> ArrowError {
-    use ArrowError::*;
+fn clone_error(e: &DataFusionError) -> DataFusionError {
+    use DataFusionError::*;
     match e {
-        ComputeError(msg) => ComputeError(msg.to_string()),
+        Execution(msg) => Execution(msg.to_string()),
         _ => unimplemented!(),
     }
 }
@@ -508,76 +507,6 @@ impl ExecutionPlan for StatisticsExec {
     }
 }
 
-/// A mock execution plan that simply returns the provided data source characteristic
-#[derive(Debug, Clone)]
-pub struct UnboundedExec {
-    unbounded: bool,
-    schema: Arc<Schema>,
-}
-impl UnboundedExec {
-    pub fn new(unbounded: bool, schema: Schema) -> Self {
-        Self {
-            unbounded,
-            schema: Arc::new(schema),
-        }
-    }
-}
-impl ExecutionPlan for UnboundedExec {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn schema(&self) -> SchemaRef {
-        Arc::clone(&self.schema)
-    }
-
-    fn output_partitioning(&self) -> Partitioning {
-        Partitioning::UnknownPartitioning(2)
-    }
-
-    fn unbounded_output(&self, _children: &[bool]) -> Result<bool> {
-        Ok(self.unbounded)
-    }
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        None
-    }
-
-    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
-        vec![]
-    }
-
-    fn with_new_children(
-        self: Arc<Self>,
-        _: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(self)
-    }
-
-    fn execute(
-        &self,
-        _partition: usize,
-        _context: Arc<TaskContext>,
-    ) -> Result<SendableRecordBatchStream> {
-        unimplemented!("This plan only serves for testing statistics")
-    }
-
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        match t {
-            DisplayFormatType::Default => {
-                write!(f, "UnboundableExec: unbounded={}", self.unbounded,)
-            }
-        }
-    }
-
-    fn statistics(&self) -> Statistics {
-        Statistics::default()
-    }
-}
-
 /// Execution plan that emits streams that block forever.
 ///
 /// This is useful to test shutdown / cancelation behavior of certain execution plans.
@@ -683,7 +612,7 @@ pub struct BlockingStream {
 }
 
 impl Stream for BlockingStream {
-    type Item = ArrowResult<RecordBatch>;
+    type Item = Result<RecordBatch>;
 
     fn poll_next(
         self: Pin<&mut Self>,

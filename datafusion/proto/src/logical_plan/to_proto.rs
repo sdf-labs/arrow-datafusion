@@ -218,9 +218,17 @@ impl TryFrom<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
             DataType::Decimal256(_, _) => {
                 return Err(Error::General("Proto serialization error: The Decimal256 data type is not yet supported".to_owned()))
             }
-            DataType::Map(_, _) => {
+            DataType::Map(field, sorted) => {
+                Self::Map(Box::new(
+                    protobuf::Map {
+                        field_type: Some(Box::new(field.as_ref().try_into()?)),
+                        keys_sorted: *sorted,
+                    }
+                ))
+            }
+            DataType::RunEndEncoded(_, _) => {
                 return Err(Error::General(
-                    "Proto serialization error: The Map data type is not yet supported".to_owned()
+                    "Proto serialization error: The RunEndEncoded data type is not yet supported".to_owned()
                 ))
             }
         };
@@ -892,8 +900,17 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                         .collect::<Result<Vec<_>, Self::Error>>()?,
                 })),
             },
-            Expr::Placeholder{ id, data_type } => Self {
-                expr_type: Some(ExprType::Placeholder(PlaceholderNode { id: id.clone(), data_type: Some(data_type.try_into()?) })),
+            Expr::Placeholder{ id, data_type } => {
+                let data_type = match data_type {
+                    Some(data_type) => Some(data_type.try_into()?),
+                    None => None,
+                };
+                Self {
+                    expr_type: Some(ExprType::Placeholder(PlaceholderNode {
+                        id: id.clone(),
+                        data_type,
+                    })),
+                }
             },
 
             Expr::QualifiedWildcard { .. } | Expr::TryCast { .. } =>

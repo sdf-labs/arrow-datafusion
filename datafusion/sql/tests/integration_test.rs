@@ -34,6 +34,14 @@ use datafusion_expr::{AggregateUDF, ScalarUDF};
 use datafusion_sql::parser::DFParser;
 use datafusion_sql::planner::{ContextProvider, ParserOptions, SqlToRel};
 
+use rstest::rstest;
+
+#[cfg(test)]
+#[ctor::ctor]
+fn init() {
+    // let _ = env_logger::try_init();
+}
+
 #[test]
 fn parse_decimals() {
     let test_data = [
@@ -56,8 +64,41 @@ fn parse_decimals() {
             &expected,
             ParserOptions {
                 parse_float_as_decimal: true,
+                enable_ident_normalization: false,
             },
         );
+    }
+}
+
+#[test]
+fn parse_ident_normalization() {
+    let test_data = [
+        (
+            "SELECT age FROM person",
+            "Ok(Projection: person.age\n  TableScan: person)",
+            true,
+        ),
+        (
+            "SELECT AGE FROM PERSON",
+            "Ok(Projection: person.age\n  TableScan: person)",
+            true,
+        ),
+        (
+            "SELECT AGE FROM PERSON",
+            "Err(Plan(\"No table named: PERSON found\"))",
+            false,
+        ),
+    ];
+
+    for (sql, expected, enable_ident_normalization) in test_data {
+        let plan = logical_plan_with_options(
+            sql,
+            ParserOptions {
+                parse_float_as_decimal: false,
+                enable_ident_normalization,
+            },
+        );
+        assert_eq!(expected, format!("{plan:?}"));
     }
 }
 
@@ -155,6 +196,103 @@ fn cast_to_invalid_decimal_type() {
             format!("{err:?}")
         );
     }
+}
+
+#[test]
+fn plan_insert() {
+    let sql =
+        "insert into person (id, first_name, last_name) values (1, 'Alan', 'Turing')";
+    let plan = r#"
+Dml: op=[Insert] table=[person]
+  Projection: CAST(column1 AS UInt32) AS id, column2 AS first_name, column3 AS last_name
+    Values: (Int64(1), Utf8("Alan"), Utf8("Turing"))
+    "#
+    .trim();
+    quick_test(sql, plan);
+}
+
+#[test]
+fn plan_insert_no_target_columns() {
+    let sql = "INSERT INTO test_decimal VALUES (1, 2), (3, 4)";
+    let plan = r#"
+Dml: op=[Insert] table=[test_decimal]
+  Projection: CAST(column1 AS Int32) AS id, CAST(column2 AS Decimal128(10, 2)) AS price
+    Values: (Int64(1), Int64(2)), (Int64(3), Int64(4))
+    "#
+    .trim();
+    quick_test(sql, plan);
+}
+
+#[rstest]
+#[case::duplicate_columns(
+    "INSERT INTO test_decimal (id, price, price) VALUES (1, 2, 3), (4, 5, 6)",
+    "Schema error: Schema contains duplicate unqualified field name 'price'"
+)]
+#[case::non_existing_column(
+    "INSERT INTO test_decimal (nonexistent, price) VALUES (1, 2), (4, 5)",
+    "Schema error: No field named 'nonexistent'. Valid fields are 'id', 'price'."
+)]
+#[case::type_mismatch(
+    "INSERT INTO test_decimal SELECT '2022-01-01', to_timestamp('2022-01-01T12:00:00')",
+    "Error during planning: Cannot automatically convert Timestamp(Nanosecond, None) to Decimal128(10, 2)"
+)]
+#[case::target_column_count_mismatch(
+    "INSERT INTO person (id, first_name, last_name) VALUES ($1, $2)",
+    "Error during planning: Column count doesn't match insert query!"
+)]
+#[case::source_column_count_mismatch(
+    "INSERT INTO person VALUES ($1, $2)",
+    "Error during planning: Column count doesn't match insert query!"
+)]
+#[case::extra_placeholder(
+    "INSERT INTO person (id, first_name, last_name) VALUES ($1, $2, $3, $4)",
+    "Error during planning: Placeholder $4 refers to a non existent column"
+)]
+#[case::placeholder_type_unresolved(
+    "INSERT INTO person (id, first_name, last_name) VALUES ($2, $4, $6)",
+    "Error during planning: Placeholder type could not be resolved"
+)]
+#[test]
+fn test_insert_schema_errors(#[case] sql: &str, #[case] error: &str) {
+    let err = logical_plan(sql).unwrap_err();
+    assert_eq!(err.to_string(), error)
+}
+
+#[test]
+fn plan_update() {
+    let sql = "update person set last_name='Kay' where id=1";
+    let plan = r#"
+Dml: op=[Update] table=[person]
+  Projection: person.id AS id, person.first_name AS first_name, Utf8("Kay") AS last_name, person.age AS age, person.state AS state, person.salary AS salary, person.birth_date AS birth_date, person.😀 AS 😀
+    Filter: id = Int64(1)
+      TableScan: person
+      "#
+    .trim();
+    quick_test(sql, plan);
+}
+
+#[rstest]
+#[case::missing_assignement_target("UPDATE person SET doesnotexist = true")]
+#[case::missing_assignement_expression("UPDATE person SET age = doesnotexist + 42")]
+#[case::missing_selection_expression(
+    "UPDATE person SET age = 42 WHERE doesnotexist = true"
+)]
+#[test]
+fn update_column_does_not_exist(#[case] sql: &str) {
+    let err = logical_plan(sql).expect_err("query should have failed");
+    assert_field_not_found(err, "doesnotexist");
+}
+
+#[test]
+fn plan_delete() {
+    let sql = "delete from person where id=1";
+    let plan = r#"
+Dml: op=[Delete] table=[person]
+  Filter: id = Int64(1)
+    TableScan: person
+    "#
+    .trim();
+    quick_test(sql, plan);
 }
 
 #[test]
@@ -377,7 +515,7 @@ fn select_with_ambiguous_column() {
     let sql = "SELECT id FROM person a, person b";
     let err = logical_plan(sql).expect_err("query should have failed");
     assert_eq!(
-        "Internal(\"column reference id is ambiguous\")",
+        "Plan(\"column reference id is ambiguous\")",
         format!("{err:?}")
     );
 }
@@ -392,6 +530,64 @@ fn join_with_ambiguous_column() {
                         \n      TableScan: person\
                         \n    SubqueryAlias: b\
                         \n      TableScan: person";
+    quick_test(sql, expected);
+}
+
+#[test]
+fn where_selection_with_ambiguous_column() {
+    let sql = "SELECT * FROM person a, person b WHERE id = id + 1";
+    let err = logical_plan(sql).expect_err("query should have failed");
+    assert_eq!(
+        "Plan(\"column reference id is ambiguous\")",
+        format!("{err:?}")
+    );
+}
+
+#[test]
+fn natural_join() {
+    let sql = "SELECT * FROM lineitem a NATURAL JOIN lineitem b";
+    let expected = "Projection: a.l_item_id, a.l_description, a.price\
+                        \n  Inner Join: Using a.l_item_id = b.l_item_id, a.l_description = b.l_description, a.price = b.price\
+                        \n    SubqueryAlias: a\
+                        \n      TableScan: lineitem\
+                        \n    SubqueryAlias: b\
+                        \n      TableScan: lineitem";
+    quick_test(sql, expected);
+}
+
+#[test]
+fn natural_left_join() {
+    let sql = "SELECT l_item_id FROM lineitem a NATURAL LEFT JOIN lineitem b";
+    let expected = "Projection: a.l_item_id\
+                        \n  Left Join: Using a.l_item_id = b.l_item_id, a.l_description = b.l_description, a.price = b.price\
+                        \n    SubqueryAlias: a\
+                        \n      TableScan: lineitem\
+                        \n    SubqueryAlias: b\
+                        \n      TableScan: lineitem";
+    quick_test(sql, expected);
+}
+
+#[test]
+fn natural_right_join() {
+    let sql = "SELECT l_item_id FROM lineitem a NATURAL RIGHT JOIN lineitem b";
+    let expected = "Projection: a.l_item_id\
+                        \n  Right Join: Using a.l_item_id = b.l_item_id, a.l_description = b.l_description, a.price = b.price\
+                        \n    SubqueryAlias: a\
+                        \n      TableScan: lineitem\
+                        \n    SubqueryAlias: b\
+                        \n      TableScan: lineitem";
+    quick_test(sql, expected);
+}
+
+#[test]
+fn natural_join_no_common_becomes_cross_join() {
+    let sql = "SELECT * FROM person a NATURAL JOIN lineitem b";
+    let expected = "Projection: a.id, a.first_name, a.last_name, a.age, a.state, a.salary, a.birth_date, a.😀, b.l_item_id, b.l_description, b.price\
+                        \n  CrossJoin:\
+                        \n    SubqueryAlias: a\
+                        \n      TableScan: person\
+                        \n    SubqueryAlias: b\
+                        \n      TableScan: lineitem";
     quick_test(sql, expected);
 }
 
@@ -1381,6 +1577,27 @@ fn create_external_table_csv() {
 }
 
 #[test]
+fn create_schema_with_quoted_name() {
+    let sql = "CREATE SCHEMA \"quoted_schema_name\"";
+    let expected = "CreateCatalogSchema: \"quoted_schema_name\"";
+    quick_test(sql, expected);
+}
+
+#[test]
+fn create_schema_with_quoted_unnormalized_name() {
+    let sql = "CREATE SCHEMA \"Foo\"";
+    let expected = "CreateCatalogSchema: \"Foo\"";
+    quick_test(sql, expected);
+}
+
+#[test]
+fn create_schema_with_unquoted_normalized_name() {
+    let sql = "CREATE SCHEMA Foo";
+    let expected = "CreateCatalogSchema: \"foo\"";
+    quick_test(sql, expected);
+}
+
+#[test]
 fn create_external_table_custom() {
     let sql = "CREATE EXTERNAL TABLE dt STORED AS DELTATABLE LOCATION 's3://bucket/schema/table';";
     let expected = r#"CreateExternalTable: Bare { table: "dt" }"#;
@@ -1885,27 +2102,6 @@ fn over_order_by_with_window_frame_single_end() {
 }
 
 #[test]
-fn over_order_by_with_window_frame_range_order_by_check() {
-    let sql = "SELECT order_id, MAX(qty) OVER (RANGE UNBOUNDED PRECEDING) from orders";
-    let err = logical_plan(sql).expect_err("query should have failed");
-    assert_eq!(
-            "Plan(\"With window frame of type RANGE, the order by expression must be of length 1, got 0\")",
-            format!("{err:?}")
-        );
-}
-
-#[test]
-fn over_order_by_with_window_frame_range_order_by_check_2() {
-    let sql =
-            "SELECT order_id, MAX(qty) OVER (ORDER BY order_id, qty RANGE UNBOUNDED PRECEDING) from orders";
-    let err = logical_plan(sql).expect_err("query should have failed");
-    assert_eq!(
-            "Plan(\"With window frame of type RANGE, the order by expression must be of length 1, got 2\")",
-            format!("{err:?}")
-        );
-}
-
-#[test]
 fn over_order_by_with_window_frame_single_end_groups() {
     let sql = "SELECT order_id, MAX(qty) OVER (ORDER BY order_id GROUPS 3 PRECEDING), MIN(qty) OVER (ORDER BY order_id DESC) from orders";
     let expected = "\
@@ -2137,6 +2333,48 @@ fn select_multibyte_column() {
     let sql = r#"SELECT "😀" FROM person"#;
     let expected = "Projection: person.😀\
             \n  TableScan: person";
+    quick_test(sql, expected);
+}
+
+#[test]
+fn select_groupby_orderby() {
+    // ensure that references are correctly resolved in the order by clause
+    // see https://github.com/apache/arrow-datafusion/issues/4854
+    let sql = r#"SELECT
+  avg(age) AS "value",
+  date_trunc('month', birth_date) AS "birth_date"
+  FROM person GROUP BY birth_date ORDER BY birth_date;
+"#;
+    // expect that this is not an ambiguous reference
+    let expected =
+        "Sort: birth_date ASC NULLS LAST\
+         \n  Projection: AVG(person.age) AS value, datetrunc(Utf8(\"month\"), person.birth_date) AS birth_date\
+         \n    Aggregate: groupBy=[[person.birth_date]], aggr=[[AVG(person.age)]]\
+         \n      TableScan: person";
+    quick_test(sql, expected);
+
+    // Use fully qualified `person.birth_date` as argument to date_trunc, plan should be the same
+    let sql = r#"SELECT
+  avg(age) AS "value",
+  date_trunc('month', person.birth_date) AS "birth_date"
+  FROM person GROUP BY birth_date ORDER BY birth_date;
+"#;
+    quick_test(sql, expected);
+
+    // Use fully qualified `person.birth_date` as group by, plan should be the same
+    let sql = r#"SELECT
+  avg(age) AS "value",
+  date_trunc('month', birth_date) AS "birth_date"
+  FROM person GROUP BY person.birth_date ORDER BY birth_date;
+"#;
+    quick_test(sql, expected);
+
+    // Use fully qualified `person.birth_date` in both group and date_trunc, plan should be the same
+    let sql = r#"SELECT
+  avg(age) AS "value",
+  date_trunc('month', person.birth_date) AS "birth_date"
+  FROM person GROUP BY person.birth_date ORDER BY birth_date;
+"#;
     quick_test(sql, expected);
 }
 
@@ -2702,7 +2940,7 @@ fn hive_aggregate_with_filter() -> Result<()> {
 fn order_by_unaliased_name() {
     // https://github.com/apache/arrow-datafusion/issues/3160
     // This query was failing with:
-    // SchemaError(FieldNotFound { qualifier: Some("p"), name: "state", valid_fields: Some(["z", "q"]) })
+    // SchemaError(FieldNotFound { qualifier: Some("p"), name: "state", valid_fields: ["z", "q"] })
     let sql =
         "select p.state z, sum(age) q from person p group by p.state order by p.state";
     let expected = "Projection: z, q\
@@ -2955,6 +3193,28 @@ fn test_select_join_key_inner_join() {
 }
 
 #[test]
+fn test_select_order_by() {
+    let sql = "SELECT '1' from person order by id";
+
+    let expected = "Projection: Utf8(\"1\")\n  Sort: person.id ASC NULLS LAST\n    Projection: Utf8(\"1\"), person.id\n      TableScan: person";
+    quick_test(sql, expected);
+}
+
+#[test]
+fn test_select_distinct_order_by() {
+    let sql = "SELECT distinct '1' from person order by id";
+
+    let expected =
+        "Error during planning: For SELECT DISTINCT, ORDER BY expressions id must appear in select list";
+
+    // It should return error.
+    let result = logical_plan(sql);
+    assert!(result.is_err());
+    let err = result.err().unwrap();
+    assert_eq!(err.to_string(), expected);
+}
+
+#[test]
 fn test_duplicated_left_join_key_inner_join() {
     //  person.id * 2 happen twice in left side.
     let sql = "SELECT person.id, person.age
@@ -3018,7 +3278,7 @@ fn test_ambiguous_column_references_with_in_using_join() {
 }
 
 #[test]
-#[should_panic(expected = "value: Internal(\"Invalid placeholder, not a number: $foo\"")]
+#[should_panic(expected = "value: Plan(\"Invalid placeholder, not a number: $foo\"")]
 fn test_prepare_statement_to_plan_panic_param_format() {
     // param is not number following the $ sign
     // panic due to error returned from the parser
@@ -3037,7 +3297,7 @@ fn test_prepare_statement_to_plan_panic_prepare_wrong_syntax() {
 
 #[test]
 #[should_panic(
-    expected = "value: SchemaError(FieldNotFound { field: Column { relation: None, name: \"id\" }, valid_fields: Some([]) })"
+    expected = "value: SchemaError(FieldNotFound { field: Column { relation: None, name: \"id\" }, valid_fields: [] })"
 )]
 fn test_prepare_statement_to_plan_panic_no_relation_and_constant_param() {
     let sql = "PREPARE my_plan(INT) AS SELECT id + $1";
@@ -3045,13 +3305,16 @@ fn test_prepare_statement_to_plan_panic_no_relation_and_constant_param() {
 }
 
 #[test]
-#[should_panic(
-    expected = "value: Internal(\"Placehoder $2 does not exist in the parameter list: [Int32]\")"
-)]
-fn test_prepare_statement_to_plan_panic_no_data_types() {
+fn test_prepare_statement_should_infer_types() {
     // only provide 1 data type while using 2 params
     let sql = "PREPARE my_plan(INT) AS SELECT 1 + $1 + $2";
-    logical_plan(sql).unwrap();
+    let plan = logical_plan(sql).unwrap();
+    let actual_types = plan.get_parameter_types().unwrap();
+    let expected_types = HashMap::from([
+        ("$1".to_string(), Some(DataType::Int32)),
+        ("$2".to_string(), Some(DataType::Int64)),
+    ]);
+    assert_eq!(actual_types, expected_types);
 }
 
 #[test]
@@ -3196,6 +3459,187 @@ fn test_prepare_statement_to_plan_params_as_constants() {
         ScalarValue::Float64(Some(10.0)),
     ];
     let expected_plan = "Projection: Int64(1) + Int32(10) + Float64(10)\n  EmptyRelation";
+
+    prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
+}
+
+#[test]
+fn test_prepare_statement_infer_types_from_join() {
+    let sql =
+        "SELECT id, order_id FROM person JOIN orders ON id = customer_id and age = $1";
+
+    let expected_plan = r#"
+Projection: person.id, orders.order_id
+  Inner Join:  Filter: person.id = orders.customer_id AND person.age = $1
+    TableScan: person
+    TableScan: orders
+    "#
+    .trim();
+
+    let expected_dt = "[Int32]";
+    let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+
+    let actual_types = plan.get_parameter_types().unwrap();
+    let expected_types = HashMap::from([("$1".to_string(), Some(DataType::Int32))]);
+    assert_eq!(actual_types, expected_types);
+
+    // replace params with values
+    let param_values = vec![ScalarValue::Int32(Some(10))];
+    let expected_plan = r#"
+Projection: person.id, orders.order_id
+  Inner Join:  Filter: person.id = orders.customer_id AND person.age = Int32(10)
+    TableScan: person
+    TableScan: orders
+    "#
+    .trim();
+    let plan = plan.replace_params_with_values(&param_values).unwrap();
+
+    prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
+}
+
+#[test]
+fn test_prepare_statement_infer_types_from_predicate() {
+    let sql = "SELECT id, age FROM person WHERE age = $1";
+
+    let expected_plan = r#"
+Projection: person.id, person.age
+  Filter: person.age = $1
+    TableScan: person
+        "#
+    .trim();
+
+    let expected_dt = "[Int32]";
+    let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+
+    let actual_types = plan.get_parameter_types().unwrap();
+    let expected_types = HashMap::from([("$1".to_string(), Some(DataType::Int32))]);
+    assert_eq!(actual_types, expected_types);
+
+    // replace params with values
+    let param_values = vec![ScalarValue::Int32(Some(10))];
+    let expected_plan = r#"
+Projection: person.id, person.age
+  Filter: person.age = Int32(10)
+    TableScan: person
+        "#
+    .trim();
+    let plan = plan.replace_params_with_values(&param_values).unwrap();
+
+    prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
+}
+
+#[test]
+fn test_prepare_statement_infer_types_subquery() {
+    let sql = "SELECT id, age FROM person WHERE age = (select max(age) from person where id = $1)";
+
+    let expected_plan = r#"
+Projection: person.id, person.age
+  Filter: person.age = (<subquery>)
+    Subquery:
+      Projection: MAX(person.age)
+        Aggregate: groupBy=[[]], aggr=[[MAX(person.age)]]
+          Filter: person.id = $1
+            TableScan: person
+    TableScan: person
+        "#
+    .trim();
+
+    let expected_dt = "[Int32]";
+    let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+
+    let actual_types = plan.get_parameter_types().unwrap();
+    let expected_types = HashMap::from([("$1".to_string(), Some(DataType::UInt32))]);
+    assert_eq!(actual_types, expected_types);
+
+    // replace params with values
+    let param_values = vec![ScalarValue::UInt32(Some(10))];
+    let expected_plan = r#"
+Projection: person.id, person.age
+  Filter: person.age = (<subquery>)
+    Subquery:
+      Projection: MAX(person.age)
+        Aggregate: groupBy=[[]], aggr=[[MAX(person.age)]]
+          Filter: person.id = UInt32(10)
+            TableScan: person
+    TableScan: person
+        "#
+    .trim();
+    let plan = plan.replace_params_with_values(&param_values).unwrap();
+
+    prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
+}
+
+#[test]
+fn test_prepare_statement_update_infer() {
+    let sql = "update person set age=$1 where id=$2";
+
+    let expected_plan = r#"
+Dml: op=[Update] table=[person]
+  Projection: person.id AS id, person.first_name AS first_name, person.last_name AS last_name, $1 AS age, person.state AS state, person.salary AS salary, person.birth_date AS birth_date, person.😀 AS 😀
+    Filter: id = $2
+      TableScan: person
+        "#
+        .trim();
+
+    let expected_dt = "[Int32]";
+    let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+
+    let actual_types = plan.get_parameter_types().unwrap();
+    let expected_types = HashMap::from([
+        ("$1".to_string(), Some(DataType::Int32)),
+        ("$2".to_string(), Some(DataType::UInt32)),
+    ]);
+    assert_eq!(actual_types, expected_types);
+
+    // replace params with values
+    let param_values = vec![ScalarValue::Int32(Some(42)), ScalarValue::UInt32(Some(1))];
+    let expected_plan = r#"
+Dml: op=[Update] table=[person]
+  Projection: person.id AS id, person.first_name AS first_name, person.last_name AS last_name, Int32(42) AS age, person.state AS state, person.salary AS salary, person.birth_date AS birth_date, person.😀 AS 😀
+    Filter: id = UInt32(1)
+      TableScan: person
+        "#
+        .trim();
+    let plan = plan.replace_params_with_values(&param_values).unwrap();
+
+    prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
+}
+
+#[test]
+fn test_prepare_statement_insert_infer() {
+    let sql = "insert into person (id, first_name, last_name) values ($1, $2, $3)";
+
+    let expected_plan = r#"
+Dml: op=[Insert] table=[person]
+  Projection: column1 AS id, column2 AS first_name, column3 AS last_name
+    Values: ($1, $2, $3)
+        "#
+    .trim();
+
+    let expected_dt = "[Int32]";
+    let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+
+    let actual_types = plan.get_parameter_types().unwrap();
+    let expected_types = HashMap::from([
+        ("$1".to_string(), Some(DataType::UInt32)),
+        ("$2".to_string(), Some(DataType::Utf8)),
+        ("$3".to_string(), Some(DataType::Utf8)),
+    ]);
+    assert_eq!(actual_types, expected_types);
+
+    // replace params with values
+    let param_values = vec![
+        ScalarValue::UInt32(Some(1)),
+        ScalarValue::Utf8(Some("Alan".to_string())),
+        ScalarValue::Utf8(Some("Turing".to_string())),
+    ];
+    let expected_plan = r#"
+Dml: op=[Insert] table=[person]
+  Projection: column1 AS id, column2 AS first_name, column3 AS last_name
+    Values: (UInt32(1), Utf8("Alan"), Utf8("Turing"))
+        "#
+    .trim();
+    let plan = plan.replace_params_with_values(&param_values).unwrap();
 
     prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
 }

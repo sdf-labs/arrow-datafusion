@@ -68,10 +68,11 @@ execution. The plan is evaluated (executed) when an action method is invoked, su
 | filter              | Filter a DataFrame to only include rows that match the specified filter expression.                                                        |
 | intersect           | Calculate the intersection of two DataFrames. The two DataFrames must have exactly the same schema                                         |
 | join                | Join this DataFrame with another DataFrame using the specified columns as join keys.                                                       |
+| join_on             | Join this DataFrame with another DataFrame using arbitrary expressions.                                                                    |
 | limit               | Limit the number of rows returned from this DataFrame.                                                                                     |
 | repartition         | Repartition a DataFrame based on a logical partitioning scheme.                                                                            |
 | sort                | Sort the DataFrame by the specified sorting expressions. Any expression can be turned into a sort expression by calling its `sort` method. |
-| select              | Create a projection based on arbitrary expressions. Example: `df..select(vec![col("c1"), abs(col("c2"))])?`                                |
+| select              | Create a projection based on arbitrary expressions. Example: `df.select(vec![col("c1"), abs(col("c2"))])?`                                 |
 | select_columns      | Create a projection based on column names. Example: `df.select_columns(&["id", "name"])?`.                                                 |
 | union               | Calculate the union of two DataFrames, preserving duplicate rows. The two DataFrames must have exactly the same schema.                    |
 | union_distinct      | Calculate the distinct union of two DataFrames. The two DataFrames must have exactly the same schema.                                      |
@@ -86,6 +87,7 @@ These methods execute the logical plan represented by the DataFrame and either c
 | -------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
 | collect                    | Executes this DataFrame and collects all results into a vector of RecordBatch.                                              |
 | collect_partitioned        | Executes this DataFrame and collects all results into a vector of vector of RecordBatch maintaining the input partitioning. |
+| count                      | Executes this DataFrame to get the total number of rows.                                                                    |
 | execute_stream             | Executes this DataFrame and returns a stream over a single partition.                                                       |
 | execute_stream_partitioned | Executes this DataFrame and returns one stream per partition.                                                               |
 | show                       | Execute this DataFrame and print the results to stdout.                                                                     |

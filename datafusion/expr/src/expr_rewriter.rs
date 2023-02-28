@@ -21,14 +21,16 @@ use crate::expr::{
     AggregateFunction, Between, BinaryExpr, Case, Cast, GetIndexedField, GroupingSet,
     Like, Sort, TryCast, WindowFunction,
 };
-use crate::logical_plan::{Aggregate, Projection};
-use crate::utils::{from_plan, grouping_set_to_exprlist};
+use crate::logical_plan::Projection;
 use crate::{Expr, ExprSchemable, LogicalPlan};
 use datafusion_common::Result;
 use datafusion_common::{Column, DFSchema};
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
+
+mod order_by;
+pub use order_by::rewrite_sort_cols_by_aggs;
 
 /// Controls how the [ExprRewriter] recursion should proceed.
 pub enum RewriteRecursion {
@@ -44,8 +46,46 @@ pub enum RewriteRecursion {
 
 /// Trait for potentially recursively rewriting an [`Expr`] expression
 /// tree. When passed to `Expr::rewrite`, `ExpressionVisitor::mutate` is
-/// invoked recursively on all nodes of an expression tree. See the
-/// comments on `Expr::rewrite` for details on its use
+/// invoked recursively on all nodes of an expression tree.
+///
+/// Performs a depth first walk of an expression and its children
+/// to rewrite an expression, consuming `self` producing a new
+/// [`Expr`].
+///
+/// Implements a modified version of the [visitor
+/// pattern](https://en.wikipedia.org/wiki/Visitor_pattern) to
+/// separate algorithms from the structure of the `Expr` tree and
+/// make it easier to write new, efficient expression
+/// transformation algorithms.
+///
+/// For an expression tree such as
+/// ```text
+/// BinaryExpr (GT)
+///    left: Column("foo")
+///    right: Column("bar")
+/// ```
+///
+/// The nodes are visited using the following order
+/// ```text
+/// pre_visit(BinaryExpr(GT))
+/// pre_visit(Column("foo"))
+/// mutate(Column("foo"))
+/// pre_visit(Column("bar"))
+/// mutate(Column("bar"))
+/// mutate(BinaryExpr(GT))
+/// ```
+///
+/// If an `Err` result is returned, recursion is stopped immediately
+///
+/// If [`false`] is returned on a call to pre_visit, no
+/// children of that expression are visited, nor is mutate
+/// called on that expression
+///
+/// # See Also:
+/// * [`Expr::accept`] to drive a rewriter through an [`Expr`]
+/// * [`rewrite_expr`]: For rewriting an [`Expr`] using functions
+///
+/// [`Expr::accept`]: crate::expr_visitor::ExprVisitable::accept
 pub trait ExprRewriter<E: ExprRewritable = Expr>: Sized {
     /// Invoked before any children of `expr` are rewritten /
     /// visited. Default implementation returns `Ok(RewriteRecursion::Continue)`
@@ -58,46 +98,14 @@ pub trait ExprRewriter<E: ExprRewritable = Expr>: Sized {
     fn mutate(&mut self, expr: E) -> Result<E>;
 }
 
-/// a trait for marking types that are rewritable by [ExprRewriter]
+/// A trait for marking types that are rewritable by [ExprRewriter]
 pub trait ExprRewritable: Sized {
-    /// rewrite the expression tree using the given [ExprRewriter]
+    /// Rewrite the expression tree using the given [ExprRewriter]
     fn rewrite<R: ExprRewriter<Self>>(self, rewriter: &mut R) -> Result<Self>;
 }
 
 impl ExprRewritable for Expr {
-    /// Performs a depth first walk of an expression and its children
-    /// to rewrite an expression, consuming `self` producing a new
-    /// [`Expr`].
-    ///
-    /// Implements a modified version of the [visitor
-    /// pattern](https://en.wikipedia.org/wiki/Visitor_pattern) to
-    /// separate algorithms from the structure of the `Expr` tree and
-    /// make it easier to write new, efficient expression
-    /// transformation algorithms.
-    ///
-    /// For an expression tree such as
-    /// ```text
-    /// BinaryExpr (GT)
-    ///    left: Column("foo")
-    ///    right: Column("bar")
-    /// ```
-    ///
-    /// The nodes are visited using the following order
-    /// ```text
-    /// pre_visit(BinaryExpr(GT))
-    /// pre_visit(Column("foo"))
-    /// mutate(Column("foo"))
-    /// pre_visit(Column("bar"))
-    /// mutate(Column("bar"))
-    /// mutate(BinaryExpr(GT))
-    /// ```
-    ///
-    /// If an Err result is returned, recursion is stopped immediately
-    ///
-    /// If [`false`] is returned on a call to pre_visit, no
-    /// children of that expression are visited, nor is mutate
-    /// called on that expression
-    ///
+    /// See comments on [`ExprRewritable`] for details
     fn rewrite<R>(self, rewriter: &mut R) -> Result<Self>
     where
         R: ExprRewriter<Self>,
@@ -325,7 +333,7 @@ where
         .transpose()
 }
 
-/// rewrite a `Vec` of `Expr`s with the rewriter
+/// Rewrite a `Vec` of `Expr`s with the rewriter
 fn rewrite_vec<R>(v: Vec<Expr>, rewriter: &mut R) -> Result<Vec<Expr>>
 where
     R: ExprRewriter,
@@ -333,127 +341,31 @@ where
     v.into_iter().map(|expr| expr.rewrite(rewriter)).collect()
 }
 
-/// Rewrite sort on aggregate expressions to sort on the column of aggregate output
-/// For example, `max(x)` is written to `col("MAX(x)")`
-pub fn rewrite_sort_cols_by_aggs(
-    exprs: impl IntoIterator<Item = impl Into<Expr>>,
-    plan: &LogicalPlan,
-) -> Result<Vec<Expr>> {
-    exprs
-        .into_iter()
-        .map(|e| {
-            let expr = e.into();
-            match expr {
-                Expr::Sort(Sort {
-                    expr,
-                    asc,
-                    nulls_first,
-                }) => {
-                    let sort = Expr::Sort(Sort::new(
-                        Box::new(rewrite_sort_col_by_aggs(*expr, plan)?),
-                        asc,
-                        nulls_first,
-                    ));
-                    Ok(sort)
-                }
-                expr => Ok(expr),
-            }
-        })
-        .collect()
-}
-
-fn rewrite_sort_col_by_aggs(expr: Expr, plan: &LogicalPlan) -> Result<Expr> {
-    match plan {
-        LogicalPlan::Aggregate(Aggregate {
-            input,
-            aggr_expr,
-            group_expr,
-            ..
-        }) => {
-            struct Rewriter<'a> {
-                plan: &'a LogicalPlan,
-                input: &'a LogicalPlan,
-                aggr_expr: &'a Vec<Expr>,
-                distinct_group_exprs: &'a Vec<Expr>,
-            }
-
-            impl<'a> ExprRewriter for Rewriter<'a> {
-                fn mutate(&mut self, expr: Expr) -> Result<Expr> {
-                    let normalized_expr = normalize_col(expr.clone(), self.plan);
-                    if normalized_expr.is_err() {
-                        // The expr is not based on Aggregate plan output. Skip it.
-                        return Ok(expr);
-                    }
-                    let normalized_expr = normalized_expr?;
-                    if let Some(found_agg) = self
-                        .aggr_expr
-                        .iter()
-                        .chain(self.distinct_group_exprs)
-                        .find(|a| (**a) == normalized_expr)
-                    {
-                        let agg = normalize_col(found_agg.clone(), self.plan)?;
-                        let col = Expr::Column(
-                            agg.to_field(self.input.schema())
-                                .map(|f| f.qualified_column())?,
-                        );
-                        Ok(col)
-                    } else {
-                        Ok(expr)
-                    }
-                }
-            }
-
-            let distinct_group_exprs = grouping_set_to_exprlist(group_expr.as_slice())?;
-            expr.rewrite(&mut Rewriter {
-                plan,
-                input,
-                aggr_expr,
-                distinct_group_exprs: &distinct_group_exprs,
-            })
-        }
-        LogicalPlan::Projection(_) => rewrite_sort_col_by_aggs(expr, plan.inputs()[0]),
-        _ => Ok(expr),
-    }
-}
-
-/// Recursively call [`Column::normalize_with_schemas`] on all Column expressions
+/// Recursively call [`Column::normalize_with_schemas`] on all [`Column`] expressions
 /// in the `expr` expression tree.
 pub fn normalize_col(expr: Expr, plan: &LogicalPlan) -> Result<Expr> {
     normalize_col_with_schemas(expr, &plan.all_schemas(), &plan.using_columns()?)
 }
 
-/// Recursively call [`Column::normalize_with_schemas`] on all Column expressions
+/// Recursively call [`Column::normalize_with_schemas`] on all [`Column`] expressions
 /// in the `expr` expression tree.
 pub fn normalize_col_with_schemas(
     expr: Expr,
     schemas: &[&Arc<DFSchema>],
     using_columns: &[HashSet<Column>],
 ) -> Result<Expr> {
-    struct ColumnNormalizer<'a> {
-        schemas: &'a [&'a Arc<DFSchema>],
-        using_columns: &'a [HashSet<Column>],
-    }
-
-    impl<'a> ExprRewriter for ColumnNormalizer<'a> {
-        fn mutate(&mut self, expr: Expr) -> Result<Expr> {
-            if let Expr::Column(c) = expr {
-                Ok(Expr::Column(c.normalize_with_schemas(
-                    self.schemas,
-                    self.using_columns,
-                )?))
-            } else {
-                Ok(expr)
-            }
+    rewrite_expr(expr, |expr| {
+        if let Expr::Column(c) = expr {
+            Ok(Expr::Column(
+                c.normalize_with_schemas(schemas, using_columns)?,
+            ))
+        } else {
+            Ok(expr)
         }
-    }
-
-    expr.rewrite(&mut ColumnNormalizer {
-        schemas,
-        using_columns,
     })
 }
 
-/// Recursively normalize all Column expressions in a list of expression trees
+/// Recursively normalize all [`Column`] expressions in a list of expression trees
 pub fn normalize_cols(
     exprs: impl IntoIterator<Item = impl Into<Expr>>,
     plan: &LogicalPlan,
@@ -464,27 +376,19 @@ pub fn normalize_cols(
         .collect()
 }
 
-/// Recursively replace all Column expressions in a given expression tree with Column expressions
-/// provided by the hash map argument.
+/// Recursively replace all [`Column`] expressions in a given expression tree with
+/// `Column` expressions provided by the hash map argument.
 pub fn replace_col(e: Expr, replace_map: &HashMap<&Column, &Column>) -> Result<Expr> {
-    struct ColumnReplacer<'a> {
-        replace_map: &'a HashMap<&'a Column, &'a Column>,
-    }
-
-    impl<'a> ExprRewriter for ColumnReplacer<'a> {
-        fn mutate(&mut self, expr: Expr) -> Result<Expr> {
-            if let Expr::Column(c) = &expr {
-                match self.replace_map.get(c) {
-                    Some(new_c) => Ok(Expr::Column((*new_c).to_owned())),
-                    None => Ok(expr),
-                }
-            } else {
-                Ok(expr)
+    rewrite_expr(e, |expr| {
+        if let Expr::Column(c) = &expr {
+            match replace_map.get(c) {
+                Some(new_c) => Ok(Expr::Column((*new_c).to_owned())),
+                None => Ok(expr),
             }
+        } else {
+            Ok(expr)
         }
-    }
-
-    e.rewrite(&mut ColumnReplacer { replace_map })
+    })
 }
 
 /// Recursively 'unnormalize' (remove all qualifiers) from an
@@ -493,30 +397,68 @@ pub fn replace_col(e: Expr, replace_map: &HashMap<&Column, &Column>) -> Result<E
 /// For example, if there were expressions like `foo.bar` this would
 /// rewrite it to just `bar`.
 pub fn unnormalize_col(expr: Expr) -> Expr {
-    struct RemoveQualifier {}
-
-    impl ExprRewriter for RemoveQualifier {
-        fn mutate(&mut self, expr: Expr) -> Result<Expr> {
-            if let Expr::Column(col) = expr {
-                // let Column { relation: _, name } = col;
-                Ok(Expr::Column(Column {
-                    relation: None,
-                    name: col.name,
-                }))
-            } else {
-                Ok(expr)
-            }
+    rewrite_expr(expr, |expr| {
+        if let Expr::Column(col) = expr {
+            Ok(Expr::Column(Column {
+                relation: None,
+                name: col.name,
+            }))
+        } else {
+            Ok(expr)
         }
-    }
-
-    expr.rewrite(&mut RemoveQualifier {})
-        .expect("Unnormalize is infallable")
+    })
+    .expect("Unnormalize is infallable")
 }
 
-/// Recursively un-normalize all Column expressions in a list of expression trees
+/// Recursively un-normalize all [`Column`] expressions in a list of expression trees
 #[inline]
 pub fn unnormalize_cols(exprs: impl IntoIterator<Item = Expr>) -> Vec<Expr> {
     exprs.into_iter().map(unnormalize_col).collect()
+}
+
+/// Implementation of [`ExprRewriter`] that calls a function, for use
+/// with [`rewrite_expr`]
+struct RewriterAdapter<F> {
+    f: F,
+}
+
+impl<F> ExprRewriter for RewriterAdapter<F>
+where
+    F: FnMut(Expr) -> Result<Expr>,
+{
+    fn mutate(&mut self, expr: Expr) -> Result<Expr> {
+        (self.f)(expr)
+    }
+}
+
+/// Recursively rewrite an [`Expr`] via a function.
+///
+/// Rewrites the expression bottom up by recursively calling `f(expr)`
+/// on `expr`'s children and then on `expr`. See [`ExprRewriter`]
+/// for more details and more options to control the walk.
+///
+/// # Example:
+/// ```
+/// # use datafusion_expr::*;
+/// # use datafusion_expr::expr_rewriter::rewrite_expr;
+/// let expr = col("a") + lit(1);
+///
+/// // rewrite all literals to 42
+/// let rewritten = rewrite_expr(expr, |e| {
+///   if let Expr::Literal(_) = e {
+///     Ok(lit(42))
+///   } else {
+///     Ok(e)
+///   }
+/// }).unwrap();
+///
+/// assert_eq!(rewritten, col("a") + lit(42));
+/// ```
+pub fn rewrite_expr<F>(expr: Expr, f: F) -> Result<Expr>
+where
+    F: FnMut(Expr) -> Result<Expr>,
+{
+    expr.rewrite(&mut RewriterAdapter { f })
 }
 
 /// Returns plan with expressions coerced to types compatible with
@@ -525,29 +467,56 @@ pub fn coerce_plan_expr_for_schema(
     plan: &LogicalPlan,
     schema: &DFSchema,
 ) -> Result<LogicalPlan> {
-    let new_expr = plan
-        .expressions()
+    match plan {
+        // special case Projection to avoid adding multiple projections
+        LogicalPlan::Projection(Projection { expr, input, .. }) => {
+            let new_exprs =
+                coerce_exprs_for_schema(expr.clone(), input.schema(), schema)?;
+            let projection = Projection::try_new(new_exprs, input.clone())?;
+            Ok(LogicalPlan::Projection(projection))
+        }
+        _ => {
+            let exprs: Vec<Expr> = plan
+                .schema()
+                .fields()
+                .iter()
+                .map(|field| Expr::Column(field.qualified_column()))
+                .collect();
+
+            let new_exprs = coerce_exprs_for_schema(exprs, plan.schema(), schema)?;
+            let add_project = new_exprs.iter().any(|expr| expr.try_into_col().is_err());
+            if add_project {
+                let projection = Projection::try_new(new_exprs, Arc::new(plan.clone()))?;
+                Ok(LogicalPlan::Projection(projection))
+            } else {
+                Ok(plan.clone())
+            }
+        }
+    }
+}
+
+fn coerce_exprs_for_schema(
+    exprs: Vec<Expr>,
+    src_schema: &DFSchema,
+    dst_schema: &DFSchema,
+) -> Result<Vec<Expr>> {
+    exprs
         .into_iter()
         .enumerate()
-        .map(|(i, expr)| {
-            let new_type = schema.field(i).data_type();
-            if plan.schema().field(i).data_type() != schema.field(i).data_type() {
-                match (plan, &expr) {
-                    (
-                        LogicalPlan::Projection(Projection { input, .. }),
-                        Expr::Alias(e, alias),
-                    ) => Ok(e.clone().cast_to(new_type, input.schema())?.alias(alias)),
-                    _ => expr.cast_to(new_type, plan.schema()),
+        .map(|(idx, expr)| {
+            let new_type = dst_schema.field(idx).data_type();
+            if new_type != &expr.get_type(src_schema)? {
+                match expr {
+                    Expr::Alias(e, alias) => {
+                        Ok(e.cast_to(new_type, src_schema)?.alias(alias))
+                    }
+                    _ => expr.cast_to(new_type, src_schema),
                 }
             } else {
-                Ok(expr)
+                Ok(expr.clone())
             }
         })
-        .collect::<Result<Vec<_>>>()?;
-
-    let new_inputs = plan.inputs().into_iter().cloned().collect::<Vec<_>>();
-
-    from_plan(plan, &new_expr, &new_inputs)
+        .collect::<Result<_>>()
 }
 
 #[cfg(test)]
@@ -556,6 +525,11 @@ mod test {
     use crate::{col, lit};
     use arrow::datatypes::DataType;
     use datafusion_common::{DFField, DFSchema, ScalarValue};
+
+    #[ctor::ctor]
+    fn init() {
+        let _ = env_logger::try_init();
+    }
 
     #[derive(Default)]
     struct RecordingRewriter {

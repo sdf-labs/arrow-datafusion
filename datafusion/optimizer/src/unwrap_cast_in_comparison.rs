@@ -19,12 +19,12 @@
 //! of expr can be added if needed.
 //! This rule can reduce adding the `Expr::Cast` the expr instead of adding the `Expr::Cast` to literal expr.
 use crate::optimizer::ApplyOrder;
-use crate::utils::rewrite_preserving_name;
+use crate::utils::{merge_schema, rewrite_preserving_name};
 use crate::{OptimizerConfig, OptimizerRule};
 use arrow::datatypes::{
     DataType, TimeUnit, MAX_DECIMAL_FOR_EACH_PRECISION, MIN_DECIMAL_FOR_EACH_PRECISION,
 };
-use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue};
+use datafusion_common::{DFSchemaRef, DataFusionError, Result, ScalarValue};
 use datafusion_expr::expr::{BinaryExpr, Cast, TryCast};
 use datafusion_expr::expr_rewriter::{ExprRewriter, RewriteRecursion};
 use datafusion_expr::utils::from_plan;
@@ -51,7 +51,7 @@ use std::sync::Arc;
 /// 4. `literal_expr IN (cast(expr1) , cast(expr2), ...)`
 ///
 /// If the expression matches one of the forms above, the rule will
-/// ensure the value of `literal` is in within range(min, max) of the
+/// ensure the value of `literal` is in range(min, max) of the
 /// expr's data_type, and if the scalar is within range, the literal
 /// will be casted to the data type of expr on the other side, and the
 /// cast will be removed from the other side.
@@ -85,15 +85,7 @@ impl OptimizerRule for UnwrapCastInComparison {
         plan: &LogicalPlan,
         _config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
-        let inputs: Vec<LogicalPlan> = plan.inputs().into_iter().cloned().collect();
-
-        let mut schema = inputs.iter().map(|input| input.schema()).fold(
-            DFSchema::empty(),
-            |mut lhs, rhs| {
-                lhs.merge(rhs);
-                lhs
-            },
-        );
+        let mut schema = merge_schema(plan.inputs());
 
         schema.merge(plan.schema());
 
@@ -107,6 +99,7 @@ impl OptimizerRule for UnwrapCastInComparison {
             .map(|expr| rewrite_preserving_name(expr, &mut expr_rewriter))
             .collect::<Result<Vec<_>>>()?;
 
+        let inputs: Vec<LogicalPlan> = plan.inputs().into_iter().cloned().collect();
         Ok(Some(from_plan(
             plan,
             new_exprs.as_slice(),

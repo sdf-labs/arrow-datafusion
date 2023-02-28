@@ -1333,6 +1333,9 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ))),
                 })
             }
+            LogicalPlan::Unnest(_) => Err(proto_error(
+                "LogicalPlan serde is not yet implemented for Unnest",
+            )),
             LogicalPlan::CreateMemoryTable(_) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for CreateMemoryTable",
             )),
@@ -1343,7 +1346,13 @@ impl AsLogicalPlan for LogicalPlanNode {
                 "LogicalPlan serde is not yet implemented for DropView",
             )),
             LogicalPlan::SetVariable(_) => Err(proto_error(
-                "LogicalPlan serde is not yet implemented for DropView",
+                "LogicalPlan serde is not yet implemented for SetVariable",
+            )),
+            LogicalPlan::Dml(_) => Err(proto_error(
+                "LogicalPlan serde is not yet implemented for Dml",
+            )),
+            LogicalPlan::DescribeTable(_) => Err(proto_error(
+                "LogicalPlan serde is not yet implemented for DescribeTable",
             )),
         }
     }
@@ -2202,6 +2211,17 @@ mod roundtrip_tests {
                     new_box_field("Level1", DataType::Binary, true),
                     4,
                 )),
+            ),
+            DataType::Map(
+                new_box_field(
+                    "entries",
+                    DataType::Struct(vec![
+                        Field::new("keys", DataType::Utf8, false),
+                        Field::new("values", DataType::Int32, true),
+                    ]),
+                    true,
+                ),
+                false,
             ),
         ];
 

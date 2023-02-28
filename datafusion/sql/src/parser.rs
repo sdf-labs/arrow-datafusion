@@ -186,12 +186,12 @@ impl fmt::Display for CreateExternalTable {
 
 /// DataFusion extension DDL for `DESCRIBE TABLE`
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DescribeTable {
+pub struct DescribeTableStmt {
     /// Table name
     pub table_name: ObjectName,
 }
 
-impl fmt::Display for DescribeTable {
+impl fmt::Display for DescribeTableStmt {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.table_name)
     }
@@ -206,8 +206,8 @@ pub enum Statement {
     Statement(Box<SQLStatement>),
     /// Extension: `CREATE EXTERNAL TABLE` with package_path module_path
     CreateExternalTable(CreateExternalTable),
-    /// Extension: `DESCRIBE TABLE` with package_path module_path
-    DescribeTable(DescribeTable),
+    /// Extension: `DESCRIBE TABLE`
+    DescribeTableStmt(DescribeTableStmt),
 }
 
 impl fmt::Display for Statement {
@@ -215,7 +215,7 @@ impl fmt::Display for Statement {
         match self {
             Statement::Statement(s) => write!(f, "{}", s),
             Statement::CreateExternalTable(s) => write!(f, "{}", s),
-            Statement::DescribeTable(s) => write!(f, "{}", s),
+            Statement::DescribeTableStmt(s) => write!(f, "{}", s),
         }
     }
 }
@@ -708,13 +708,9 @@ impl<'a> DFParser<'a> {
 
     pub fn parse_describe(&mut self) -> Result<(Statement, StatementMeta), ParserError> {
         let table_name = self.parser.parse_object_name()?;
-        let table_string = table_name.to_owned();
-        let des = DescribeTable {
-            table_name: table_name,
-        };
         Ok((
-            Statement::DescribeTable(des),
-            self.with_meta(table_string.to_string()),
+            Statement::DescribeTableStmt(DescribeTableStmt { table_name }),
+            self.with_meta("".to_owned()),
         ))
     }
 
@@ -1104,7 +1100,7 @@ impl<'a> DFParser<'a> {
         let token = self.parser.next_token();
         match &token.token {
             Token::Word(w) => CompressionTypeVariant::from_str(&w.value),
-            _ => self.expected("one of GZIP, BZIP2, XZ", token),
+            _ => self.expected("one of GZIP, BZIP2, XZ, ZSTD", token),
         }
     }
 
@@ -1327,6 +1323,7 @@ mod tests {
             ("CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV COMPRESSION TYPE GZIP LOCATION 'foo.csv'", "GZIP"),
             ("CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV COMPRESSION TYPE BZIP2 LOCATION 'foo.csv'", "BZIP2"),
             ("CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV COMPRESSION TYPE XZ LOCATION 'foo.csv'", "XZ"),
+            ("CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV COMPRESSION TYPE ZSTD LOCATION 'foo.csv'", "ZSTD"),
         ];
         for (sql, file_compression_type) in sqls {
             let expected = Statement::CreateExternalTable(CreateExternalTable {

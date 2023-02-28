@@ -19,22 +19,23 @@
 
 # Release Process
 
-## Branching
+DataFusion typically has major releases every two weeks, including breaking API changes.
 
-### Major Release
+Patch releases are made on an adhoc basis, but we try and avoid them given the frequent major releases.
 
-DataFusion typically has major releases from the `master` branch every 4 weeks, including breaking API changes.
+## Branching Policy
 
-### Minor Release
+- When we prepare a new release, we create a release branch, such as `branch-18` in the Apache repository (not in a fork)
+- We update the crate version and generate the changelog in this branch and create a PR against the main branch
+- Once the PR is approved and merged, we tag the rc in the release branch, and release from the release branch
+- Bug fixes can be merged to the release branch and patch releases can be created from the release branch
 
-Starting v7.0.0, we are experimenting with maintaining an active stable release branch (e.g. `maint-7.x`). Every month, we will review the `maint-*` branch and prepare a minor release (e.g. v7.1.0) when necessary. A patch release (v7.0.1) can be requested on demand if it is urgent bug/security fix.
+#### How to add changes to `branch-*` branch?
 
-#### How to add changes to `maint-*` branch?
+If you would like to propose your change for inclusion in a release branch
 
-If you would like to propose your change for inclusion in the maintenance branch
-
-1. follow normal workflow to create PR to `master` branch and wait for its approval and merges.
-2. after PR is squash merged to `master`, branch from most recent maintenance branch (e.g. `maint-7-x`), cherry-pick the commit and create a PR to maintenance branch (e.g. `maint-7-x`).
+1. follow normal workflow to create PR to `main` branch and wait for its approval and merges.
+2. after PR is squash merged to `main`, branch from most recent release branch (e.g. `branch-18`), cherry-pick the commit and create a PR to release branch.
 
 ## Prerequisite
 
@@ -79,7 +80,7 @@ We maintain a `CHANGELOG.md` so our users know what has been
 changed between releases.
 
 The CHANGELOG is managed automatically using
-[update_change_log.sh](https://github.com/apache/arrow-datafusion/blob/master/dev/release/update_change_log.sh)
+[update_change_log.sh](https://github.com/apache/arrow-datafusion/blob/main/dev/release/update_change_log.sh)
 
 This script creates a changelog using GitHub PRs and issues based on the labels
 associated with them.
@@ -95,11 +96,11 @@ Here are the commands that could be used to prepare the `5.1.0` release:
 
 ### Update Version
 
-Checkout the master commit to be released
+Checkout the main commit to be released
 
 ```
 git fetch apache
-git checkout apache/master
+git checkout apache/main
 ```
 
 Update datafusion version in `datafusion/Cargo.toml` to `5.1.0`:
@@ -116,7 +117,7 @@ git commit -a -m 'Update version'
 
 ### Update CHANGELOG.md
 
-Define release branch (e.g. `master`), base version tag (e.g. `7.0.0`) and future version tag (e.g. `8.0.0`). Commits between the base version tag and the release branch will be used to
+Define release branch (e.g. `main`), base version tag (e.g. `7.0.0`) and future version tag (e.g. `8.0.0`). Commits between the base version tag and the release branch will be used to
 populate the changelog content.
 
 You will need a GitHub Personal Access Token for the following steps. Follow
@@ -125,7 +126,7 @@ to generate one if you do not already have one.
 
 ```bash
 # create the changelog
-CHANGELOG_GITHUB_TOKEN=<TOKEN> ./dev/release/update_change_log-datafusion.sh master 8.0.0 7.0.0
+CHANGELOG_GITHUB_TOKEN=<TOKEN> ./dev/release/update_change_log-datafusion.sh main 8.0.0 7.0.0
 # review change log / edit issues and labels if needed, rerun until you are happy with the result
 git commit -a -m 'Create changelog for release'
 ```
@@ -137,8 +138,8 @@ value of the `--cpus` argument in the `update_change_log.sh` script._
 You can add `invalid` or `development-process` label to exclude items from
 release notes.
 
-Send a PR to get these changes merged into `master` branch. If new commits that
-could change the change log content landed in the `master` branch before you
+Send a PR to get these changes merged into `main` branch. If new commits that
+could change the change log content landed in the `main` branch before you
 could merge the PR, you need to rerun the changelog update script to regenerate
 the changelog and update the PR accordingly.
 
@@ -162,7 +163,7 @@ Using a string such as `5.1.0` as the `<version>`, create and push the tag by ru
 
 ```shell
 git fetch apache
-git tag <version>-<rc> apache/master
+git tag <version>-<rc> apache/main
 # push tag to Github remote
 git push apache <version>
 ```
@@ -232,7 +233,7 @@ The `dev/release/verify-release-candidate.sh` is a script in this repository tha
 #### If the release is not approved
 
 If the release is not approved, fix whatever the problem is, merge changelog
-changes into master if there is any and try again with the next RC number.
+changes into main if there is any and try again with the next RC number.
 
 ## Finalize the release
 
@@ -286,8 +287,12 @@ of the following crates:
 Download and unpack the official release tarball
 
 Verify that the Cargo.toml in the tarball contains the correct version
-(e.g. `version = "5.1.0"`) and then publish the crates with the
-following commands. Crates need to be published in the correct order as shown in this diagram.
+(e.g. `version = "5.1.0"`) and then publish the crates by running the script `release-crates.sh`
+in a directory extracted from the source tarball that was voted on. Note that this script doesn't
+work if run in a Git repo.
+
+Alternatively the crates can be published one at a time with the following commands. Crates need to be
+published in the correct order as shown in this diagram.
 
 ![](crate-deps.svg)
 
@@ -307,6 +312,7 @@ dot -Tsvg dev/release/crate-deps.dot > dev/release/crate-deps.svg
 (cd datafusion/optimizer && cargo publish)
 (cd datafusion/core && cargo publish)
 (cd datafusion/proto && cargo publish)
+(cd datafusion/substrait && cargo publish)
 ```
 
 The CLI needs a `--no-verify` argument because `build.rs` generates source into the `src` directory.
@@ -317,13 +323,45 @@ The CLI needs a `--no-verify` argument because `build.rs` generates source into 
 
 ### Publish datafusion-cli on Homebrew
 
-Run `publish_homebrew.sh` to publish `datafusion-cli` on Homebrew.
+Run `publish_homebrew.sh` to publish `datafusion-cli` on Homebrew. In order to do so it is necessary to
+fork the `homebrew-core` repo https://github.com/Homebrew/homebrew-core/, have Homebrew installed on your
+macOS/Linux/WSL2 and properly configured and have a Github Personal Access Token that has permission to file pull requests in the `homebrew-core` repo.
 
+#### Fork the `homebrew-core` repo
+
+Go to https://github.com/Homebrew/homebrew-core/ and fork the repo.
+
+#### Install and configure Homebrew
+
+Please visit https://brew.sh/ to obtain Homebrew. In addition to that please check out https://docs.brew.sh/Homebrew-on-Linux if you are on Linux or WSL2.
+
+Before running the script make sure that you can run the following command in your bash to make sure
+that `brew` has been installed and configured properly:
+
+```bash
+brew --version
 ```
+
+#### Create a Github Personal Access Token
+
+To create a Github Personal Access Token, please visit https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/creating-a-personal-access-token for instructions.
+
+- Make sure to select either **All repositories** or **Only selected repositories** so that you have access to **Repository permissions**.
+- If you only use the token for selected repos make sure you include your
+  fork of `homebrew-core` in the list of repos under **Selected repositories**.
+- Make sure to have **Read and write** access enabled for pull requests in your **Repository permissions**.
+
+After all of the above is complete execute the following command:
+
+```bash
 dev/release/publish_homebrew.sh <version> <github-user> <github-token> <homebrew-default-branch-name>
 ```
 
-Alternatively manually send a simple PR to update tag and commit hash for the datafusion
+Note that sometimes someone else has already submitted a PR to update the datafusion formula in homebrew.
+In this case you will get an error with a message that your PR is a duplicate of an existing one. In this
+case no further action is required.
+
+Alternatively manually submit a simple PR to update tag and commit hash for the datafusion
 formula in homebrew-core. Here is an example PR:
 https://github.com/Homebrew/homebrew-core/pull/89562.
 

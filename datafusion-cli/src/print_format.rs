@@ -54,7 +54,7 @@ impl fmt::Display for PrintFormat {
 impl FromStr for PrintFormat {
     type Err = String;
 
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         clap::ArgEnum::from_str(s, true)
     }
 }
