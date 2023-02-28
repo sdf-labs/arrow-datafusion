@@ -23,8 +23,8 @@ use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr::PhysicalExpr;
 use fmt::Debug;
 use std::any::Any;
-use std::collections::HashSet;
 use std::cmp::min;
+use std::collections::HashSet;
 use std::fmt;
 use std::fs;
 use std::ops::Range;
@@ -834,7 +834,7 @@ pub async fn plan_to_parquet(
 async fn plan_to_parquet_(
     state: &SessionState,
     plan: Arc<dyn ExecutionPlan>,
-    schema: Arc<Schema>,
+    _schema: Arc<Schema>,
     path: impl AsRef<str>,
     writer_properties: Option<WriterProperties>,
 ) -> Result<()> {

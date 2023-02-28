@@ -39,7 +39,7 @@ use rstest::rstest;
 #[cfg(test)]
 #[ctor::ctor]
 fn init() {
-    let _ = env_logger::try_init();
+    // let _ = env_logger::try_init();
 }
 
 #[test]
