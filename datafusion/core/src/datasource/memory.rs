@@ -177,10 +177,17 @@ impl MemTable {
         //     .flatten()
         //     .all(|batches| schema.contains(&batches.schema()))
         {
-            Ok(Self {
-                schema,
-                batches: partitions,
-            })
+            if partitions.len() > 0 && partitions[0].len() > 0 {
+                Ok(Self {
+                    schema: partitions[0][0].schema(),
+                    batches: partitions,
+                })
+            } else {
+                Ok(Self {
+                    schema,
+                    batches: partitions,
+                })
+            }
         } else {
             Err(DataFusionError::Plan(format!(
                 "Mismatch between schemas from\n  LP    {:?}\n  BATCH {:?} \n",
