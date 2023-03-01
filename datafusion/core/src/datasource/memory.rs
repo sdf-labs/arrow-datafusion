@@ -19,11 +19,13 @@
 //! queried by DataFusion. This allows data to be pre-loaded into memory and then
 //! repeatedly queried without incurring additional file I/O overhead.
 
+use core::panic;
 use futures::StreamExt;
+
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
 
@@ -44,22 +46,131 @@ pub struct MemTable {
     batches: Vec<Vec<RecordBatch>>,
 }
 
+fn schema_contains(me: &Schema, other: &Schema) -> bool {
+    // println!("\nSCHEMA CONTAINS\n me {:?} other {:?} \n", me, other);
+    me.fields.len() == other.fields.len()
+    && me.fields.iter().zip(other.fields.iter()).all(|(f1, f2)| field_contains(f1, f2))
+    // make sure self.metadata is a superset of other.metadata
+    && other.metadata.iter().all(|(k, v1)| match me.metadata.get(k) {
+        Some(v2) => v1 == v2,
+        _ => false,
+    })
+}
+
+fn field_contains(me: &Field, other: &Field) -> bool {
+    // println!("FIELD \n\tSTATIC  {me}\n\tDYNAMIC {other}");
+    // me is a.column1
+    // other is  column1
+
+    // lazy_static! {
+    //     // this is the form of the conditional
+    //     static ref RE: Regex = Regex::new(r"(\w*)\(\w*\.(\w*)\)").unwrap();
+    // }
+
+    // normalize names
+    let mut me_name = me.name().to_owned();
+    let mut other_name = other.name().to_owned();
+
+    if is_unary_unnested_apply_with_qualifier(&me_name) {
+        let fun = fun(&me_name);
+        let atom = arg(&me_name);
+        me_name = format!("{fun}({atom})");
+    }
+
+    if is_unary_unnested_apply_with_qualifier(&other_name) {
+        let fun = fun(&other_name);
+        let atom = arg(&other_name);
+        other_name = format!("{fun}({atom})");
+    }
+    // println!("LEFT {me_name} RIGHT {other_name}");
+
+    let mut res = me_name == other_name;
+    res &= me.dict_id() == other.dict_id();
+    res &= me.dict_is_ordered() == other.dict_is_ordered();
+    res &= (me.data_type() == other.data_type())
+        || (me.data_type() == &DataType::Int64 && other.data_type() == &DataType::UInt64);
+    res &= me.is_nullable() || !other.is_nullable();
+
+    // make sure self.metadata is a superset of other.metadata
+    res &= match (&me.metadata().is_empty(), &other.metadata().is_empty()) {
+        (_, true) => true,
+        (true, false) => false,
+        (false, false) => {
+            other
+                .metadata()
+                .iter()
+                .all(|(k, v)| match me.metadata().get(k) {
+                    Some(s) => s == v,
+                    None => false,
+                })
+        }
+    };
+    res
+}
+
+fn arg(name: &str) -> String {
+    let mut res = match name.find('(') {
+        Some(i) => name[i + 1..].to_owned(),
+        None => panic!("'(' expected in {name}"),
+    };
+    res = match res.find(".") {
+        Some(i) => res[i + 1..].to_owned(),
+        None => panic!("'.' expected in {name}"),
+    };
+    res = match res.find(")") {
+        Some(i) => res[0..i].to_owned(),
+        None => panic!("'.' expected in {name}"),
+    };
+    res
+}
+
+fn fun(name: &str) -> String {
+    match name.find('(') {
+        Some(i) => name[0..i].to_owned(),
+        None => panic!("'(' expected in {name}"),
+    }
+}
+
+fn is_unary_unnested_apply_with_qualifier(name: &str) -> bool {
+    name.contains("(") && name.contains(".") && !name.contains(",")
+}
+
 impl MemTable {
     /// Create a new in-memory table from the provided schema and record batches
     pub fn try_new(schema: SchemaRef, partitions: Vec<Vec<RecordBatch>>) -> Result<Self> {
+        // println!(
+        //     "\nTRY NEW MEMTABLE\n  LP    {:?}\n  BATCH {:?} \n",
+        //     schema,
+        //     if partitions.len() > 0 && partitions[0].len() > 0 {
+        //         partitions[0][0].schema()
+        //     } else {
+        //         Arc::new(Schema::new(vec![]))
+        //     }
+        // );
+
         if partitions
             .iter()
             .flatten()
-            .all(|batches| schema.contains(&batches.schema()))
+            .all(|batches| schema_contains(&schema, &batches.schema()))
+        // if partitions
+        //     .iter()
+        //     .flatten()
+        //     .all(|batches| schema.contains(&batches.schema()))
         {
             Ok(Self {
                 schema,
                 batches: partitions,
             })
         } else {
-            Err(DataFusionError::Plan(
-                "Mismatch between schema and batches".to_string(),
-            ))
+            let batch_schemas: Vec<String> = partitions
+                .iter()
+                .flatten()
+                .map(|batch| batch.schema().to_string())
+                .collect();
+            Err(DataFusionError::Plan(format!(
+                "Mismatch between schema '{schema}' and batches '{}'",
+                itertools::join(batch_schemas, ",")
+            )))
         }
     }
 
