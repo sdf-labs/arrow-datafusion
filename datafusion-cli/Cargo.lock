@@ -817,7 +817,9 @@ dependencies = [
  "arrow-schema",
  "datafusion-common",
  "datafusion-expr",
+ "env_logger",
  "lazy_static",
+ "log",
  "regex",
  "sqlparser",
 ]
