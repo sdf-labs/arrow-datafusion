@@ -71,17 +71,25 @@ fn field_contains(me: &Field, other: &Field) -> bool {
     let mut me_name = me.name().to_owned();
     let mut other_name = other.name().to_owned();
 
-    if is_unary_unnested_apply_with_qualifier(&me_name) {
-        let fun = fun(&me_name);
-        let atom = arg(&me_name);
-        me_name = format!("{fun}({atom})");
+    if is_qualified(&me_name) {
+        if is_call(&me_name) {
+            let fun = fun(&me_name);
+            let atom = arg(&me_name);
+            me_name = format!("{fun}({atom})");
+        } else {
+            me_name = unqualifify(&me_name);
+        }
+    }
+    if is_qualified(&other_name) {
+        if is_call(&other_name) {
+            let fun = fun(&other_name);
+            let atom = arg(&other_name);
+            other_name = format!("{fun}({atom})");
+        } else {
+            other_name = unqualifify(&other_name);
+        }
     }
 
-    if is_unary_unnested_apply_with_qualifier(&other_name) {
-        let fun = fun(&other_name);
-        let atom = arg(&other_name);
-        other_name = format!("{fun}({atom})");
-    }
     // println!("LEFT {me_name} RIGHT {other_name}");
 
     let mut res = me_name == other_name;
@@ -131,8 +139,20 @@ fn fun(name: &str) -> String {
     }
 }
 
-fn is_unary_unnested_apply_with_qualifier(name: &str) -> bool {
-    name.contains("(") && name.contains(".") && !name.contains(",")
+fn is_call(name: &str) -> bool {
+    name.contains("(") && !name.contains(",")
+}
+
+fn is_qualified(name: &str) -> bool {
+    name.contains(".")
+}
+
+fn unqualifify(name: &str) -> String {
+    let res = match name.find('.') {
+        Some(i) => name[i + 1..].to_owned(),
+        None => panic!("'(' expected in {name}"),
+    };
+    res
 }
 
 impl MemTable {
@@ -162,14 +182,14 @@ impl MemTable {
                 batches: partitions,
             })
         } else {
-            let batch_schemas: Vec<String> = partitions
-                .iter()
-                .flatten()
-                .map(|batch| batch.schema().to_string())
-                .collect();
             Err(DataFusionError::Plan(format!(
-                "Mismatch between schema '{schema}' and batches '{}'",
-                itertools::join(batch_schemas, ",")
+                "Mismatch between schemas from\n  LP    {:?}\n  BATCH {:?} \n",
+                schema,
+                if partitions.len() > 0 && partitions[0].len() > 0 {
+                    partitions[0][0].schema()
+                } else {
+                    Arc::new(Schema::new(vec![]))
+                }
             )))
         }
     }

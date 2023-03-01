@@ -26,7 +26,6 @@ async fn main() -> Result<()> {
     let session_config = SessionConfig::from_env()?
         .with_create_default_catalog_and_schema(true)
         .with_information_schema(true);
-    // enabling object store
     let ctx: SessionContext = SessionContext::with_config(session_config);
 
     let sqls = vec![
@@ -59,18 +58,3 @@ async fn main() -> Result<()> {
 
     Ok(())
 }
-
-// Add the folowing println! to datafusion/core/src/datasource/memory.rs to see an nice outpout of the differnet behavior...
-
-// // impl MemTable {
-//     /// Create a new in-memory table from the provided schema and record batches
-//     pub fn try_new(schema: SchemaRef, partitions: Vec<Vec<RecordBatch>>) -> Result<Self> {
-//         // println!(
-//         //     "\nTRY NEW MEMTABLE\n  LP    {:?}\n  BATCH {:?} \n",
-//         //     schema,
-//         //     if partitions.len() > 0 && partitions[0].len() > 0 {
-//         //         partitions[0][0].schema()
-//         //     } else {
-//         //         Arc::new(Schema::new(vec![]))
-//         //     }
-//         // );
