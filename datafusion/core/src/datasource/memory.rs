@@ -58,14 +58,9 @@ fn schema_contains(me: &Schema, other: &Schema) -> bool {
 }
 
 fn field_contains(me: &Field, other: &Field) -> bool {
-    // println!("FIELD \n\tSTATIC  {me}\n\tDYNAMIC {other}");
-    // me is a.column1
-    // other is  column1
-
-    // lazy_static! {
-    //     // this is the form of the conditional
-    //     static ref RE: Regex = Regex::new(r"(\w*)\(\w*\.(\w*)\)").unwrap();
-    // }
+    if me == other {
+        return true;
+    }
 
     // normalize names
     let mut me_name = me.name().to_owned();
@@ -89,8 +84,6 @@ fn field_contains(me: &Field, other: &Field) -> bool {
             other_name = unqualifify(&other_name);
         }
     }
-
-    // println!("LEFT {me_name} RIGHT {other_name}");
 
     let mut res = me_name == other_name;
     res &= me.dict_id() == other.dict_id();
@@ -291,7 +284,7 @@ impl TableProvider for MemTable {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{Arc, DataFusionError, MemTable, RecordBatch, Result, TableProvider};
     use crate::from_slice::FromSlice;
     use crate::prelude::SessionContext;
     use arrow::array::Int32Array;
