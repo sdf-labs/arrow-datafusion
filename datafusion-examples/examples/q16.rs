@@ -1,10 +1,8 @@
-
-
 use datafusion::error::Result;
 use datafusion::prelude::*;
 
 /// This example demonstrates q16 bug, i.e mismatch between names, types and nullability
-/// 
+///
 /// To expose the bug add the folowing println! to datafusion/core/src/datasource/memory.rs to see an nice outpout of the differnet behavior...
 
 // // impl MemTable {
@@ -30,12 +28,12 @@ async fn main() -> Result<()> {
 
     let sqls = vec![
         ("a", "CREATE TABLE a AS VALUES (cast(1 as smallint)), (cast(0 as smallint)), (cast(-10 as smallint));"),
-        
+
         ("s1", "CREATE TABLE s1 AS SELECT signum(column1) FROM a;"),
         ("", "SELECT * FROM s1;"),
         ("s2", "CREATE TABLE s2 AS SELECT signum(column1) as xx FROM a;"),
         ("", "SELECT * FROM s2;"),
-        
+
         ("c1", "CREATE TABLE c1 AS SELECT count(column1) FROM a;"),
         ("", "SELECT * FROM c1;"), 
         ("c2", "CREATE TABLE c2 AS SELECT count(column1) as xx FROM a;"),
@@ -45,8 +43,6 @@ async fn main() -> Result<()> {
         ("", "SELECT * FROM a1;"), 
         ("a2", "CREATE TABLE a2 AS SELECT approx_distinct(column1) AS xx FROM a;"),
         ("", "SELECT * FROM a2;"),
-
-
     ];
 
     for (_id, sql) in sqls {
