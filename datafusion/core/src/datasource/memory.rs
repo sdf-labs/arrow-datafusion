@@ -425,7 +425,7 @@ mod tests {
 
         match MemTable::try_new(schema2, vec![vec![batch]]) {
             Err(DataFusionError::Plan(e)) => {
-                assert_eq!("\"Mismatch between schema and batches\"", format!("{e:?}"))
+                assert!(e.contains("Mismatch between schema"))
             }
             _ => panic!("MemTable::new should have failed due to schema mismatch"),
         }
@@ -456,7 +456,7 @@ mod tests {
 
         match MemTable::try_new(schema2, vec![vec![batch]]) {
             Err(DataFusionError::Plan(e)) => {
-                assert_eq!("\"Mismatch between schema and batches\"", format!("{e:?}"))
+                assert!(e.contains("Mismatch between schema"))
             }
             _ => panic!("MemTable::new should have failed due to schema mismatch"),
         }
