@@ -1047,13 +1047,6 @@ impl<'a> DFParser<'a> {
 
         self.parser.expect_keyword(Keyword::LOCATION)?;
         let location = self.parser.parse_literal_string()?;
-        if !location.starts_with("s3://") {
-            if !Path::exists(Path::new(&location)) {
-                return Err(ParserError::ParserError(format!(
-                    "Missing external file (1) '{location}'"
-                )));
-            }
-        }
         let location2 = location.to_owned();
         let file_type2 = file_type.to_owned();
         let create = CreateExternalTable {
