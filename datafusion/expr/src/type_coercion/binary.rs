@@ -21,7 +21,7 @@ use crate::type_coercion::{is_date, is_numeric, is_timestamp};
 use crate::Operator;
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{
-    DataType, TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
+    DataType, Field, TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
 };
 use datafusion_common::DataFusionError;
 use datafusion_common::Result;
@@ -197,6 +197,7 @@ pub fn comparison_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<D
         .or_else(|| string_coercion(lhs_type, rhs_type))
         .or_else(|| null_coercion(lhs_type, rhs_type))
         .or_else(|| string_numeric_coercion(lhs_type, rhs_type))
+        .or_else(|| struct_coercion(lhs_type, rhs_type))
 }
 
 /// Returns the output type of applying numeric operations such as `=`
@@ -499,6 +500,58 @@ fn dictionary_coercion(
     }
 }
 
+/// Coercion rules for Struct: the type that both lhs and rhs
+/// can be casted to for the purpose of a computation.
+fn struct_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
+    match (lhs_type, rhs_type) {
+        (DataType::Struct(lhs_fields), DataType::Struct(rhs_fields)) => {
+            if lhs_fields.len() != rhs_fields.len() {
+                return None;
+            } else {
+                let fields = lhs_fields
+                    .iter()
+                    .zip(rhs_fields.iter())
+                    .enumerate()
+                    .map(|(i, (lhs_field, rhs_field))| {
+                        let name = if lhs_field.name() == format!("c{i}").as_str() {
+                            Ok(rhs_field.name())
+                        } else if rhs_field.name() == format!("c{i}").as_str()
+                            || (lhs_field.name() == rhs_field.name())
+                        {
+                            Ok(lhs_field.name())
+                        } else {
+                            Err(DataFusionError::Internal(format!(
+                                "struct coercion failed"
+                            )))
+                        }?;
+                        let type_ = comparison_coercion(
+                            lhs_field.data_type(),
+                            rhs_field.data_type(),
+                        )
+                        .map_or(
+                            Err(DataFusionError::Internal(format!(
+                                "struct coercion failed"
+                            ))),
+                            |type_| Ok(type_),
+                        )?;
+                        Ok(Field::new(
+                            name,
+                            type_,
+                            lhs_field.is_nullable() || rhs_field.is_nullable(),
+                        ))
+                    })
+                    .collect::<Result<_>>();
+                if let Ok(fields) = fields {
+                    Some(DataType::Struct(fields))
+                } else {
+                    None
+                }
+            }
+        }
+        _ => None,
+    }
+}
+
 /// Coercion rules for string concat.
 /// This is a union of string coercion rules and specified rules:
 /// 1. At lease one side of lhs and rhs should be string type (Utf8 / LargeUtf8)
@@ -702,6 +755,7 @@ mod tests {
     use super::*;
     use crate::Operator;
     use arrow::datatypes::DataType;
+    use arrow::datatypes::Field;
     use datafusion_common::assert_contains;
     use datafusion_common::DataFusionError;
     use datafusion_common::Result;
@@ -869,6 +923,54 @@ mod tests {
         assert_eq!(
             dictionary_coercion(&lhs_type, &rhs_type, true),
             Some(rhs_type.clone())
+        );
+    }
+
+    #[test]
+    fn test_struct_type_coercion() {
+        use DataType::*;
+
+        let lhs_type = Struct(vec![Field::new("a", Int64, true)]);
+        let rhs_type = Struct(vec![Field::new("a", Int64, true)]);
+        assert_eq!(struct_coercion(&lhs_type, &rhs_type), Some(lhs_type));
+
+        let lhs_type = Struct(vec![Field::new("a", Int64, true)]);
+        let rhs_type = Struct(vec![Field::new("a", Int32, true)]);
+        assert_eq!(struct_coercion(&lhs_type, &rhs_type), Some(lhs_type));
+
+        let lhs_type = Struct(vec![Field::new("a", Int64, true)]);
+        let rhs_type = Struct(vec![Field::new("a", Int64, false)]);
+        assert_eq!(struct_coercion(&lhs_type, &rhs_type), Some(lhs_type));
+
+        let lhs_type = Struct(vec![Field::new("a", Int64, true)]);
+        let rhs_type = Struct(vec![
+            Field::new("a", Int64, true),
+            Field::new("b", Int64, true),
+        ]);
+        assert_eq!(struct_coercion(&lhs_type, &rhs_type), None);
+
+        let lhs_type = Struct(vec![Field::new("c0", Int64, true)]);
+        let rhs_type = Struct(vec![Field::new("a", Int64, true)]);
+        assert_eq!(struct_coercion(&lhs_type, &rhs_type), Some(rhs_type));
+
+        let lhs_type = Struct(vec![Field::new("a", Int64, true)]);
+        let rhs_type = Struct(vec![Field::new("c0", Int64, true)]);
+        assert_eq!(struct_coercion(&lhs_type, &rhs_type), Some(lhs_type));
+
+        let lhs_type = Struct(vec![
+            Field::new("a", Int64, false),
+            Field::new("c1", Int64, false),
+        ]);
+        let rhs_type = Struct(vec![
+            Field::new("c0", Int64, true),
+            Field::new("b", Utf8, false),
+        ]);
+        assert_eq!(
+            struct_coercion(&lhs_type, &rhs_type),
+            Some(Struct(vec![
+                Field::new("a", Int64, true),
+                Field::new("b", Utf8, false)
+            ]))
         );
     }
 
