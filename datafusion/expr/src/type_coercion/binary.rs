@@ -506,7 +506,7 @@ fn struct_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType>
     match (lhs_type, rhs_type) {
         (DataType::Struct(lhs_fields), DataType::Struct(rhs_fields)) => {
             if lhs_fields.len() != rhs_fields.len() {
-                return None;
+                None
             } else {
                 let fields = lhs_fields
                     .iter()
@@ -520,19 +520,19 @@ fn struct_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType>
                         {
                             Ok(lhs_field.name())
                         } else {
-                            Err(DataFusionError::Internal(format!(
-                                "struct coercion failed"
-                            )))
+                            Err(DataFusionError::Internal(
+                                "struct coercion failed".to_string(),
+                            ))
                         }?;
                         let type_ = comparison_coercion(
                             lhs_field.data_type(),
                             rhs_field.data_type(),
                         )
                         .map_or(
-                            Err(DataFusionError::Internal(format!(
-                                "struct coercion failed"
-                            ))),
-                            |type_| Ok(type_),
+                            Err(DataFusionError::Internal(
+                                "struct coercion failed".to_string(),
+                            )),
+                            Ok,
                         )?;
                         Ok(Field::new(
                             name,
