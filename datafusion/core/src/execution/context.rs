@@ -594,7 +594,8 @@ impl SessionContext {
         self.return_empty_dataframe()
     }
 
-    async fn create_custom_table(
+    /// Return the TableProvider for external table
+    pub async fn create_custom_table(
         &self,
         cmd: &CreateExternalTable,
     ) -> Result<Arc<dyn TableProvider>> {
