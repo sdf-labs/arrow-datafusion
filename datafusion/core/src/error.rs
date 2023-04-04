@@ -16,4 +16,6 @@
 // under the License.
 
 //! DataFusion error types
-pub use datafusion_common::{DataFusionError, Result, SharedResult};
+pub use datafusion_common::{
+    BinderError, CodeLocation, DataFusionError, ParserError, Result, SharedResult,
+};
