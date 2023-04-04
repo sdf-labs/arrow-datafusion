@@ -31,7 +31,7 @@ use arrow::error::ArrowError;
 use cranelift_module::ModuleError;
 #[cfg(feature = "parquet")]
 use parquet::errors::ParquetError;
-use sqlparser::parser::ParserError as OldParserError;
+use sqlparser::parser::ParserError;
 
 /// Result type for operations that could result in an [DataFusionError]
 pub type Result<T, E = DataFusionError> = result::Result<T, E>;
@@ -59,7 +59,7 @@ pub enum DataFusionError {
     /// Error associated to I/O operations and associated traits.
     IoError(io::Error),
     /// Error returned when SQL is syntactically incorrect.
-    SQL(OldParserError),
+    SQL(ParserError),
     /// Error returned on a branch that we know it is possible
     /// but to which we still have no implementation for.
     /// Often, these errors are tracked in our issue tracker.
@@ -92,67 +92,6 @@ pub enum DataFusionError {
     /// Errors originating from either mapping LogicalPlans to/from Substrait plans
     /// or serializing/deserializing protobytes to Substrait plans
     Substrait(String),
-    /// Error from sdf-frontend
-    BindingContextInternal(Option<String>),
-    Bind(BinderError),
-    Parse(ParserError),
-}
-
-#[derive(Debug, Clone)]
-pub struct BinderError {
-    pub location: CodeLocation,
-    pub message: String,
-}
-
-impl Display for BinderError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "line {} {}", self.location, self.message)
-    }
-}
-
-impl std::error::Error for BinderError {}
-
-#[derive(Debug, Clone)]
-pub struct ParserError {
-    pub location: CodeLocation,
-    pub message: String,
-}
-
-impl Display for ParserError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "line {} {}", self.location, self.message)
-    }
-}
-
-impl std::error::Error for ParserError {}
-
-#[derive(Clone)]
-pub struct CodeLocation {
-    pub line: usize,
-    pub column: usize,
-    pub file: Option<String>,
-}
-
-impl CodeLocation {
-    pub fn new(line: usize, column: usize) -> Self {
-        CodeLocation {
-            line,
-            column,
-            file: None,
-        }
-    }
-}
-
-impl std::fmt::Display for CodeLocation {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "({}, {})", self.line, self.column)
-    }
-}
-
-impl std::fmt::Debug for CodeLocation {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "({}, {})", self.line, self.column)
-    }
 }
 
 #[macro_export]
@@ -319,8 +258,8 @@ impl From<object_store::path::Error> for DataFusionError {
     }
 }
 
-impl From<OldParserError> for DataFusionError {
-    fn from(e: OldParserError) -> Self {
+impl From<ParserError> for DataFusionError {
+    fn from(e: ParserError) -> Self {
         DataFusionError::SQL(e)
     }
 }
@@ -390,11 +329,6 @@ impl Display for DataFusionError {
             DataFusionError::Substrait(ref desc) => {
                 write!(f, "Substrait error: {desc}")
             }
-            DataFusionError::BindingContextInternal(ref desc) => {
-                write!(f, "BindingContextInternal error: {desc:?}")
-            }
-            DataFusionError::Bind(ref desc) => write!(f, "Bind error: {desc:?}"),
-            DataFusionError::Parse(ref desc) => write!(f, "Parse error: {desc:?}"),
         }
     }
 }
@@ -422,9 +356,6 @@ impl Error for DataFusionError {
             DataFusionError::JITError(e) => Some(e),
             DataFusionError::Context(_, e) => Some(e.as_ref()),
             DataFusionError::Substrait(_) => None,
-            DataFusionError::BindingContextInternal(_) => None,
-            DataFusionError::Bind(e) => Some(e),
-            DataFusionError::Parse(e) => Some(e),
         }
     }
 }
