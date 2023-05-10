@@ -17,6 +17,7 @@
 
 //! [`MemTable`] for querying `Vec<RecordBatch>` by DataFusion.
 
+use arrow_schema::{DataType, Field, Schema};
 use futures::StreamExt;
 use std::any::Any;
 use std::sync::Arc;
@@ -50,13 +51,115 @@ pub struct MemTable {
     pub(crate) batches: Vec<PartitionData>,
 }
 
+fn schema_contains(me: &Arc<Schema>, other: &Schema) -> bool {
+    // println!("\nSCHEMA CONTAINS\n me {:?} other {:?} \n", me, other);
+    me.fields.len() == other.fields.len()
+    && me.fields.iter().zip(other.fields.iter()).all(|(f1, f2)| field_contains(f1, f2))
+    // make sure self.metadata is a superset of other.metadata
+    && other.metadata.iter().all(|(k, v1)| match me.metadata.get(k) {
+        Some(v2) => v1 == v2,
+        _ => false,
+    })
+}
+
+fn field_contains(me: &Field, other: &Field) -> bool {
+    if me == other {
+        return true;
+    }
+
+    // normalize names
+    let mut me_name = me.name().to_owned();
+    let mut other_name = other.name().to_owned();
+
+    if is_qualified(&me_name) {
+        if is_call(&me_name) {
+            let fun = fun(&me_name);
+            let atom = arg(&me_name);
+            me_name = format!("{fun}({atom})");
+        } else {
+            me_name = unqualifify(&me_name);
+        }
+    }
+    if is_qualified(&other_name) {
+        if is_call(&other_name) {
+            let fun = fun(&other_name);
+            let atom = arg(&other_name);
+            other_name = format!("{fun}({atom})");
+        } else {
+            other_name = unqualifify(&other_name);
+        }
+    }
+
+    let mut res = me_name == other_name;
+    res &= me.dict_id() == other.dict_id();
+    res &= me.dict_is_ordered() == other.dict_is_ordered();
+    res &= (me.data_type() == other.data_type())
+        || (me.data_type() == &DataType::Int64 && other.data_type() == &DataType::UInt64);
+    res &= me.is_nullable() || !other.is_nullable();
+
+    // make sure self.metadata is a superset of other.metadata
+    res &= match (&me.metadata().is_empty(), &other.metadata().is_empty()) {
+        (_, true) => true,
+        (true, false) => false,
+        (false, false) => {
+            other
+                .metadata()
+                .iter()
+                .all(|(k, v)| match me.metadata().get(k) {
+                    Some(s) => s == v,
+                    None => false,
+                })
+        }
+    };
+    res
+}
+
+fn arg(name: &str) -> String {
+    let mut res = match name.find('(') {
+        Some(i) => name[i + 1..].to_owned(),
+        None => panic!("'(' expected in {name}"),
+    };
+    res = match res.find(".") {
+        Some(i) => res[i + 1..].to_owned(),
+        None => panic!("'.' expected in {name}"),
+    };
+    res = match res.find(")") {
+        Some(i) => res[0..i].to_owned(),
+        None => panic!("'.' expected in {name}"),
+    };
+    res
+}
+
+fn fun(name: &str) -> String {
+    match name.find('(') {
+        Some(i) => name[0..i].to_owned(),
+        None => panic!("'(' expected in {name}"),
+    }
+}
+
+fn is_call(name: &str) -> bool {
+    name.contains("(") && !name.contains(",")
+}
+
+fn is_qualified(name: &str) -> bool {
+    name.contains(".")
+}
+
+fn unqualifify(name: &str) -> String {
+    let res = match name.find('.') {
+        Some(i) => name[i + 1..].to_owned(),
+        None => panic!("'(' expected in {name}"),
+    };
+    res
+}
+
 impl MemTable {
     /// Create a new in-memory table from the provided schema and record batches
     pub fn try_new(schema: SchemaRef, partitions: Vec<Vec<RecordBatch>>) -> Result<Self> {
         if partitions
             .iter()
             .flatten()
-            .all(|batches| schema.contains(&batches.schema()))
+            .all(|batches| schema_contains(&schema, &batches.schema()))
         {
             Ok(Self {
                 schema,
@@ -66,6 +169,14 @@ impl MemTable {
                     .collect::<Vec<_>>(),
             })
         } else {
+            dbg!(partitions
+                .iter()
+                .flatten()
+                .map(|batches| batches.schema())
+                .collect::<Vec<_>>());
+
+            dbg!(&schema);
+            dbg!("here");
             Err(DataFusionError::Plan(
                 "Mismatch between schema and batches".to_string(),
             ))
