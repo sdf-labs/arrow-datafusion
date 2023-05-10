@@ -17,7 +17,7 @@
 
 //! [`MemTable`] for querying `Vec<RecordBatch>` by DataFusion.
 
-use arrow_schema::{Schema, Field, DataType};
+use arrow_schema::{DataType, Field, Schema};
 use futures::StreamExt;
 use std::any::Any;
 use std::sync::Arc;
