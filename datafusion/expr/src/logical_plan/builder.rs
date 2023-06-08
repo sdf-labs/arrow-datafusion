@@ -1238,7 +1238,6 @@ pub fn project(
                 .push(columnize_expr(normalize_col(e, &plan)?, input_schema)),
         }
     }
-    validate_unique_names("Projections", projected_expr.iter())?;
     let input_schema = DFSchema::new_with_metadata(
         exprlist_to_fields(&projected_expr, &plan)?,
         plan.schema().metadata().clone(),

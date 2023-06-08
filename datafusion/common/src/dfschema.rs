@@ -18,7 +18,7 @@
 //! DFSchema is an extended schema struct that DataFusion uses to provide support for
 //! fields with optional relation names.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::hash::Hash;
 use std::sync::Arc;
@@ -62,41 +62,6 @@ impl DFSchema {
         fields: Vec<DFField>,
         metadata: HashMap<String, String>,
     ) -> Result<Self> {
-        let mut qualified_names = HashSet::new();
-        let mut unqualified_names = HashSet::new();
-
-        for field in &fields {
-            if let Some(qualifier) = field.qualifier() {
-                qualified_names.insert((qualifier, field.name()));
-            } else if !unqualified_names.insert(field.name()) {
-                return Err(DataFusionError::SchemaError(
-                    SchemaError::DuplicateUnqualifiedField {
-                        name: field.name().to_string(),
-                    },
-                ));
-            }
-        }
-
-        // check for mix of qualified and unqualified field with same unqualified name
-        // note that we need to sort the contents of the HashSet first so that errors are
-        // deterministic
-        let mut qualified_names = qualified_names
-            .iter()
-            .map(|(l, r)| (l.to_owned(), r.to_owned()))
-            .collect::<Vec<(&OwnedTableReference, &String)>>();
-        qualified_names.sort();
-        for (qualifier, name) in &qualified_names {
-            if unqualified_names.contains(name) {
-                return Err(DataFusionError::SchemaError(
-                    SchemaError::AmbiguousReference {
-                        field: Column {
-                            relation: Some((*qualifier).clone()),
-                            name: name.to_string(),
-                        },
-                    },
-                ));
-            }
-        }
         Ok(Self { fields, metadata })
     }
 
