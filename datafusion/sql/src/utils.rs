@@ -62,11 +62,7 @@ pub fn resolve_columns(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
 /// where post-aggregation, `a + b` need not be a projection against the
 /// individual columns `a` and `b`, but rather it is a projection against the
 /// `a + b` found in the GROUP BY.
-pub fn rebase_expr(
-    expr: &Expr,
-    base_exprs: &[Expr],
-    plan: &LogicalPlan,
-) -> Result<Expr> {
+pub fn rebase_expr(expr: &Expr, base_exprs: &[Expr], plan: &LogicalPlan) -> Result<Expr> {
     clone_with_replacement(expr, &|nested_expr| {
         if base_exprs.contains(nested_expr) {
             Ok(Some(expr_as_column_expr(nested_expr, plan)?))
@@ -514,10 +510,7 @@ pub fn window_expr_common_partition_keys(window_exprs: &[Expr]) -> Result<&[Expr
 
 /// Returns a validated `DataType` for the specified precision and
 /// scale
-pub fn make_decimal_type(
-    precision: Option<u64>,
-    scale: Option<u64>,
-) -> Result<DataType> {
+pub fn make_decimal_type(precision: Option<u64>, scale: Option<u64>) -> Result<DataType> {
     // postgres like behavior
     let (precision, scale) = match (precision, scale) {
         (Some(p), Some(s)) => (p as u8, s as i8),
