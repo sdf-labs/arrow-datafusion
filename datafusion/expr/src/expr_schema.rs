@@ -257,6 +257,26 @@ impl ExprSchemable for Expr {
                 self.get_type(input_schema)?,
                 self.nullable(input_schema)?,
             )),
+            Expr::Cast(Cast { expr, data_type }) => {
+                // CAST does not change the expression name
+                let inner_field = expr.to_field(input_schema)?;
+                Ok(DFField::new(
+                    inner_field.qualifier().map(|x| x.to_owned_reference()),
+                    inner_field.name(),
+                    data_type.clone(),
+                    self.nullable(input_schema)?,
+                ))
+            }
+            Expr::TryCast(TryCast { expr, data_type }) => {
+                // CAST does not change the expression name
+                let inner_field = expr.to_field(input_schema)?;
+                Ok(DFField::new(
+                    inner_field.qualifier().map(|x| x.to_owned_reference()),
+                    inner_field.name(),
+                    data_type.clone(),
+                    self.nullable(input_schema)?,
+                ))
+            }
             _ => Ok(DFField::new_unqualified(
                 &self.display_name()?,
                 self.get_type(input_schema)?,
