@@ -1085,6 +1085,8 @@ pub fn expr_as_column_expr(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
             let field = plan.schema().field_from_column(col)?;
             Ok(Expr::Column(field.qualified_column()))
         }
+        Expr::Cast(cast) => expr_as_column_expr(&cast.expr, plan),
+        Expr::TryCast(cast) => expr_as_column_expr(&cast.expr, plan),
         _ => Ok(Expr::Column(Column::from_name(expr.display_name()?))),
     }
 }
