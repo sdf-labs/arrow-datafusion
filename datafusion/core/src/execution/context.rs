@@ -38,7 +38,7 @@ use datafusion_expr::{
 pub use datafusion_physical_expr::execution_props::ExecutionProps;
 use datafusion_physical_expr::var_provider::is_system_variables;
 use parking_lot::RwLock;
-use std::collections::hash_map::Entry;
+use std::{collections::hash_map::Entry, backtrace::Backtrace};
 use std::string::String;
 use std::sync::Arc;
 use std::{
@@ -1142,7 +1142,10 @@ impl SessionContext {
         let schema = self.state.read().schema_for_ref(table_ref)?;
         match schema.table(&table).await {
             Some(ref provider) => Ok(Arc::clone(provider)),
-            _ => Err(DataFusionError::Plan(format!("No table named '{table}'"))),
+            _ => {
+                println!("Custom backtrace: {}", Backtrace::force_capture());
+                Err(DataFusionError::Plan(format!("No table named '{table}'")))
+            }
         }
     }
 
