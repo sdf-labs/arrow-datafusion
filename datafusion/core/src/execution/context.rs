@@ -1144,6 +1144,7 @@ impl SessionContext {
             Some(ref provider) => Ok(Arc::clone(provider)),
             _ => {
                 println!("Custom backtrace: {}", Backtrace::force_capture());
+                println!("table_names = {:?}", schema.table_names());
                 Err(DataFusionError::Plan(format!("No table named '{table}'")))
             }
         }
