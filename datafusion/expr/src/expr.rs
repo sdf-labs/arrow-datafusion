@@ -29,6 +29,7 @@ use crate::Operator;
 use arrow::datatypes::DataType;
 use datafusion_common::{plan_err, Column, DataFusionError, Result, ScalarValue};
 use std::collections::HashSet;
+use std::collections::hash_map::DefaultHasher;
 use std::fmt;
 use std::fmt::{Display, Formatter, Write};
 use std::hash::{BuildHasher, Hash, Hasher};
@@ -1322,7 +1323,10 @@ fn create_name(e: &Expr) -> Result<String> {
         Expr::InSubquery(InSubquery { negated: true, .. }) => Ok("NOT IN".to_string()),
         Expr::InSubquery(InSubquery { negated: false, .. }) => Ok("IN".to_string()),
         Expr::ScalarSubquery(subquery) => {
-            Ok(subquery.subquery.schema().field(0).name().clone())
+            let mut hasher = DefaultHasher::new();
+            subquery.hash(&mut hasher);
+            let hash = hasher.finish();
+            Ok(format!("subquery{}_{}", hash, subquery.subquery.schema().field(0).name()))
         }
         Expr::GetIndexedField(GetIndexedField { key, expr }) => {
             let expr = create_name(expr)?;
