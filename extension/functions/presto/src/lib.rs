@@ -1,12 +1,52 @@
-use arrow::array::{ArrayRef, Float64Array};
+use arrow::array::{ArrayRef, Float64Array, Int64Array};
 use arrow::datatypes::DataType;
 use datafusion::error::Result;
 use datafusion::logical_expr::Volatility;
-use datafusion_common::cast::as_float64_array;
+use datafusion_common::cast::{as_float64_array, as_string_array};
 use datafusion_expr::{
     ReturnTypeFunction, ScalarFunctionDef, ScalarFunctionPackage, Signature,
 };
 use std::sync::Arc;
+
+#[derive(Debug)]
+
+pub struct HammingDistance;
+
+impl ScalarFunctionDef for HammingDistance{
+    fn name(&self) -> &str{
+        "hamming_distance"
+    }
+
+    fn signature(&self) -> Signature {
+        Signature::exact(vec![DataType::Utf8,DataType::Utf8], Volatility::Immutable)
+    }
+
+    fn return_type(&self) -> ReturnTypeFunction {
+        let return_type = Arc::new(DataType::Int64);
+        Arc::new(move |_| Ok(return_type.clone()))
+    }
+
+    fn execute(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
+        assert_eq!(args.len(), 2);
+        let input0 = as_string_array(&args[0]).expect("cast failed");
+        let input1 = as_string_array(&args[1]).expect("cast failed");
+        let array = input0.into_iter().zip(input1.into_iter()).map(|(value0,value1)|match (value0,value1){
+            (None, None) => todo!(),
+            (None, Some(_)) => todo!(),
+            (Some(_), None) => todo!(),
+            (Some(value0), Some(value1)) => {
+                let mut distance = 0;
+                for (c0, c1) in value0.chars().zip(value1.chars()) {
+                    if c0 != c1 {
+                        distance += 1;
+                    }
+                }
+                Some(distance)
+            },
+        }).collect::<Int64Array>();
+        Ok(Arc::new(array) as ArrayRef)
+    }
+}
 
 #[derive(Debug)]
 pub struct AddOneFunction;
@@ -75,7 +115,7 @@ pub struct TestFunctionPackage;
 
 impl ScalarFunctionPackage for TestFunctionPackage {
     fn functions(&self) -> Vec<Box<dyn ScalarFunctionDef>> {
-        vec![Box::new(AddOneFunction), Box::new(MultiplyTwoFunction)]
+        vec![Box::new(AddOneFunction), Box::new(MultiplyTwoFunction), Box::new(HammingDistance)]
     }
 }
 
@@ -154,6 +194,14 @@ mod test {
     async fn test_multiply_two() -> Result<()> {
         test_expression!("multiply_two(1)", "2.0");
         test_expression!("multiply_two(-1)", "-2.0");
+        Ok(())
+    }
+
+    
+    #[tokio::test]
+    async fn test_hamming_distance() -> Result<()> {
+        test_expression!("hamming_distance('0000','1111')", "4");
+        test_expression!("hamming_distance('karolin','kathrin')", "3");
         Ok(())
     }
 }
