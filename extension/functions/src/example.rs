@@ -26,6 +26,111 @@ use datafusion_expr::{
 use std::sync::Arc;
 
 #[derive(Debug)]
+pub struct LuhnCheck;
+
+impl ScalarFunctionDef for LuhnCheck {
+    fn name(&self) -> &str {
+        "luhn_check"
+    }
+
+    fn signature(&self) -> Signature {
+        Signature::exact(vec![DataType::Utf8], Volatility::Immutable)
+    }
+
+    fn return_type(&self) -> ReturnTypeFunction {
+        let return_type = Arc::new(DataType::Boolean);
+        Arc::new(move |_| Ok(return_type.clone()))
+    }
+
+    fn execute(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
+        assert_eq!(args.len(), 1);
+        let input = as_string_array(&args[0]).expect("cast failed");
+        let array = input
+            .iter()
+            .map(|value| match value {
+                Some(value) => Some(luhn_check(&value)),
+                _ => None,
+            })
+            .collect::<BooleanArray>();
+        Ok(Arc::new(array) as ArrayRef)
+    }
+}
+
+fn luhn_check(num_str: &str) -> bool {
+    let mut sum = 0;
+    let mut is_second = false;
+
+    for digit in num_str.chars().rev() {
+        if let Some(mut val) = digit.to_digit(10) {
+            if is_second {
+                val *= 2;
+                if val > 9 {
+                    val -= 9;
+                }
+            }
+            sum += val;
+            is_second = !is_second;
+        } else {
+            return false; // Invalid character
+        }
+    }
+    sum % 10 == 0
+}
+
+
+#[derive(Debug)]
+pub struct LevenshteinDistance;
+
+impl ScalarFunctionDef for LevenshteinDistance {
+    fn name(&self) -> &str {
+        "levenshtein_distance"
+    }
+
+    fn signature(&self) -> Signature {
+        Signature::exact(vec![DataType::Utf8, DataType::Utf8], Volatility::Immutable)
+    }
+
+    fn return_type(&self) -> ReturnTypeFunction {
+        let return_type = Arc::new(DataType::Int64);
+        Arc::new(move |_| Ok(return_type.clone()))
+    }
+
+    fn execute(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
+        assert_eq!(args.len(), 2);
+        let input0 = as_string_array(&args[0]).expect("cast failed");
+        let input1 = as_string_array(&args[1]).expect("cast failed");
+        let array = input0.into_iter().zip(input1.into_iter()).map(|(s1, s2)| match (s1, s2) {
+            (Some(s1), Some(s2)) => Some(levenshtein(&s1, &s2) as i64),
+            _ => None,
+        }).collect::<Int64Array>();
+        Ok(Arc::new(array) as ArrayRef)
+    }
+}
+
+fn levenshtein(s1: &str, s2: &str) -> usize {
+    let mut d = vec![vec![0; s2.len() + 1]; s1.len() + 1];
+
+    for i in 0..=s1.len() {
+        d[i][0] = i;
+    }
+    for j in 0..=s2.len() {
+        d[0][j] = j;
+    }
+
+    for (i, char1) in s1.chars().enumerate() {
+        for (j, char2) in s2.chars().enumerate() {
+            d[i + 1][j + 1] = if char1 == char2 {
+                d[i][j]
+            } else {
+                d[i][j + 1].min(d[i + 1][j]).min(d[i][j]) + 1
+            };
+        }
+    }
+    d[s1.len()][s2.len()]
+}
+
+
+#[derive(Debug)]
 
 pub struct HammingDistance;
 
@@ -132,7 +237,7 @@ pub struct FunctionPackage;
 
 impl ScalarFunctionPackage for FunctionPackage {
     fn functions(&self) -> Vec<Box<dyn ScalarFunctionDef>> {
-        vec![Box::new(AddOneFunction), Box::new(MultiplyTwoFunction), Box::new(HammingDistance)]
+        vec![Box::new(AddOneFunction), Box::new(MultiplyTwoFunction), Box::new(HammingDistance),Box::new(LevenshteinDistance),Box::new(LuhnCheck)]
     }
 }
 
@@ -147,6 +252,30 @@ mod test {
     use super::FunctionPackage;
 
     #[tokio::test]
+    async fn test_luhn_check() -> Result<()> {
+        test_expression!("luhn_check('79927398713')", "true");
+        test_expression!("luhn_check('79927398714')", "false");
+        Ok(())
+    }
+    
+
+    #[tokio::test]
+    async fn test_levenshtein_distance() -> Result<()> {
+        test_expression!("levenshtein_distance('kitten','sitting')", "3");
+        test_expression!("levenshtein_distance('flaw','lawn')", "2");
+        test_expression!("levenshtein_distance('','abc')", "3");
+        Ok(())
+    }
+    
+
+    #[tokio::test]
+    async fn test_hamming_distance() -> Result<()> {
+        test_expression!("hamming_distance('0000','1111')", "4");
+        test_expression!("hamming_distance('karolin','kathrin')", "3");
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_add_one() -> Result<()> {
         test_expression!("add_one(1)", "2.0");
         test_expression!("add_one(-1)", "0.0");
@@ -157,14 +286,6 @@ mod test {
     async fn test_multiply_two() -> Result<()> {
         test_expression!("multiply_two(1)", "2.0");
         test_expression!("multiply_two(-1)", "-2.0");
-        Ok(())
-    }
-
-    
-    #[tokio::test]
-    async fn test_hamming_distance() -> Result<()> {
-        test_expression!("hamming_distance('0000','1111')", "4");
-        test_expression!("hamming_distance('karolin','kathrin')", "3");
         Ok(())
     }
 }
