@@ -67,7 +67,6 @@ async fn execute_to_batches(ctx: &SessionContext, sql: &str) -> Vec<RecordBatch>
     df.collect().await.unwrap()
 }
 
-
 macro_rules! test_expression {
     ($SQL:expr, $EXPECTED:expr) => {
         let ctx = SessionContext::new();

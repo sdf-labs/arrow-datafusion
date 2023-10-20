@@ -102,8 +102,7 @@ mod test {
     use datafusion::prelude::SessionContext;
     use tokio;
 
-
-    use crate::utils::{test_expression, execute};
+    use crate::utils::{execute, test_expression};
 
     use super::FunctionPackage;
 
