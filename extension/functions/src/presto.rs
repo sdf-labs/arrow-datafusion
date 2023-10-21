@@ -32,14 +32,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{ArrayRef, BooleanArray, Int64Array};
+use arrow::array::*;
+// use arrow::array::{ArrayRef, BooleanArray, Int64Array,StringBuilder,Float64Array};
+// use arrow::array::{ StringArray,Array,};
 use arrow::datatypes::DataType;
 use datafusion::error::Result;
 use datafusion::logical_expr::Volatility;
-use datafusion_common::cast::{as_string_array};
+use datafusion_common::cast::{as_string_array,as_float64_array};
+use datafusion_common::DataFusionError;
 use datafusion_expr::{
     ReturnTypeFunction, ScalarFunctionDef, ScalarFunctionPackage, Signature,
 };
+use std::collections::HashSet;
 use std::sync::Arc;
 
 #[derive(Debug)]
@@ -187,6 +191,157 @@ impl ScalarFunctionDef for HammingDistance{
     }
 }
 
+#[derive(Debug)]
+pub struct LengthFunction;
+
+impl ScalarFunctionDef for LengthFunction {
+    fn name(&self) -> &str {
+        "length"
+    }
+
+    fn signature(&self) -> Signature {
+        Signature::exact(vec![DataType::Utf8], Volatility::Immutable)
+    }
+
+    fn return_type(&self) -> ReturnTypeFunction {
+        let return_type = Arc::new(DataType::Int64);
+        Arc::new(move |_| Ok(return_type.clone()))
+    }
+
+    // Returns the length of string in characters.
+    fn execute(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
+        assert_eq!(args.len(), 1);
+        let input = args[0]
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("cast failed");
+        let lengths = input
+            .iter()
+            .map(|value| value.map(|s| s.len() as i64))
+            .collect::<Vec<_>>();
+        let array = Int64Array::from(lengths);
+        Ok(Arc::new(array) as ArrayRef)
+    }
+}
+
+#[derive(Debug)]
+pub struct LTrimFunction;
+
+impl ScalarFunctionDef for LTrimFunction {
+    fn name(&self) -> &str {
+        "ltrim"
+    }
+
+    fn signature(&self) -> Signature {
+        Signature::exact(vec![DataType::Utf8], Volatility::Immutable)
+    }
+
+    fn return_type(&self) -> ReturnTypeFunction {
+        let return_type = Arc::new(DataType::Utf8);
+        Arc::new(move |_| Ok(return_type.clone()))
+    }
+
+    fn execute(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
+        assert_eq!(args.len(), 1);
+        let input = args[0]
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("cast failed");
+        let mut builder = StringBuilder::new();
+
+        for i in 0..input.len() {
+            if input.is_null(i) {
+                builder.append_null();
+            } else {
+                let value = input.value(i);
+                builder.append_value(value.trim_start());
+            }
+        }
+
+        let array = builder.finish();
+        Ok(Arc::new(array) as ArrayRef)
+    }
+}
+
+#[derive(Debug)]
+pub struct RTrimFunction;
+
+impl ScalarFunctionDef for RTrimFunction {
+    fn name(&self) -> &str {
+        "rtrim"
+    }
+
+    fn signature(&self) -> Signature {
+        Signature::exact(vec![DataType::Utf8], Volatility::Immutable)
+    }
+
+    fn return_type(&self) -> ReturnTypeFunction {
+        let return_type = Arc::new(DataType::Utf8);
+        Arc::new(move |_| Ok(return_type.clone()))
+    }
+
+    fn execute(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
+        assert_eq!(args.len(), 1);
+        let input = args[0]
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("cast failed");
+        let mut builder = StringBuilder::new();
+
+        for i in 0..input.len() {
+            if input.is_null(i) {
+                builder.append_null();
+            } else {
+                let value = input.value(i);
+                builder.append_value(value.trim_end());
+            }
+        }
+
+        let array = builder.finish();
+        Ok(Arc::new(array) as ArrayRef)
+    }
+}
+
+#[derive(Debug)]
+pub struct TrimFunction;
+
+impl ScalarFunctionDef for TrimFunction {
+    fn name(&self) -> &str {
+        "trim"
+    }
+
+    fn signature(&self) -> Signature {
+        Signature::exact(vec![DataType::Utf8], Volatility::Immutable)
+    }
+
+    fn return_type(&self) -> ReturnTypeFunction {
+        let return_type = Arc::new(DataType::Utf8);
+        Arc::new(move |_| Ok(return_type.clone()))
+    }
+
+    fn execute(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
+        assert_eq!(args.len(), 1);
+        let input = args[0]
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("cast failed");
+        let mut builder = StringBuilder::new();
+
+        for i in 0..input.len() {
+            if input.is_null(i) {
+                builder.append_null();
+            } else {
+                let value = input.value(i);
+                builder.append_value(value.trim());
+            }
+        }
+
+        let array = builder.finish();
+        Ok(Arc::new(array) as ArrayRef)
+    }
+}
+
+
 // Function package declaration
 pub struct FunctionPackage;
 
@@ -227,6 +382,38 @@ mod test {
     async fn test_hamming_distance() -> Result<()> {
         test_expression!("hamming_distance('0000','1111')", "4");
         test_expression!("hamming_distance('karolin','kathrin')", "3");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_rtrim() -> Result<()> {
+        test_expression!("rtrim('  Hello  ')", "  Hello");
+        test_expression!("rtrim('   ')", "");
+        test_expression!("rtrim('Hello')", "Hello");
+        test_expression!("rtrim('Hello  ')", "Hello");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_trim() -> Result<()> {
+        test_expression!("trim('  Hello  ')", "Hello");
+        test_expression!("trim('   ')", "");
+        test_expression!("trim('Hello')", "Hello");
+        test_expression!("trim('  Hello  ')", "Hello");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_ltrim() -> Result<()> {
+        test_expression!("ltrim('  leading whitespace')", "leading whitespace");
+        test_expression!("ltrim('no leading whitespace')", "no leading whitespace");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_length() -> Result<()> {
+        test_expression!("length('hello')", "5");
+        test_expression!("length('你好')", "2");
         Ok(())
     }
 

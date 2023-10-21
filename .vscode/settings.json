@@ -5,5 +5,9 @@
         "postgres",
         "ansi"
     ],
-    "rust-analyzer.showUnlinkedFileNotification": false
+    "rust-analyzer.showUnlinkedFileNotification": false,
+    "rust-analyzer.linkedProjects": [
+        "./extension/functions/Cargo.toml",
+        "./extension/functions/Cargo.toml"
+    ]
 }
