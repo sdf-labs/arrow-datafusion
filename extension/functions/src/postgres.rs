@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{ArrayRef, Int64Array};
+use arrow::array::{ArrayRef, Int64Array, BooleanArray};
 use arrow::datatypes::DataType;
 use datafusion::error::Result;
 use datafusion::logical_expr::Volatility;
@@ -61,11 +61,22 @@ impl ScalarFunctionDef for RegexpCountFunction {
         let pattern = as_string_array(&args[1]).expect("cast failed");
     
         // 检查是否提供了 start 参数
-        let start = if args.len() > 2 {
+        let start = if args.len() >= 3 {
             as_int64_array(&args[2]).expect("cast failed").iter().next().unwrap_or(None)
         } else {
             None
         };
+        // 检查是否提供了 flag 参数
+        let flag_string = if args.len() >= 4 {
+            let flags_array = as_string_array(&args[3]).expect("cast failed");
+            if let Some(flag) = flags_array.iter().next().unwrap_or(None) {
+                format!("(?{})", flag)
+            } else {
+                String::new()
+            }
+        } else {
+            String::new()
+        };        
     
         // 进行正则表达式匹配
         let array = input.into_iter().zip(pattern.into_iter()).map(|(text, pat)| {
@@ -73,13 +84,8 @@ impl ScalarFunctionDef for RegexpCountFunction {
                 // 如果提供了 start 参数，则从指定位置开始搜索
                 let text = &text[start.unwrap_or(0) as usize..];
                 // 创建正则表达式
-                let re = Regex::new(&pat).expect("Invalid regex pattern");
+                let re = Regex::new(&format!("{}{}", flag_string, pat)).expect("Invalid regex pattern");
                 // 计算匹配次数
-                // println!("Input text: {}", &text);
-                // println!("Pattern: {}", &pat);
-                // println!("Start index: {}", start.unwrap_or(0));
-
-                // println!("Match count: {}", re.find_iter(text).count() as i64);
                 Some(re.find_iter(text).count() as i64)
             } else {
                 None
@@ -91,12 +97,65 @@ impl ScalarFunctionDef for RegexpCountFunction {
     }    
 }
 
+#[derive(Debug)]
+pub struct RegexpLikeFunction;
+
+impl ScalarFunctionDef for RegexpLikeFunction {
+    fn name(&self) -> &str {
+        "regexp_like"
+    }
+
+    fn signature(&self) -> Signature {
+        Signature::one_of(
+            vec![
+                TypeSignature::Exact(vec![DataType::Utf8, DataType::Utf8]),
+                TypeSignature::Exact(vec![DataType::Utf8, DataType::Utf8, DataType::Utf8]),
+            ],
+            Volatility::Immutable
+        )
+    }
+
+    fn return_type(&self) -> ReturnTypeFunction {
+        let return_type = Arc::new(DataType::Boolean);
+        Arc::new(move |_| Ok(return_type.clone()))
+    }
+
+    fn execute(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
+        assert!(args.len() >= 2);
+
+        let input = as_string_array(&args[0]).expect("cast failed");
+        let pattern = as_string_array(&args[1]).expect("cast failed");
+
+        let flag_string = if args.len() >= 3 {
+            let flags_array = as_string_array(&args[2]).expect("cast failed");
+            if let Some(flag) = flags_array.iter().next().unwrap_or(None) {
+                format!("(?{})", flag)
+            } else {
+                String::new()
+            }
+        } else {
+            String::new()
+        };        
+
+        let array = input.into_iter().zip(pattern.into_iter()).map(|(text, pat)| {
+            if let (Some(text), Some(pat)) = (text, pat) {
+                let re = Regex::new(&format!("{}{}", flag_string, pat)).expect("Invalid regex pattern");
+                Some(re.is_match(text))
+            } else {
+                None
+            }
+        }).collect::<BooleanArray>();
+
+        Ok(Arc::new(array) as ArrayRef)
+    }    
+}
+
 // Function package declaration
 pub struct FunctionPackage;
 
 impl ScalarFunctionPackage for FunctionPackage {
     fn functions(&self) -> Vec<Box<dyn ScalarFunctionDef>> {
-        vec![Box::new(RegexpCountFunction)]
+        vec![Box::new(RegexpCountFunction), Box::new(RegexpLikeFunction)]
     }
 }
 
@@ -116,7 +175,13 @@ mod test {
         test_expression!("regexp_count('abcabcabc', 'abc')", "3");
         test_expression!("regexp_count('AaBaHHACcAa', '[Aa]', 2)", "4");
         Ok(())
-    }    
+    }
+    #[tokio::test]
+    async fn test_regexp_like() -> Result<()> {
+        test_expression!("regexp_like('abcabcabc', 'abc')", "true");
+        test_expression!("regexp_like('Hello World', 'world$', 'i')", "true");
+        Ok(())
+    }        
 
     
 }
