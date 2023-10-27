@@ -21,7 +21,7 @@ use datafusion::error::Result;
 use datafusion::logical_expr::Volatility;
 use datafusion_common::cast::{as_string_array, as_int64_array};
 use datafusion_expr::{
-    ReturnTypeFunction, ScalarFunctionDef, ScalarFunctionPackage, Signature,
+    ReturnTypeFunction, ScalarFunctionDef, ScalarFunctionPackage, Signature, TypeSignature,
 };
 use std::sync::Arc;
 
@@ -36,11 +36,14 @@ impl ScalarFunctionDef for RegexpCountFunction {
     }
 
     fn signature(&self) -> Signature {
-        Signature::exact(vec![
-            DataType::Utf8,
-            DataType::Utf8,
-            DataType::Int64
-        ], Volatility::Immutable)
+        Signature::one_of(
+            vec![
+                TypeSignature::Exact(vec![DataType::Utf8, DataType::Utf8]),
+                TypeSignature::Exact(vec![DataType::Utf8, DataType::Utf8, DataType::Int64]),
+                TypeSignature::Exact(vec![DataType::Utf8, DataType::Utf8, DataType::Int64, DataType::Utf8])
+            ],
+            Volatility::Immutable
+        )        
     }
     
 
@@ -50,49 +53,42 @@ impl ScalarFunctionDef for RegexpCountFunction {
     }
 
     fn execute(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
+        // 确保至少有2个参数：input 和 pattern
         assert!(args.len() >= 2);
-
+    
+        // 从参数中获取 input 和 pattern
         let input = as_string_array(&args[0]).expect("cast failed");
         let pattern = as_string_array(&args[1]).expect("cast failed");
     
+        // 检查是否提供了 start 参数
         let start = if args.len() > 2 {
             as_int64_array(&args[2]).expect("cast failed").iter().next().unwrap_or(None)
         } else {
             None
         };
     
-        let flags = if args.len() > 3 {
-            as_string_array(&args[3]).expect("cast failed").iter().next().unwrap_or(None)
-        } else {
-            None
-        };
-        
-        let input = as_string_array(&args[0]).expect("cast failed");
-        let pattern = as_string_array(&args[1]).expect("cast failed");
-
-        let start = if args.len() > 2 {
-            as_int64_array(&args[2]).expect("cast failed").iter().next().unwrap_or(None)
-        } else {
-            None
-        };
-
-        let flags = if args.len() > 3 {
-            as_string_array(&args[3]).expect("cast failed").iter().next().unwrap_or(None)
-        } else {
-            None
-        };
-
+        // 进行正则表达式匹配
         let array = input.into_iter().zip(pattern.into_iter()).map(|(text, pat)| {
             if let (Some(text), Some(pat)) = (text, pat) {
+                // 如果提供了 start 参数，则从指定位置开始搜索
                 let text = &text[start.unwrap_or(0) as usize..];
+                // 创建正则表达式
                 let re = Regex::new(&pat).expect("Invalid regex pattern");
+                // 计算匹配次数
+                // println!("Input text: {}", &text);
+                // println!("Pattern: {}", &pat);
+                // println!("Start index: {}", start.unwrap_or(0));
+
+                // println!("Match count: {}", re.find_iter(text).count() as i64);
                 Some(re.find_iter(text).count() as i64)
             } else {
                 None
             }
         }).collect::<Int64Array>();
+        
+        // 返回结果
         Ok(Arc::new(array) as ArrayRef)
-    }
+    }    
 }
 
 // Function package declaration
@@ -118,7 +114,7 @@ mod test {
     async fn test_regexp_count() -> Result<()> {
         test_expression!("regexp_count('123456789012', '\\d\\d\\d', 2)", "3");
         test_expression!("regexp_count('abcabcabc', 'abc')", "3");
-        test_expression!("regexp_count('AaBbCcAa', '[Aa]', 2)", "3");
+        test_expression!("regexp_count('AaBaHHACcAa', '[Aa]', 2)", "4");
         Ok(())
     }    
 
