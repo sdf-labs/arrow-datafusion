@@ -35,10 +35,14 @@
 use arrow::array::*;
 // use arrow::array::{ArrayRef, BooleanArray, Int64Array,StringBuilder,Float64Array};
 // use arrow::array::{ StringArray,Array,};
+use arrow::datatypes;
 use arrow::datatypes::DataType;
 use datafusion::error::Result;
 use datafusion::logical_expr::Volatility;
-use datafusion_common::cast::{as_string_array,as_float64_array};
+use datafusion_common::cast::as_int32_array;
+use datafusion_common::cast::as_int64_array;
+use datafusion_common::cast::*;
+use datafusion_common::cast::{as_float64_array, as_string_array};
 use datafusion_common::DataFusionError;
 use datafusion_expr::{
     ReturnTypeFunction, ScalarFunctionDef, ScalarFunctionPackage, Signature,
@@ -98,7 +102,6 @@ fn luhn_check(num_str: &str) -> bool {
     sum % 10 == 0
 }
 
-
 #[derive(Debug)]
 pub struct LevenshteinDistance;
 
@@ -120,10 +123,14 @@ impl ScalarFunctionDef for LevenshteinDistance {
         assert_eq!(args.len(), 2);
         let input0 = as_string_array(&args[0]).expect("cast failed");
         let input1 = as_string_array(&args[1]).expect("cast failed");
-        let array = input0.into_iter().zip(input1.into_iter()).map(|(s1, s2)| match (s1, s2) {
-            (Some(s1), Some(s2)) => Some(levenshtein(&s1, &s2) as i64),
-            _ => None,
-        }).collect::<Int64Array>();
+        let array = input0
+            .into_iter()
+            .zip(input1.into_iter())
+            .map(|(s1, s2)| match (s1, s2) {
+                (Some(s1), Some(s2)) => Some(levenshtein(&s1, &s2) as i64),
+                _ => None,
+            })
+            .collect::<Int64Array>();
         Ok(Arc::new(array) as ArrayRef)
     }
 }
@@ -150,18 +157,17 @@ fn levenshtein(s1: &str, s2: &str) -> usize {
     d[s1.len()][s2.len()]
 }
 
-
 #[derive(Debug)]
 
 pub struct HammingDistance;
 
-impl ScalarFunctionDef for HammingDistance{
-    fn name(&self) -> &str{
+impl ScalarFunctionDef for HammingDistance {
+    fn name(&self) -> &str {
         "hamming_distance"
     }
 
     fn signature(&self) -> Signature {
-        Signature::exact(vec![DataType::Utf8,DataType::Utf8], Volatility::Immutable)
+        Signature::exact(vec![DataType::Utf8, DataType::Utf8], Volatility::Immutable)
     }
 
     fn return_type(&self) -> ReturnTypeFunction {
@@ -173,20 +179,24 @@ impl ScalarFunctionDef for HammingDistance{
         assert_eq!(args.len(), 2);
         let input0 = as_string_array(&args[0]).expect("cast failed");
         let input1 = as_string_array(&args[1]).expect("cast failed");
-        let array = input0.into_iter().zip(input1.into_iter()).map(|(value0,value1)|match (value0,value1){
-            (None, None) => todo!(),
-            (None, Some(_)) => todo!(),
-            (Some(_), None) => todo!(),
-            (Some(value0), Some(value1)) => {
-                let mut distance = 0;
-                for (c0, c1) in value0.chars().zip(value1.chars()) {
-                    if c0 != c1 {
-                        distance += 1;
+        let array = input0
+            .into_iter()
+            .zip(input1.into_iter())
+            .map(|(value0, value1)| match (value0, value1) {
+                (None, None) => todo!(),
+                (None, Some(_)) => todo!(),
+                (Some(_), None) => todo!(),
+                (Some(value0), Some(value1)) => {
+                    let mut distance = 0;
+                    for (c0, c1) in value0.chars().zip(value1.chars()) {
+                        if c0 != c1 {
+                            distance += 1;
+                        }
                     }
+                    Some(distance)
                 }
-                Some(distance)
-            },
-        }).collect::<Int64Array>();
+            })
+            .collect::<Int64Array>();
         Ok(Arc::new(array) as ArrayRef)
     }
 }
@@ -341,13 +351,113 @@ impl ScalarFunctionDef for TrimFunction {
     }
 }
 
+// #[derive(Debug)]
+// pub struct SplitPartFunction;
+
+// impl ScalarFunctionDef for SplitPartFunction {
+//     fn name(&self) -> &str {
+//         "split_part"
+//     }
+
+//     fn signature(&self) -> Signature {
+//         Signature::exact(
+//             vec![DataType::Utf8, DataType::Utf8, DataType::Int32],
+//             Volatility::Immutable,
+//         )
+//     }
+
+//     fn return_type(&self) -> ReturnTypeFunction {
+//         let return_type = Arc::new(DataType::Utf8);
+//         Arc::new(move |_| Ok(return_type.clone()))
+//     }
+
+//     fn execute(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
+//         assert_eq!(args.len(), 3);
+
+//         let string = as_string_array(&args[0])?;
+//         let delimiter = as_string_array(&args[1])?;
+//         let position = as_int64_array(&args[2])?;
+
+//         let mut results = Vec::with_capacity(string.len());
+
+//         for i in 0..string.len() {
+//             let string_value = string.value(i);
+//             let delimiter_value = delimiter.value(i);
+//             let mut parts = string_value.split(delimiter_value);
+//             let pos = position.value(i) as usize;
+
+//             let parts = string
+//                 .value(i)
+//                 .split(delimiter.value(i))
+//                 .collect::<Vec<_>>();
+
+//             let index = if pos < 0 {
+//                 // Convert negative index to positive index
+//                 (parts.len() as i64 + pos as i64) as usize
+//             } else {
+//                 pos as usize
+//             };
+
+//             let part = parts.get(index).map(|s| s.to_string()).unwrap_or_default();
+//             results.push(part);
+//         }
+
+//         let array = StringArray::from(results);
+//         Ok(Arc::new(array) as ArrayRef)
+//     }
+// }
+
+#[derive(Debug)]
+pub struct ParseIdentFunction;
+
+impl ScalarFunctionDef for ParseIdentFunction {
+    fn name(&self) -> &str {
+        "parse_ident"
+    }
+
+    fn signature(&self) -> Signature {
+        Signature::exact(vec![DataType::Utf8], Volatility::Immutable)
+    }
+
+    fn return_type(&self) -> ReturnTypeFunction {
+        let return_type = Arc::new(DataType::Utf8);
+        Arc::new(move |_| Ok(return_type.clone()))
+    }
+
+    fn execute(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
+        assert_eq!(args.len(), 1);
+        let input = as_string_array(&args[0]).expect("cast failed");
+        let array = input
+            .iter()
+            .map(|value| {
+                value.map(|v| {
+                    v.split('.')
+                        .map(|identifier| identifier.trim_matches('"').to_string())
+                        .collect::<Vec<String>>()
+                        .join(",")
+                })
+            })
+            .collect::<StringArray>();
+        Ok(Arc::new(array) as ArrayRef)
+    }
+}
 
 // Function package declaration
 pub struct FunctionPackage;
 
 impl ScalarFunctionPackage for FunctionPackage {
     fn functions(&self) -> Vec<Box<dyn ScalarFunctionDef>> {
-        vec![Box::new(HammingDistance),Box::new(LevenshteinDistance),Box::new(LuhnCheck)]
+        vec![
+            Box::new(HammingDistance),
+            Box::new(LevenshteinDistance),
+            Box::new(LuhnCheck),
+            Box::new(LengthFunction),
+            Box::new(LTrimFunction),
+            Box::new(RTrimFunction),
+            Box::new(TrimFunction),
+            //Box::new(SplitPartFunction),
+            Box::new(ParseIdentFunction),
+        ]
     }
 }
 
@@ -367,7 +477,6 @@ mod test {
         test_expression!("luhn_check('79927398714')", "false");
         Ok(())
     }
-    
 
     #[tokio::test]
     async fn test_levenshtein_distance() -> Result<()> {
@@ -376,7 +485,6 @@ mod test {
         test_expression!("levenshtein_distance('','abc')", "3");
         Ok(())
     }
-    
 
     #[tokio::test]
     async fn test_hamming_distance() -> Result<()> {
@@ -417,4 +525,46 @@ mod test {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn test_split_part() -> Result<()> {
+        test_expression!("split_part('abc~@~def~@~ghi', '~@~', 2)", "def");
+        test_expression!("split_part('abc,def,ghi,jkl', ',', -2)", "ghi");
+        // zip 数组分割 在examples上找
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_parse_ident() -> Result<()> {
+        test_expression!("parse_ident('\"SomeSchema\".sometable')", "SomeSchema,sometable");
+        // Add other test cases if needed
+        Ok(())
+    }
+    
 }
+
+// #[cfg(test)]
+//     mod tests {
+//         use crate::presto::ParseIdentFunction;
+//         use arrow::array::{ArrayRef, StringArray};
+//         use crate::presto::ScalarFunctionDef;// text引用struct也要导入相应的impl
+//         use std::sync::Arc;
+
+//         #[test]
+//         fn test_parse_ident() {
+//             // 创建一个示例输入：一个包含单个字符串的 StringArray
+//             let input_array = StringArray::from(vec!['"SomeSchema".someTable']);
+//             let input_arc = Arc::new(input_array) as ArrayRef;
+
+//             // 创建并执行 ParseIdentFunction
+//             let func = ParseIdentFunction;
+//             let result = func.execute(&[input_arc]).unwrap();
+
+            
+//             // 将结果转换回 StringArray 并提取第一个（且唯一的）值
+//             let result_array = result.as_any().downcast_ref::<StringArray>().unwrap();
+//             let result_value = result_array.value(0);
+
+//             // 验证结果是否与预期相符
+//             assert_eq!(result_value, "SomeSchema,sometable");
+//         }
+//     }
