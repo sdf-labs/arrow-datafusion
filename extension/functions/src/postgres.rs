@@ -50,12 +50,12 @@ impl ScalarFunctionDef for FormatFunction {
 
         let result_array: Vec<Option<String>> = format_array.into_iter().enumerate().map(|(idx, format)| {
             if let Some(format) = format {
-                let mut result = format.clone();
+                let mut result = format.to_owned();
                 for (i, arg_array) in args_array.iter().enumerate() {
                     let replace_str = format!("%{}$s", i + 1);
                     let replace_with = arg_array.value(idx);
                     // Simply replacing the contents of result
-                    result = &result.replace(&replace_str, &replace_with);
+                    result = result.replace(&replace_str, &replace_with);
                 }                
                 Some(result)
             } else {
