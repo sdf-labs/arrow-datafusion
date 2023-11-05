@@ -161,6 +161,7 @@ impl ScalarFunctionDef for RegexpReplaceFunction {
     fn signature(&self) -> Signature {
         Signature::one_of(
             vec![
+                TypeSignature::Exact(vec![DataType::Utf8, DataType::Utf8, DataType::Utf8]),
                 TypeSignature::Exact(vec![DataType::Utf8, DataType::Utf8, DataType::Utf8, DataType::Int64, DataType::Int64]),
                 TypeSignature::Exact(vec![DataType::Utf8, DataType::Utf8, DataType::Utf8, DataType::Int64, DataType::Int64, DataType::Utf8])
             ],
@@ -174,15 +175,24 @@ impl ScalarFunctionDef for RegexpReplaceFunction {
     }
 
     fn execute(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
-        assert!(args.len() >= 5);
+        assert!(args.len() >= 3);
     
         let input = as_string_array(&args[0]).expect("cast failed");
         let pattern = as_string_array(&args[1]).expect("cast failed");
         let replacement = as_string_array(&args[2]).expect("cast failed");
-        let start = as_int64_array(&args[3]).expect("cast failed").iter().next().unwrap_or(None);
-        let n = as_int64_array(&args[4]).expect("cast failed").iter().next().unwrap_or(None);
-    
-        let flag_string = if args.len() == 6 {
+        let start = if args.len() > 3 {
+            as_int64_array(&args[3]).expect("cast failed").iter().next().unwrap_or(Some(0))
+        } else {
+            Some(0)
+        };
+        
+        let n = if args.len() > 4 {
+            as_int64_array(&args[4]).expect("cast failed").iter().next().unwrap_or(Some(0))
+        } else {
+            Some(0)
+        };
+        
+        let flag_string = if args.len() > 5 {
             let flags_array = as_string_array(&args[5]).expect("cast failed");
             if let Some(flag) = flags_array.iter().next().unwrap_or(None) {
                 format!("(?{})", flag)
@@ -192,29 +202,65 @@ impl ScalarFunctionDef for RegexpReplaceFunction {
         } else {
             String::new()
         };        
-    
+
+        // let array = input.into_iter().zip(pattern.into_iter().zip(replacement.into_iter())).map(|(text, (pat, rep))| {
+        //     if let (Some(text), Some(pat), Some(rep)) = (text, pat, rep) {
+        //         let start_pos = start.map_or(0, |s| s as usize);
+        //         let prefix = &text[..start_pos];
+        //         let rest_text = &text[start_pos..];
+        //         let re = Regex::new(&format!("{}{}", flag_string, pat)).expect("Invalid regex pattern");
+        
+        //         if n == Some(0) {
+        //             // 替换所有匹配
+        //             Some(format!("{}{}", prefix, re.replace_all(rest_text, rep)))
+        //         } else {
+        //             let mut replaced_text = String::from(prefix);
+        //             let mut match_count = 0;
+        //             let mut last_end = 0;
+        //             for cap in re.captures_iter(rest_text) {
+        //                 match_count += 1;
+        //                 replaced_text.push_str(&rest_text[last_end..cap.get(0).unwrap().start()]);
+        //                 if match_count == n.unwrap() {
+        //                     replaced_text.push_str(rep);
+        //                     last_end = cap.get(0).unwrap().end();
+        //                     break;
+        //                 } else {
+        //                     replaced_text.push_str(&cap.get(0).unwrap().as_str());
+        //                 }
+        //                 last_end = cap.get(0).unwrap().end();
+        //             }
+        //             replaced_text.push_str(&rest_text[last_end..]);
+        //             Some(replaced_text)
+        //         }
+        //     } else {
+        //         None
+        //     }
+        // }).collect::<StringArray>();
         let array = input.into_iter().zip(pattern.into_iter().zip(replacement.into_iter())).map(|(text, (pat, rep))| {
             if let (Some(text), Some(pat), Some(rep)) = (text, pat, rep) {
-                let prefix = &text[..start.unwrap_or(0) as usize];
-                let rest_text = &text[start.unwrap_or(0) as usize..];
+                let start_pos = start.map_or(0, |s| if s > 0 { s as usize - 1 } else { 0 });
+                let prefix = &text[..start_pos];
+                let rest_text = &text[start_pos..];
                 let re = Regex::new(&format!("{}{}", flag_string, pat)).expect("Invalid regex pattern");
-                
+        
                 if n == Some(0) {
                     // 替换所有匹配
                     Some(format!("{}{}", prefix, re.replace_all(rest_text, rep)))
                 } else {
                     let mut replaced_text = String::from(prefix);
-                    let mut count = 0;
+                    let mut match_count = 0;  
                     let mut last_end = 0;
                     for cap in re.captures_iter(rest_text) {
-                        count += 1;
+                        match_count += 1;  
                         replaced_text.push_str(&rest_text[last_end..cap.get(0).unwrap().start()]);
-                        if count == n.unwrap() {
+                        if match_count == n.unwrap() {
                             replaced_text.push_str(rep);
+                            last_end = cap.get(0).unwrap().end();
+                            break;
                         } else {
                             replaced_text.push_str(&cap.get(0).unwrap().as_str());
+                            last_end = cap.get(0).unwrap().end();
                         }
-                        last_end = cap.get(0).unwrap().end();
                     }
                     replaced_text.push_str(&rest_text[last_end..]);
                     Some(replaced_text)
@@ -222,7 +268,7 @@ impl ScalarFunctionDef for RegexpReplaceFunction {
             } else {
                 None
             }
-        }).collect::<StringArray>();        
+        }).collect::<StringArray>();
         
         Ok(Arc::new(array) as ArrayRef)
     }    
@@ -263,18 +309,11 @@ mod test {
 
     #[tokio::test]
     async fn test_regexp_replace() -> Result<()> {
-        // 测试第二个匹配的'.'替换为'X'
+        test_expression!("regexp_replace('Thomas', '.[mN]a.', 'M')", "ThM");
         test_expression!("regexp_replace('Thomas', '.', 'X', 3, 2)", "ThoXas");
-
-        // 测试从第2个字符开始, 替换所有的'a'为'X'
         test_expression!("regexp_replace('banana', 'a', 'X', 1, 0)", "bXnXnX");
-
-        // 测试从第2个字符开始, 替换第1个匹配的'a'为'X'
-        test_expression!("regexp_replace('banana', 'a', 'X', 2, 1)", "bXnana");
-
-        // 测试不考虑大小写，从第2个字符开始, 替换第1个匹配的'a'或'A'为'X'
-        test_expression!("regexp_replace('bAnana', 'a', 'X', 2, 1, 'i')", "bXnana");
-
+        test_expression!("regexp_replace('banana', 'a', 'X', 1, 1)", "bXnana");
+        test_expression!("regexp_replace('bAnana', 'a', 'X', 1, 1, 'i')", "bXnana");
         Ok(())
     }
 
