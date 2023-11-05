@@ -53,20 +53,17 @@ impl ScalarFunctionDef for RegexpCountFunction {
     }
 
     fn execute(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
-        // 确保至少有2个参数：input 和 pattern
         assert!(args.len() >= 2);
     
-        // 从参数中获取 input 和 pattern
         let input = as_string_array(&args[0]).expect("cast failed");
         let pattern = as_string_array(&args[1]).expect("cast failed");
     
-        // 检查是否提供了 start 参数
         let start = if args.len() >= 3 {
             as_int64_array(&args[2]).expect("cast failed").iter().next().unwrap_or(None)
         } else {
             None
         };
-        // 检查是否提供了 flag 参数
+
         let flag_string = if args.len() >= 4 {
             let flags_array = as_string_array(&args[3]).expect("cast failed");
             if let Some(flag) = flags_array.iter().next().unwrap_or(None) {
@@ -78,21 +75,15 @@ impl ScalarFunctionDef for RegexpCountFunction {
             String::new()
         };        
     
-        // 进行正则表达式匹配
         let array = input.into_iter().zip(pattern.into_iter()).map(|(text, pat)| {
             if let (Some(text), Some(pat)) = (text, pat) {
-                // 如果提供了 start 参数，则从指定位置开始搜索
                 let text = &text[start.unwrap_or(0) as usize..];
-                // 创建正则表达式
                 let re = Regex::new(&format!("{}{}", flag_string, pat)).expect("Invalid regex pattern");
-                // 计算匹配次数
                 Some(re.find_iter(text).count() as i64)
             } else {
                 None
             }
         }).collect::<Int64Array>();
-        
-        // 返回结果
         Ok(Arc::new(array) as ArrayRef)
     }    
 }
@@ -203,39 +194,6 @@ impl ScalarFunctionDef for RegexpReplaceFunction {
             String::new()
         };        
 
-        // let array = input.into_iter().zip(pattern.into_iter().zip(replacement.into_iter())).map(|(text, (pat, rep))| {
-        //     if let (Some(text), Some(pat), Some(rep)) = (text, pat, rep) {
-        //         let start_pos = start.map_or(0, |s| s as usize);
-        //         let prefix = &text[..start_pos];
-        //         let rest_text = &text[start_pos..];
-        //         let re = Regex::new(&format!("{}{}", flag_string, pat)).expect("Invalid regex pattern");
-        
-        //         if n == Some(0) {
-        //             // 替换所有匹配
-        //             Some(format!("{}{}", prefix, re.replace_all(rest_text, rep)))
-        //         } else {
-        //             let mut replaced_text = String::from(prefix);
-        //             let mut match_count = 0;
-        //             let mut last_end = 0;
-        //             for cap in re.captures_iter(rest_text) {
-        //                 match_count += 1;
-        //                 replaced_text.push_str(&rest_text[last_end..cap.get(0).unwrap().start()]);
-        //                 if match_count == n.unwrap() {
-        //                     replaced_text.push_str(rep);
-        //                     last_end = cap.get(0).unwrap().end();
-        //                     break;
-        //                 } else {
-        //                     replaced_text.push_str(&cap.get(0).unwrap().as_str());
-        //                 }
-        //                 last_end = cap.get(0).unwrap().end();
-        //             }
-        //             replaced_text.push_str(&rest_text[last_end..]);
-        //             Some(replaced_text)
-        //         }
-        //     } else {
-        //         None
-        //     }
-        // }).collect::<StringArray>();
         let array = input.into_iter().zip(pattern.into_iter().zip(replacement.into_iter())).map(|(text, (pat, rep))| {
             if let (Some(text), Some(pat), Some(rep)) = (text, pat, rep) {
                 let start_pos = start.map_or(0, |s| if s > 0 { s as usize - 1 } else { 0 });
@@ -244,7 +202,6 @@ impl ScalarFunctionDef for RegexpReplaceFunction {
                 let re = Regex::new(&format!("{}{}", flag_string, pat)).expect("Invalid regex pattern");
         
                 if n == Some(0) {
-                    // 替换所有匹配
                     Some(format!("{}{}", prefix, re.replace_all(rest_text, rep)))
                 } else {
                     let mut replaced_text = String::from(prefix);
