@@ -25,7 +25,7 @@ use datafusion_expr::{
 };
 use std::sync::Arc;
 
-use regex::Regex;
+use regex::{Regex, Captures};
 use unidecode::unidecode;
 
 #[derive(Debug)]
@@ -321,12 +321,58 @@ impl ScalarFunctionDef for ToAsciiFunction {
         Ok(Arc::new(array) as ArrayRef)
     }
 }    
+
+#[derive(Debug)]
+pub struct UniStrFunction;
+
+impl ScalarFunctionDef for UniStrFunction {
+    fn name(&self) -> &str {
+        "unistr"
+    }
+
+    fn signature(&self) -> Signature {
+        Signature::exact(vec![DataType::Utf8], Volatility::Immutable)
+    }
+
+    fn return_type(&self) -> ReturnTypeFunction {
+        Arc::new(|_| Ok(Arc::new(DataType::Utf8)))
+    }
+
+    fn execute(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
+        assert_eq!(args.len(), 1);
+
+        let input = as_string_array(&args[0]).expect("cast failed");
+
+        let re = Regex::new(r"(?x)
+            \\?\+([0-9A-Fa-f]{6}) |
+            \\([0-9A-Fa-f]{4})   |
+            \\u([0-9A-Fa-f]{4})  |
+            \\U([0-9A-Fa-f]{8})  |
+            \\\\"
+        ).expect("Failed to create regex");
+
+        let array = input.into_iter().map(|opt_text| {
+            opt_text.map(|text| {
+                re.replace_all(&text, |caps: &Captures| {
+                    if let Some(hex) = caps.get(1).or(caps.get(2)).or(caps.get(3)).or(caps.get(4)) {
+                        let codepoint = u32::from_str_radix(hex.as_str(), 16).unwrap();
+                        char::from_u32(codepoint).unwrap().to_string()
+                    } else {
+                        "\\".to_string()
+                    }
+                }).to_string()
+            })
+        }).collect::<StringArray>();
+
+        Ok(Arc::new(array) as ArrayRef)
+    }
+}
 // Function package declaration
 pub struct FunctionPackage;
 
 impl ScalarFunctionPackage for FunctionPackage {
     fn functions(&self) -> Vec<Box<dyn ScalarFunctionDef>> {
-        vec![Box::new(RegexpCountFunction), Box::new(RegexpLikeFunction),Box::new(RegexpReplaceFunction),Box::new(NormalizeFunction),Box::new(ToAsciiFunction)]
+        vec![Box::new(RegexpCountFunction), Box::new(RegexpLikeFunction),Box::new(RegexpReplaceFunction),Box::new(NormalizeFunction),Box::new(ToAsciiFunction),Box::new(UniStrFunction)]
     }
 }
 
@@ -380,5 +426,12 @@ mod test {
     Ok(())
 }
 
+#[tokio::test]
+    async fn test_unistr() -> Result<()> {
+        test_expression!("unistr('d\\0061t\\+000061')", "data");
+        test_expression!("unistr('d\\u0061t\\U00000061')", "data");
+        test_expression!("unistr('Backslash \\\\')", "Backslash \\");
+        Ok(())
+}
 
 }
