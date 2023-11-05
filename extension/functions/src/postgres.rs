@@ -367,12 +367,85 @@ impl ScalarFunctionDef for UniStrFunction {
         Ok(Arc::new(array) as ArrayRef)
     }
 }
+
+#[derive(Debug)]
+pub struct QuoteNullableFunction;
+
+impl ScalarFunctionDef for QuoteNullableFunction {
+    fn name(&self) -> &str {
+        "quote_nullable"
+    }
+
+    fn signature(&self) -> Signature {
+        Signature::one_of(
+            vec![
+                TypeSignature::Exact(vec![DataType::Utf8]),
+            ],
+            Volatility::Immutable
+        )        
+    }
+    
+
+    fn return_type(&self) -> ReturnTypeFunction {
+        let return_type = Arc::new(DataType::Utf8);
+        Arc::new(move |_| Ok(return_type.clone()))
+    }
+
+    fn execute(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
+        assert_eq!(args.len(), 1);
+    
+        let input = as_string_array(&args[0]).expect("cast failed");
+        
+        let array = input.into_iter().map(|text| {
+            text.map(|t| format!("'{}'", t.replace("'", "''").replace("\\", "\\\\")))
+        }).collect::<StringArray>();
+
+        Ok(Arc::new(array) as ArrayRef)
+    }    
+}
+
+#[derive(Debug)]
+pub struct QuoteLiteralFunction;
+
+impl ScalarFunctionDef for QuoteLiteralFunction {
+    fn name(&self) -> &str {
+        "quote_literal"
+    }
+
+    fn signature(&self) -> Signature {
+        Signature::one_of(
+            vec![
+                TypeSignature::Exact(vec![DataType::Utf8]),
+            ],
+            Volatility::Immutable
+        )        
+    }
+    
+
+    fn return_type(&self) -> ReturnTypeFunction {
+        let return_type = Arc::new(DataType::Utf8);
+        Arc::new(move |_| Ok(return_type.clone()))
+    }
+
+    fn execute(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
+        assert_eq!(args.len(), 1);
+    
+        let input = as_string_array(&args[0]).expect("cast failed");
+        
+        let array = input.into_iter().map(|text| {
+            text.map(|t| format!("'{}'", t.replace("'", "''").replace("\\", "\\\\")))
+        }).collect::<StringArray>();
+
+        Ok(Arc::new(array) as ArrayRef)
+    }    
+}
+
 // Function package declaration
 pub struct FunctionPackage;
 
 impl ScalarFunctionPackage for FunctionPackage {
     fn functions(&self) -> Vec<Box<dyn ScalarFunctionDef>> {
-        vec![Box::new(RegexpCountFunction), Box::new(RegexpLikeFunction),Box::new(RegexpReplaceFunction),Box::new(NormalizeFunction),Box::new(ToAsciiFunction),Box::new(UniStrFunction)]
+        vec![Box::new(RegexpCountFunction), Box::new(RegexpLikeFunction),Box::new(RegexpReplaceFunction),Box::new(NormalizeFunction),Box::new(ToAsciiFunction),Box::new(UniStrFunction),Box::new(QuoteLiteralFunction),Box::new(QuoteNullableFunction)]
     }
 }
 
@@ -432,6 +505,25 @@ mod test {
         test_expression!("unistr('d\\u0061t\\U00000061')", "data");
         test_expression!("unistr('Backslash \\\\')", "Backslash \\");
         Ok(())
+}
+
+#[tokio::test]
+async fn test_quote_nullable() -> Result<()> {
+    test_expression!("quote_nullable('O''Reilly')", "'O''Reilly'");
+    test_expression!("quote_nullable('O\\'Reilly')", "'O\\''Reilly'");
+    test_expression!("quote_nullable('Hello World')", "'Hello World'");
+    test_expression!("quote_nullable(null)", "null");
+    Ok(())
+}
+
+
+#[tokio::test]
+async fn test_quote_literal() -> Result<()> {
+    test_expression!("quote_literal('O''Reilly')", "'O''Reilly'");
+    test_expression!("quote_literal('O\\'Reilly')", "'O\\''Reilly'");
+    test_expression!("quote_literal('Hello World')", "'Hello World'");
+    test_expression!("quote_literal(null)", "null");
+    Ok(())
 }
 
 }
