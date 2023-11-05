@@ -231,12 +231,64 @@ impl ScalarFunctionDef for RegexpReplaceFunction {
     }    
 }
 
+#[derive(Debug)]
+pub struct NormalizeFunction;
+
+impl ScalarFunctionDef for NormalizeFunction {
+    fn name(&self) -> &str {
+        "normalize"
+    }
+
+    fn signature(&self) -> Signature {
+        Signature::one_of(
+            vec![
+                TypeSignature::Exact(vec![DataType::Utf8]),
+                TypeSignature::Exact(vec![DataType::Utf8, DataType::Utf8]),
+            ],
+            Volatility::Immutable
+        )
+    }
+
+    fn return_type(&self) -> ReturnTypeFunction {
+        let return_type = Arc::new(DataType::Utf8);
+        Arc::new(move |_| Ok(return_type.clone()))
+    }
+
+    fn execute(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
+        assert!(args.len() >= 1);
+
+        let input = as_string_array(&args[0]).expect("cast failed");
+        let form = if args.len() >= 2 {
+            as_string_array(&args[1]).expect("cast failed").iter().next().unwrap_or(None)
+        } else {
+            Some("NFC")
+        };
+
+        let array = input.into_iter().map(|text| {
+            if let Some(text) = text {
+                let normalized_text = match form.as_deref() {
+                    Some("NFC") => unicode_normalization::UnicodeNormalization::nfc(text.chars()).collect::<String>(),
+                    Some("NFD") => unicode_normalization::UnicodeNormalization::nfd(text.chars()).collect::<String>(),
+                    Some("NFKC") => unicode_normalization::UnicodeNormalization::nfkc(text.chars()).collect::<String>(),
+                    Some("NFKD") => unicode_normalization::UnicodeNormalization::nfkd(text.chars()).collect::<String>(),
+                    _ => text.to_string(),
+                };
+                Some(normalized_text)
+            } else {
+                None
+            }
+        }).collect::<StringArray>();
+        Ok(Arc::new(array) as ArrayRef)
+    }    
+}
+
+
 // Function package declaration
 pub struct FunctionPackage;
 
 impl ScalarFunctionPackage for FunctionPackage {
     fn functions(&self) -> Vec<Box<dyn ScalarFunctionDef>> {
-        vec![Box::new(RegexpCountFunction), Box::new(RegexpLikeFunction),Box::new(RegexpReplaceFunction)]
+        vec![Box::new(RegexpCountFunction), Box::new(RegexpLikeFunction),Box::new(RegexpReplaceFunction),Box::new(NormalizeFunction)]
     }
 }
 
@@ -271,6 +323,15 @@ mod test {
         test_expression!("regexp_replace('banana', 'a', 'X', 1, 0)", "bXnXnX");
         test_expression!("regexp_replace('banana', 'a', 'X', 1, 1)", "bXnana");
         test_expression!("regexp_replace('bAnana', 'a', 'X', 1, 1, 'i')", "bXnana");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_normalize() -> Result<()> {
+        test_expression!("normalize('a\u{0308}bc')", "\u{00E4}bc");
+        test_expression!("normalize('\u{00E4}bc', 'NFD')", "a\u{0308}bc");
+        test_expression!("normalize('a\u{0308}bc', 'NFKC')", "\u{00E4}bc");
+        test_expression!("normalize('\u{00E4}bc', 'NFKD')", "a\u{0308}bc");
         Ok(())
     }
 
