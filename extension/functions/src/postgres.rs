@@ -264,7 +264,7 @@ mod test {
     #[tokio::test]
     async fn test_regexp_replace() -> Result<()> {
         // 测试第二个匹配的'.'替换为'X'
-        //test_expression!("regexp_replace('Thomas', '\\.', 'X', 3, 2)", "ThoXas");
+        test_expression!("regexp_replace('Thomas', '.', 'X', 3, 2)", "ThoXas");
 
         // 测试从第2个字符开始, 替换所有的'a'为'X'
         test_expression!("regexp_replace('banana', 'a', 'X', 1, 0)", "bXnXnX");
