@@ -38,6 +38,8 @@ arrow = { workspace = true }
 tokio = "1.33.0"
 regex = "1.5"
 unicode-normalization = "0.1"
+unidecode = "0.3.0"
+
 
 [features]
 example = []

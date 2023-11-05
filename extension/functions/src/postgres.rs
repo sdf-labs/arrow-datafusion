@@ -26,6 +26,7 @@ use datafusion_expr::{
 use std::sync::Arc;
 
 use regex::Regex;
+use unidecode::unidecode;
 
 #[derive(Debug)]
 pub struct RegexpCountFunction;
@@ -282,13 +283,50 @@ impl ScalarFunctionDef for NormalizeFunction {
     }    
 }
 
+#[derive(Debug)]
+pub struct ToAsciiFunction;
 
+impl ScalarFunctionDef for ToAsciiFunction {
+    fn name(&self) -> &str {
+        "to_ascii"
+    }
+
+    fn signature(&self) -> Signature {
+        Signature::one_of(
+            vec![
+                TypeSignature::Exact(vec![DataType::Utf8]),
+                TypeSignature::Exact(vec![DataType::Utf8, DataType::Utf8]),
+                TypeSignature::Exact(vec![DataType::Utf8, DataType::Int64]),
+            ],
+            Volatility::Immutable
+        )        
+    }
+
+    fn return_type(&self) -> ReturnTypeFunction {
+        let return_type = Arc::new(DataType::Utf8);
+        Arc::new(move |_| Ok(return_type.clone()))
+    }
+    fn execute(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
+        assert!(args.len() >= 1);
+
+        let input = as_string_array(&args[0]).expect("cast failed");
+        
+        let array = input.into_iter().map(|text| {
+            if let Some(text) = text {
+                Some(unidecode(&text))
+            } else {
+                None
+            }
+        }).collect::<StringArray>();
+        Ok(Arc::new(array) as ArrayRef)
+    }
+}    
 // Function package declaration
 pub struct FunctionPackage;
 
 impl ScalarFunctionPackage for FunctionPackage {
     fn functions(&self) -> Vec<Box<dyn ScalarFunctionDef>> {
-        vec![Box::new(RegexpCountFunction), Box::new(RegexpLikeFunction),Box::new(RegexpReplaceFunction),Box::new(NormalizeFunction)]
+        vec![Box::new(RegexpCountFunction), Box::new(RegexpLikeFunction),Box::new(RegexpReplaceFunction),Box::new(NormalizeFunction),Box::new(ToAsciiFunction)]
     }
 }
 
@@ -334,5 +372,13 @@ mod test {
         test_expression!("normalize('\u{00E4}bc', 'NFKD')", "a\u{0308}bc");
         Ok(())
     }
+
+    #[tokio::test]
+    async fn test_to_ascii() -> Result<()> {
+        test_expression!("to_ascii('Karél')", "Karel");
+        test_expression!("to_ascii('álfa-βéta')", "alfa-beta");
+    Ok(())
+}
+
 
 }
