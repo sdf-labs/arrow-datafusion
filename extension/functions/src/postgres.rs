@@ -520,14 +520,14 @@ impl ScalarFunctionDef for QuoteLiteralFunction {
     }
 
     fn execute(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
-        assert_eq!(args.len(), 1);
-
-        let input = as_string_array(&args[0]).expect("cast failed");
+        let input = as_string_array(&args[0])?;
 
         let array = input
-            .into_iter()
-            .map(|text| {
-                text.map(|t| format!("'{}'", t.replace("'", "''").replace("\\", "\\\\")))
+            .iter()
+            .map(|opt_text| {
+                opt_text.map(|text| {
+                    format!("'{}'", text.replace("'", "''").replace("\\", "\\\\"))
+                })
             })
             .collect::<StringArray>();
 
@@ -613,7 +613,7 @@ mod test {
 
     #[tokio::test]
     async fn test_quote_nullable() -> Result<()> {
-        test_expression!("quote_nullable('O''Reilly')", "'O''Reilly'");
+        test_expression!("quote_nullable(''O''Reilly'')", "'O''Reilly'");
         test_expression!("quote_nullable('O\\'Reilly')", "'O\\''Reilly'");
         test_expression!("quote_nullable('Hello World')", "'Hello World'");
         test_expression!("quote_nullable(null)", "null");
