@@ -36,7 +36,8 @@ use datafusion_common::{
 use datafusion_execution::registry::SerializerRegistry;
 use datafusion_expr::{
     logical_plan::{DdlStatement, Statement},
-    StringifiedPlan, UserDefinedLogicalNode, WindowUDF, ScalarFunctionPackage, ScalarFunctionDef,
+    ScalarFunctionDef, ScalarFunctionPackage, StringifiedPlan, UserDefinedLogicalNode,
+    WindowUDF,
 };
 pub use datafusion_physical_expr::execution_props::ExecutionProps;
 use datafusion_physical_expr::var_provider::is_system_variables;
