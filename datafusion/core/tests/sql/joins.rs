@@ -81,7 +81,7 @@ async fn null_aware_left_anti_join() -> Result<()> {
 #[tokio::test]
 async fn join_change_in_planner() -> Result<()> {
     let config = SessionConfig::new().with_target_partitions(8);
-    let ctx = SessionContext::with_config(config);
+    let ctx = SessionContext::new_with_config(config);
     let tmp_dir = TempDir::new().unwrap();
     let left_file_path = tmp_dir.path().join("left.csv");
     File::create(left_file_path.clone()).unwrap();
@@ -127,17 +127,19 @@ async fn join_change_in_planner() -> Result<()> {
         [
             "SymmetricHashJoinExec: mode=Partitioned, join_type=Full, on=[(a2@1, a2@1)], filter=CAST(a1@0 AS Int64) > CAST(a1@1 AS Int64) + 3 AND CAST(a1@0 AS Int64) < CAST(a1@1 AS Int64) + 10",
             "  CoalesceBatchesExec: target_batch_size=8192",
-            "    RepartitionExec: partitioning=Hash([a2@1], 8), input_partitions=1",
-            // "   CsvExec: file_groups={1 group: [[tempdir/left.csv]]}, projection=[a1, a2], has_header=false",
+            "    RepartitionExec: partitioning=Hash([a2@1], 8), input_partitions=8",
+            "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            // "     CsvExec: file_groups={1 group: [[tempdir/left.csv]]}, projection=[a1, a2], has_header=false",
             "  CoalesceBatchesExec: target_batch_size=8192",
-            "    RepartitionExec: partitioning=Hash([a2@1], 8), input_partitions=1",
-            // "   CsvExec: file_groups={1 group: [[tempdir/right.csv]]}, projection=[a1, a2], has_header=false"
+            "    RepartitionExec: partitioning=Hash([a2@1], 8), input_partitions=8",
+            "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            // "     CsvExec: file_groups={1 group: [[tempdir/right.csv]]}, projection=[a1, a2], has_header=false"
         ]
     };
     let mut actual: Vec<&str> = formatted.trim().lines().collect();
     // Remove CSV lines
-    actual.remove(3);
-    actual.remove(5);
+    actual.remove(4);
+    actual.remove(7);
 
     assert_eq!(
         expected,
@@ -150,7 +152,7 @@ async fn join_change_in_planner() -> Result<()> {
 #[tokio::test]
 async fn join_change_in_planner_without_sort() -> Result<()> {
     let config = SessionConfig::new().with_target_partitions(8);
-    let ctx = SessionContext::with_config(config);
+    let ctx = SessionContext::new_with_config(config);
     let tmp_dir = TempDir::new()?;
     let left_file_path = tmp_dir.path().join("left.csv");
     File::create(left_file_path.clone())?;
@@ -180,17 +182,19 @@ async fn join_change_in_planner_without_sort() -> Result<()> {
         [
             "SymmetricHashJoinExec: mode=Partitioned, join_type=Full, on=[(a2@1, a2@1)], filter=CAST(a1@0 AS Int64) > CAST(a1@1 AS Int64) + 3 AND CAST(a1@0 AS Int64) < CAST(a1@1 AS Int64) + 10",
             "  CoalesceBatchesExec: target_batch_size=8192",
-            "    RepartitionExec: partitioning=Hash([a2@1], 8), input_partitions=1",
-            // "   CsvExec: file_groups={1 group: [[tempdir/left.csv]]}, projection=[a1, a2], has_header=false",
+            "    RepartitionExec: partitioning=Hash([a2@1], 8), input_partitions=8",
+            "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            // "     CsvExec: file_groups={1 group: [[tempdir/left.csv]]}, projection=[a1, a2], has_header=false",
             "  CoalesceBatchesExec: target_batch_size=8192",
-            "    RepartitionExec: partitioning=Hash([a2@1], 8), input_partitions=1",
-            // "   CsvExec: file_groups={1 group: [[tempdir/right.csv]]}, projection=[a1, a2], has_header=false"
+            "    RepartitionExec: partitioning=Hash([a2@1], 8), input_partitions=8",
+            "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            // "     CsvExec: file_groups={1 group: [[tempdir/right.csv]]}, projection=[a1, a2], has_header=false"
         ]
     };
     let mut actual: Vec<&str> = formatted.trim().lines().collect();
     // Remove CSV lines
-    actual.remove(3);
-    actual.remove(5);
+    actual.remove(4);
+    actual.remove(7);
 
     assert_eq!(
         expected,
@@ -205,7 +209,7 @@ async fn join_change_in_planner_without_sort_not_allowed() -> Result<()> {
     let config = SessionConfig::new()
         .with_target_partitions(8)
         .with_allow_symmetric_joins_without_pruning(false);
-    let ctx = SessionContext::with_config(config);
+    let ctx = SessionContext::new_with_config(config);
     let tmp_dir = TempDir::new()?;
     let left_file_path = tmp_dir.path().join("left.csv");
     File::create(left_file_path.clone())?;

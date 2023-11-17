@@ -810,6 +810,7 @@ fn align_array_dimensions(args: Vec<ArrayRef>) -> Result<Vec<ArrayRef>> {
     aligned_args
 }
 
+// Concatenate arrays on the same row.
 fn concat_internal(args: &[ArrayRef]) -> Result<ArrayRef> {
     let args = align_array_dimensions(args.to_vec())?;
 
@@ -818,49 +819,56 @@ fn concat_internal(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     // Assume number of rows is the same for all arrays
     let row_count = list_arrays[0].len();
-    let capacity = Capacities::Array(list_arrays.iter().map(|a| a.len()).sum());
-    let array_data: Vec<_> = list_arrays.iter().map(|a| a.to_data()).collect::<Vec<_>>();
-    let array_data: Vec<&ArrayData> = array_data.iter().collect();
 
-    let mut mutable = MutableArrayData::with_capacities(array_data, true, capacity);
+    let mut array_lengths = vec![];
+    let mut arrays = vec![];
+    let mut valid = BooleanBufferBuilder::new(row_count);
+    for i in 0..row_count {
+        let nulls = list_arrays
+            .iter()
+            .map(|arr| arr.is_null(i))
+            .collect::<Vec<_>>();
 
-    let mut array_lens = vec![0; row_count];
-    let mut null_bit_map: Vec<bool> = vec![true; row_count];
+        // If all the arrays are null, the concatenated array is null
+        let is_null = nulls.iter().all(|&x| x);
+        if is_null {
+            array_lengths.push(0);
+            valid.append(false);
+        } else {
+            // Get all the arrays on i-th row
+            let values = list_arrays
+                .iter()
+                .map(|arr| arr.value(i))
+                .collect::<Vec<_>>();
 
-    for (i, array_len) in array_lens.iter_mut().enumerate().take(row_count) {
-        let null_count = mutable.null_count();
-        for (j, a) in list_arrays.iter().enumerate() {
-            mutable.extend(j, i, i + 1);
-            *array_len += a.value_length(i);
-        }
+            let elements = values
+                .iter()
+                .map(|a| a.as_ref())
+                .collect::<Vec<&dyn Array>>();
 
-        // This means all arrays are null
-        if mutable.null_count() == null_count + list_arrays.len() {
-            null_bit_map[i] = false;
+            // Concatenated array on i-th row
+            let concated_array = arrow::compute::concat(elements.as_slice())?;
+            array_lengths.push(concated_array.len());
+            arrays.push(concated_array);
+            valid.append(true);
         }
     }
+    // Assume all arrays have the same data type
+    let data_type = list_arrays[0].value_type().clone();
+    let buffer = valid.finish();
 
-    let mut buffer = BooleanBufferBuilder::new(row_count);
-    buffer.append_slice(null_bit_map.as_slice());
-    let nulls = Some(NullBuffer::from(buffer.finish()));
+    let elements = arrays
+        .iter()
+        .map(|a| a.as_ref())
+        .collect::<Vec<&dyn Array>>();
 
-    let offsets: Vec<i32> = std::iter::once(0)
-        .chain(array_lens.iter().scan(0, |state, &x| {
-            *state += x;
-            Some(*state)
-        }))
-        .collect();
-
-    let builder = mutable.into_builder();
-
-    let list = builder
-        .len(row_count)
-        .buffers(vec![Buffer::from_vec(offsets)])
-        .nulls(nulls)
-        .build()?;
-
-    let list = arrow::array::make_array(list);
-    Ok(Arc::new(list))
+    let list_arr = ListArray::new(
+        Arc::new(Field::new("item", data_type, true)),
+        OffsetBuffer::from_lengths(array_lengths),
+        Arc::new(arrow::compute::concat(elements.as_slice())?),
+        Some(NullBuffer::new(buffer)),
+    );
+    Ok(Arc::new(list_arr))
 }
 
 /// Array_concat/Array_cat SQL function
@@ -1471,18 +1479,18 @@ array_replacement_function!(
 );
 
 macro_rules! to_string {
-    ($ARG:expr, $ARRAY:expr, $DELIMETER:expr, $NULL_STRING:expr, $WITH_NULL_STRING:expr, $ARRAY_TYPE:ident) => {{
+    ($ARG:expr, $ARRAY:expr, $DELIMITER:expr, $NULL_STRING:expr, $WITH_NULL_STRING:expr, $ARRAY_TYPE:ident) => {{
         let arr = downcast_arg!($ARRAY, $ARRAY_TYPE);
         for x in arr {
             match x {
                 Some(x) => {
                     $ARG.push_str(&x.to_string());
-                    $ARG.push_str($DELIMETER);
+                    $ARG.push_str($DELIMITER);
                 }
                 None => {
                     if $WITH_NULL_STRING {
                         $ARG.push_str($NULL_STRING);
-                        $ARG.push_str($DELIMETER);
+                        $ARG.push_str($DELIMITER);
                     }
                 }
             }
@@ -1495,8 +1503,8 @@ macro_rules! to_string {
 pub fn array_to_string(args: &[ArrayRef]) -> Result<ArrayRef> {
     let arr = &args[0];
 
-    let delimeters = as_generic_string_array::<i32>(&args[1])?;
-    let delimeters: Vec<Option<&str>> = delimeters.iter().collect();
+    let delimiters = as_generic_string_array::<i32>(&args[1])?;
+    let delimiters: Vec<Option<&str>> = delimiters.iter().collect();
 
     let mut null_string = String::from("");
     let mut with_null_string = false;
@@ -1510,7 +1518,7 @@ pub fn array_to_string(args: &[ArrayRef]) -> Result<ArrayRef> {
     fn compute_array_to_string(
         arg: &mut String,
         arr: ArrayRef,
-        delimeter: String,
+        delimiter: String,
         null_string: String,
         with_null_string: bool,
     ) -> Result<&mut String> {
@@ -1522,7 +1530,7 @@ pub fn array_to_string(args: &[ArrayRef]) -> Result<ArrayRef> {
                     compute_array_to_string(
                         arg,
                         list_array.value(i),
-                        delimeter.clone(),
+                        delimiter.clone(),
                         null_string.clone(),
                         with_null_string,
                     )?;
@@ -1537,7 +1545,7 @@ pub fn array_to_string(args: &[ArrayRef]) -> Result<ArrayRef> {
                         to_string!(
                             arg,
                             arr,
-                            &delimeter,
+                            &delimiter,
                             &null_string,
                             with_null_string,
                             $ARRAY_TYPE
@@ -1555,19 +1563,19 @@ pub fn array_to_string(args: &[ArrayRef]) -> Result<ArrayRef> {
     match arr.data_type() {
         DataType::List(_) | DataType::LargeList(_) | DataType::FixedSizeList(_, _) => {
             let list_array = arr.as_list::<i32>();
-            for (arr, &delimeter) in list_array.iter().zip(delimeters.iter()) {
-                if let (Some(arr), Some(delimeter)) = (arr, delimeter) {
+            for (arr, &delimiter) in list_array.iter().zip(delimiters.iter()) {
+                if let (Some(arr), Some(delimiter)) = (arr, delimiter) {
                     arg = String::from("");
                     let s = compute_array_to_string(
                         &mut arg,
                         arr,
-                        delimeter.to_string(),
+                        delimiter.to_string(),
                         null_string.clone(),
                         with_null_string,
                     )?
                     .clone();
 
-                    if let Some(s) = s.strip_suffix(delimeter) {
+                    if let Some(s) = s.strip_suffix(delimiter) {
                         res.push(Some(s.to_string()));
                     } else {
                         res.push(Some(s));
@@ -1578,20 +1586,20 @@ pub fn array_to_string(args: &[ArrayRef]) -> Result<ArrayRef> {
             }
         }
         _ => {
-            // delimeter length is 1
-            assert_eq!(delimeters.len(), 1);
-            let delimeter = delimeters[0].unwrap();
+            // delimiter length is 1
+            assert_eq!(delimiters.len(), 1);
+            let delimiter = delimiters[0].unwrap();
             let s = compute_array_to_string(
                 &mut arg,
                 arr.clone(),
-                delimeter.to_string(),
+                delimiter.to_string(),
                 null_string,
                 with_null_string,
             )?
             .clone();
 
             if !s.is_empty() {
-                let s = s.strip_suffix(delimeter).unwrap().to_string();
+                let s = s.strip_suffix(delimiter).unwrap().to_string();
                 res.push(Some(s));
             } else {
                 res.push(Some(s));
@@ -1862,6 +1870,95 @@ pub fn array_has_all(args: &[ArrayRef]) -> Result<ArrayRef> {
         }
     }
     Ok(Arc::new(boolean_builder.finish()))
+}
+
+/// Splits string at occurrences of delimiter and returns an array of parts
+/// string_to_array('abc~@~def~@~ghi', '~@~') = '["abc", "def", "ghi"]'
+pub fn string_to_array<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+    let string_array = as_generic_string_array::<T>(&args[0])?;
+    let delimiter_array = as_generic_string_array::<T>(&args[1])?;
+
+    let mut list_builder = ListBuilder::new(StringBuilder::with_capacity(
+        string_array.len(),
+        string_array.get_buffer_memory_size(),
+    ));
+
+    match args.len() {
+        2 => {
+            string_array.iter().zip(delimiter_array.iter()).for_each(
+                |(string, delimiter)| {
+                    match (string, delimiter) {
+                        (Some(string), Some("")) => {
+                            list_builder.values().append_value(string);
+                            list_builder.append(true);
+                        }
+                        (Some(string), Some(delimiter)) => {
+                            string.split(delimiter).for_each(|s| {
+                                list_builder.values().append_value(s);
+                            });
+                            list_builder.append(true);
+                        }
+                        (Some(string), None) => {
+                            string.chars().map(|c| c.to_string()).for_each(|c| {
+                                list_builder.values().append_value(c);
+                            });
+                            list_builder.append(true);
+                        }
+                        _ => list_builder.append(false), // null value
+                    }
+                },
+            );
+        }
+
+        3 => {
+            let null_value_array = as_generic_string_array::<T>(&args[2])?;
+            string_array
+                .iter()
+                .zip(delimiter_array.iter())
+                .zip(null_value_array.iter())
+                .for_each(|((string, delimiter), null_value)| {
+                    match (string, delimiter) {
+                        (Some(string), Some("")) => {
+                            if Some(string) == null_value {
+                                list_builder.values().append_null();
+                            } else {
+                                list_builder.values().append_value(string);
+                            }
+                            list_builder.append(true);
+                        }
+                        (Some(string), Some(delimiter)) => {
+                            string.split(delimiter).for_each(|s| {
+                                if Some(s) == null_value {
+                                    list_builder.values().append_null();
+                                } else {
+                                    list_builder.values().append_value(s);
+                                }
+                            });
+                            list_builder.append(true);
+                        }
+                        (Some(string), None) => {
+                            string.chars().map(|c| c.to_string()).for_each(|c| {
+                                if Some(c.as_str()) == null_value {
+                                    list_builder.values().append_null();
+                                } else {
+                                    list_builder.values().append_value(c);
+                                }
+                            });
+                            list_builder.append(true);
+                        }
+                        _ => list_builder.append(false), // null value
+                    }
+                });
+        }
+        _ => {
+            return internal_err!(
+                "Expect string_to_array function to take two or three parameters"
+            )
+        }
+    }
+
+    let list_array = list_builder.finish();
+    Ok(Arc::new(list_array) as ArrayRef)
 }
 
 #[cfg(test)]

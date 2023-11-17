@@ -35,7 +35,7 @@ use std::sync::Arc;
 /// Expression that can be evaluated against a RecordBatch
 /// A Physical expression knows its type, nullability and how to evaluate itself.
 pub trait PhysicalExpr: Send + Sync + Display + Debug + PartialEq<dyn Any> {
-    /// Returns the physical expression as [`Any`](std::any::Any) so that it can be
+    /// Returns the physical expression as [`Any`] so that it can be
     /// downcast to a specific implementation.
     fn as_any(&self) -> &dyn Any;
     /// Get the data type of this expression, given the schema of the input
@@ -180,4 +180,15 @@ pub fn down_cast_any_ref(any: &dyn Any) -> &dyn Any {
     } else {
         any
     }
+}
+
+/// It is similar to contains method of vector.
+/// Finds whether `expr` is among `physical_exprs`.
+pub fn physical_exprs_contains(
+    physical_exprs: &[Arc<dyn PhysicalExpr>],
+    expr: &Arc<dyn PhysicalExpr>,
+) -> bool {
+    physical_exprs
+        .iter()
+        .any(|physical_expr| physical_expr.eq(expr))
 }

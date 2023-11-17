@@ -22,6 +22,7 @@ mod binary;
 mod case;
 mod cast;
 mod column;
+mod datum;
 mod get_indexed_field;
 mod in_list;
 mod is_not_null;
@@ -59,7 +60,7 @@ pub use crate::aggregate::grouping::Grouping;
 pub use crate::aggregate::median::Median;
 pub use crate::aggregate::min_max::{Max, Min};
 pub use crate::aggregate::min_max::{MaxAccumulator, MinAccumulator};
-pub use crate::aggregate::regr::Regr;
+pub use crate::aggregate::regr::{Regr, RegrType};
 pub use crate::aggregate::stats::StatsType;
 pub use crate::aggregate::stddev::{Stddev, StddevPop};
 pub use crate::aggregate::sum::Sum;
@@ -116,7 +117,7 @@ pub(crate) mod tests {
     #[macro_export]
     macro_rules! generic_test_op {
         ($ARRAY:expr, $DATATYPE:expr, $OP:ident, $EXPECTED:expr) => {
-            generic_test_op!($ARRAY, $DATATYPE, $OP, $EXPECTED, $EXPECTED.get_datatype())
+            generic_test_op!($ARRAY, $DATATYPE, $OP, $EXPECTED, $EXPECTED.data_type())
         };
         ($ARRAY:expr, $DATATYPE:expr, $OP:ident, $EXPECTED:expr, $EXPECTED_DATATYPE:expr) => {{
             let schema = Schema::new(vec![Field::new("a", $DATATYPE, true)]);
@@ -212,7 +213,7 @@ pub(crate) mod tests {
                 $DATATYPE2,
                 $OP,
                 $EXPECTED,
-                $EXPECTED.get_datatype()
+                $EXPECTED.data_type()
             )
         };
         ($ARRAY1:expr, $ARRAY2:expr, $DATATYPE1:expr, $DATATYPE2:expr, $OP:ident, $EXPECTED:expr, $EXPECTED_DATATYPE:expr) => {{

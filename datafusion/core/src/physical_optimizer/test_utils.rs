@@ -17,6 +17,8 @@
 
 //! Collection of testing utility functions that are leveraged by the query optimizer rules
 
+use std::sync::Arc;
+
 use crate::datasource::listing::PartitionedFile;
 use crate::datasource::physical_plan::{FileScanConfig, ParquetExec};
 use crate::error::Result;
@@ -33,16 +35,17 @@ use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use crate::physical_plan::union::UnionExec;
 use crate::physical_plan::windows::create_window_expr;
-use crate::physical_plan::{displayable, ExecutionPlan, Partitioning};
+use crate::physical_plan::{ExecutionPlan, Partitioning};
 use crate::prelude::{CsvReadOptions, SessionContext};
+
 use arrow_schema::{Schema, SchemaRef, SortOptions};
-use async_trait::async_trait;
 use datafusion_common::{JoinType, Statistics};
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_expr::{AggregateFunction, WindowFrame, WindowFunction};
 use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
-use std::sync::Arc;
+
+use async_trait::async_trait;
 
 async fn register_current_csv(
     ctx: &SessionContext,
@@ -137,14 +140,13 @@ impl QueryCase {
     async fn run_case(&self, ctx: SessionContext, error: Option<&String>) -> Result<()> {
         let dataframe = ctx.sql(self.sql.as_str()).await?;
         let plan = dataframe.create_physical_plan().await;
-        if error.is_some() {
+        if let Some(error) = error {
             let plan_error = plan.unwrap_err();
-            let initial = error.unwrap().to_string();
             assert!(
-                plan_error.to_string().contains(initial.as_str()),
+                plan_error.to_string().contains(error.as_str()),
                 "plan_error: {:?} doesn't contain message: {:?}",
                 plan_error,
-                initial.as_str()
+                error.as_str()
             );
         } else {
             assert!(plan.is_ok())
@@ -249,13 +251,6 @@ pub fn filter_exec(
     input: Arc<dyn ExecutionPlan>,
 ) -> Arc<dyn ExecutionPlan> {
     Arc::new(FilterExec::try_new(predicate, input).unwrap())
-}
-
-// Util function to get string representation of a physical plan
-pub fn get_plan_string(plan: &Arc<dyn ExecutionPlan>) -> Vec<String> {
-    let formatted = displayable(plan.as_ref()).indent(true).to_string();
-    let actual: Vec<&str> = formatted.trim().lines().collect();
-    actual.iter().map(|elem| elem.to_string()).collect()
 }
 
 pub fn sort_preserving_merge_exec(
