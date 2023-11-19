@@ -1,0 +1,13 @@
+{
+    "rust-analyzer.cargo.features": [
+        "example",
+        "presto",
+        "postgres",
+        "ansi"
+    ],
+    "rust-analyzer.showUnlinkedFileNotification": false,
+    "rust-analyzer.linkedProjects": [
+        "./extension/functions/Cargo.toml",
+        "./extension/functions/Cargo.toml"
+    ]
+}
