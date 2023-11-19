@@ -15,356 +15,94 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{ArrayRef, Int64Array, BooleanArray, StringArray};
-use arrow::datatypes::DataType;
+use arrow::array::*;
+// use arrow::array::{ArrayRef, BooleanArray, Int64Array,StringBuilder,Float64Array};
+// use arrow::array::{ StringArray,Array,};
+use arrow::array::{ArrayRef, TimestampNanosecondArray};
+use arrow::compute::cast;
+use arrow::datatypes::{self, IntervalUnit};
+use arrow::datatypes::{DataType, TimeUnit};
+use arrow::datatypes::{Field, IntervalDayTimeType};
 use datafusion::error::Result;
+// use datafusion::scalar::ScalarFunctionDef;
+//use datafusion::physical_plan::functions::{Signature, Volatility};
+use chrono::prelude::*;
+use chrono::Months;
+use chrono::{Datelike, Duration, NaiveDate, NaiveDateTime};
 use datafusion::logical_expr::Volatility;
-use datafusion_common::cast::{as_string_array, as_int64_array};
-use datafusion_expr::{
-    ReturnTypeFunction, ScalarFunctionDef, ScalarFunctionPackage, Signature, TypeSignature,
+use datafusion::physical_plan::expressions::Column;
+use datafusion_common::cast::{
+    as_date32_array, as_float64_array, as_string_array, as_timestamp_nanosecond_array,
 };
+use datafusion_common::scalar::ScalarValue;
+use datafusion_common::DataFusionError;
+use datafusion_expr::ColumnarValue;
+use datafusion_expr::{
+    ReturnTypeFunction, ScalarFunctionDef, ScalarFunctionPackage, Signature,
+};
+use std::collections::HashSet;
 use std::sync::Arc;
 
-use regex::{Regex, Captures};
-use unidecode::unidecode;
-
 #[derive(Debug)]
-pub struct RegexpCountFunction;
+pub struct JustifyHoursFunction;
 
-impl ScalarFunctionDef for RegexpCountFunction {
+impl ScalarFunctionDef for JustifyHoursFunction {
     fn name(&self) -> &str {
-        "regexp_count"
+        "justify_hours"
     }
 
     fn signature(&self) -> Signature {
-        Signature::one_of(
+        Signature::exact(
             vec![
-                TypeSignature::Exact(vec![DataType::Utf8, DataType::Utf8]),
-                TypeSignature::Exact(vec![DataType::Utf8, DataType::Utf8, DataType::Int64]),
-                TypeSignature::Exact(vec![DataType::Utf8, DataType::Utf8, DataType::Int64, DataType::Utf8])
+                DataType::Interval(IntervalUnit::DayTime),
             ],
-            Volatility::Immutable
-        )        
-    }
-    
-
-    fn return_type(&self) -> ReturnTypeFunction {
-        let return_type = Arc::new(DataType::Int64);
-        Arc::new(move |_| Ok(return_type.clone()))
-    }
-
-    fn execute(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
-        assert!(args.len() >= 2);
-    
-        let input = as_string_array(&args[0]).expect("cast failed");
-        let pattern = as_string_array(&args[1]).expect("cast failed");
-    
-        let start = if args.len() >= 3 {
-            as_int64_array(&args[2]).expect("cast failed").iter().next().unwrap_or(None)
-        } else {
-            None
-        };
-
-        let flag_string = if args.len() >= 4 {
-            let flags_array = as_string_array(&args[3]).expect("cast failed");
-            if let Some(flag) = flags_array.iter().next().unwrap_or(None) {
-                format!("(?{})", flag)
-            } else {
-                String::new()
-            }
-        } else {
-            String::new()
-        };        
-    
-        let array = input.into_iter().zip(pattern.into_iter()).map(|(text, pat)| {
-            if let (Some(text), Some(pat)) = (text, pat) {
-                let text = &text[start.unwrap_or(0) as usize..];
-                let re = Regex::new(&format!("{}{}", flag_string, pat)).expect("Invalid regex pattern");
-                Some(re.find_iter(text).count() as i64)
-            } else {
-                None
-            }
-        }).collect::<Int64Array>();
-        Ok(Arc::new(array) as ArrayRef)
-    }    
-}
-
-#[derive(Debug)]
-pub struct RegexpLikeFunction;
-
-impl ScalarFunctionDef for RegexpLikeFunction {
-    fn name(&self) -> &str {
-        "regexp_like"
-    }
-
-    fn signature(&self) -> Signature {
-        Signature::one_of(
-            vec![
-                TypeSignature::Exact(vec![DataType::Utf8, DataType::Utf8]),
-                TypeSignature::Exact(vec![DataType::Utf8, DataType::Utf8, DataType::Utf8]),
-            ],
-            Volatility::Immutable
+            Volatility::Immutable,
         )
     }
 
     fn return_type(&self) -> ReturnTypeFunction {
-        let return_type = Arc::new(DataType::Boolean);
+        let return_type = Arc::new(DataType::Interval(IntervalUnit::DayTime));
         Arc::new(move |_| Ok(return_type.clone()))
-    }
-
-    fn execute(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
-        assert!(args.len() >= 2);
-
-        let input = as_string_array(&args[0]).expect("cast failed");
-        let pattern = as_string_array(&args[1]).expect("cast failed");
-
-        let flag_string = if args.len() >= 3 {
-            let flags_array = as_string_array(&args[2]).expect("cast failed");
-            if let Some(flag) = flags_array.iter().next().unwrap_or(None) {
-                format!("(?{})", flag)
-            } else {
-                String::new()
-            }
-        } else {
-            String::new()
-        };        
-
-        let array = input.into_iter().zip(pattern.into_iter()).map(|(text, pat)| {
-            if let (Some(text), Some(pat)) = (text, pat) {
-                let re = Regex::new(&format!("{}{}", flag_string, pat)).expect("Invalid regex pattern");
-                Some(re.is_match(text))
-            } else {
-                None
-            }
-        }).collect::<BooleanArray>();
-
-        Ok(Arc::new(array) as ArrayRef)
-    }    
-}
-
-#[derive(Debug)]
-pub struct RegexpReplaceFunction;
-
-impl ScalarFunctionDef for RegexpReplaceFunction {
-    fn name(&self) -> &str {
-        "regexp_replace"
-    }
-
-    fn signature(&self) -> Signature {
-        Signature::one_of(
-            vec![
-                TypeSignature::Exact(vec![DataType::Utf8, DataType::Utf8, DataType::Utf8]),
-                TypeSignature::Exact(vec![DataType::Utf8, DataType::Utf8, DataType::Utf8, DataType::Int64, DataType::Int64]),
-                TypeSignature::Exact(vec![DataType::Utf8, DataType::Utf8, DataType::Utf8, DataType::Int64, DataType::Int64, DataType::Utf8])
-            ],
-            Volatility::Immutable
-        )        
-    }
-    
-    fn return_type(&self) -> ReturnTypeFunction {
-        let return_type = Arc::new(DataType::Utf8);
-        Arc::new(move |_| Ok(return_type.clone()))
-    }
-
-    fn execute(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
-        assert!(args.len() >= 3);
-    
-        let input = as_string_array(&args[0]).expect("cast failed");
-        let pattern = as_string_array(&args[1]).expect("cast failed");
-        let replacement = as_string_array(&args[2]).expect("cast failed");
-        let start = if args.len() > 3 {
-            as_int64_array(&args[3]).expect("cast failed").iter().next().unwrap_or(Some(0))
-        } else {
-            Some(0)
-        };
-        
-        let n = if args.len() > 4 {
-            as_int64_array(&args[4]).expect("cast failed").iter().next().unwrap_or(Some(0))
-        } else {
-            Some(0)
-        };
-        
-        let flag_string = if args.len() > 5 {
-            let flags_array = as_string_array(&args[5]).expect("cast failed");
-            if let Some(flag) = flags_array.iter().next().unwrap_or(None) {
-                format!("(?{})", flag)
-            } else {
-                String::new()
-            }
-        } else {
-            String::new()
-        };        
-
-        let array = input.into_iter().zip(pattern.into_iter().zip(replacement.into_iter())).map(|(text, (pat, rep))| {
-            if let (Some(text), Some(pat), Some(rep)) = (text, pat, rep) {
-                let start_pos = start.map_or(0, |s| if s > 0 { s as usize - 1 } else { 0 });
-                let prefix = &text[..start_pos];
-                let rest_text = &text[start_pos..];
-                let re = Regex::new(&format!("{}{}", flag_string, pat)).expect("Invalid regex pattern");
-        
-                if n == Some(0) {
-                    Some(format!("{}{}", prefix, re.replace_all(rest_text, rep)))
-                } else {
-                    let mut replaced_text = String::from(prefix);
-                    let mut match_count = 0;  
-                    let mut last_end = 0;
-                    for cap in re.captures_iter(rest_text) {
-                        match_count += 1;  
-                        replaced_text.push_str(&rest_text[last_end..cap.get(0).unwrap().start()]);
-                        if match_count == n.unwrap() {
-                            replaced_text.push_str(rep);
-                            last_end = cap.get(0).unwrap().end();
-                            break;
-                        } else {
-                            replaced_text.push_str(&cap.get(0).unwrap().as_str());
-                            last_end = cap.get(0).unwrap().end();
-                        }
-                    }
-                    replaced_text.push_str(&rest_text[last_end..]);
-                    Some(replaced_text)
-                }
-            } else {
-                None
-            }
-        }).collect::<StringArray>();
-        
-        Ok(Arc::new(array) as ArrayRef)
-    }    
-}
-
-#[derive(Debug)]
-pub struct NormalizeFunction;
-
-impl ScalarFunctionDef for NormalizeFunction {
-    fn name(&self) -> &str {
-        "normalize"
-    }
-
-    fn signature(&self) -> Signature {
-        Signature::one_of(
-            vec![
-                TypeSignature::Exact(vec![DataType::Utf8]),
-                TypeSignature::Exact(vec![DataType::Utf8, DataType::Utf8]),
-            ],
-            Volatility::Immutable
-        )
-    }
-
-    fn return_type(&self) -> ReturnTypeFunction {
-        let return_type = Arc::new(DataType::Utf8);
-        Arc::new(move |_| Ok(return_type.clone()))
-    }
-
-    fn execute(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
-        assert!(args.len() >= 1);
-
-        let input = as_string_array(&args[0]).expect("cast failed");
-        let form = if args.len() >= 2 {
-            as_string_array(&args[1]).expect("cast failed").iter().next().unwrap_or(None)
-        } else {
-            Some("NFC")
-        };
-
-        let array = input.into_iter().map(|text| {
-            if let Some(text) = text {
-                let normalized_text = match form.as_deref() {
-                    Some("NFC") => unicode_normalization::UnicodeNormalization::nfc(text.chars()).collect::<String>(),
-                    Some("NFD") => unicode_normalization::UnicodeNormalization::nfd(text.chars()).collect::<String>(),
-                    Some("NFKC") => unicode_normalization::UnicodeNormalization::nfkc(text.chars()).collect::<String>(),
-                    Some("NFKD") => unicode_normalization::UnicodeNormalization::nfkd(text.chars()).collect::<String>(),
-                    _ => text.to_string(),
-                };
-                Some(normalized_text)
-            } else {
-                None
-            }
-        }).collect::<StringArray>();
-        Ok(Arc::new(array) as ArrayRef)
-    }    
-}
-
-#[derive(Debug)]
-pub struct ToAsciiFunction;
-
-impl ScalarFunctionDef for ToAsciiFunction {
-    fn name(&self) -> &str {
-        "to_ascii"
-    }
-
-    fn signature(&self) -> Signature {
-        Signature::one_of(
-            vec![
-                TypeSignature::Exact(vec![DataType::Utf8]),
-                TypeSignature::Exact(vec![DataType::Utf8, DataType::Utf8]),
-                TypeSignature::Exact(vec![DataType::Utf8, DataType::Int64]),
-            ],
-            Volatility::Immutable
-        )        
-    }
-
-    fn return_type(&self) -> ReturnTypeFunction {
-        let return_type = Arc::new(DataType::Utf8);
-        Arc::new(move |_| Ok(return_type.clone()))
-    }
-    fn execute(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
-        assert!(args.len() >= 1);
-
-        let input = as_string_array(&args[0]).expect("cast failed");
-        
-        let array = input.into_iter().map(|text| {
-            if let Some(text) = text {
-                Some(unidecode(&text))
-            } else {
-                None
-            }
-        }).collect::<StringArray>();
-        Ok(Arc::new(array) as ArrayRef)
-    }
-}    
-
-#[derive(Debug)]
-pub struct UniStrFunction;
-
-impl ScalarFunctionDef for UniStrFunction {
-    fn name(&self) -> &str {
-        "unistr"
-    }
-
-    fn signature(&self) -> Signature {
-        Signature::exact(vec![DataType::Utf8], Volatility::Immutable)
-    }
-
-    fn return_type(&self) -> ReturnTypeFunction {
-        Arc::new(|_| Ok(Arc::new(DataType::Utf8)))
     }
 
     fn execute(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
         assert_eq!(args.len(), 1);
 
-        let input = as_string_array(&args[0]).expect("cast failed");
+        let array = &args[0];
+        let mut b = IntervalDayTimeBuilder::with_capacity(array.len());
+        match array.data_type() {
+            DataType::Interval(IntervalUnit::DayTime) => {
+                let array = as_interval_day_time_array(&array)?;
+                let iter: ArrayIter<&IntervalDayTimeArray> = ArrayIter::new(array);
+                iter.into_iter().for_each(|value| {
+                    if let Some(value) = value {
+                        // Extract days, hours, and minutes from the interval
+                        let days = value.days();
+                        let hours = value.hours();
+                        let minutes = value.minutes();
 
-        let re = Regex::new(r"(?x)
-            \\?\+([0-9A-Fa-f]{6}) |
-            \\([0-9A-Fa-f]{4})   |
-            \\u([0-9A-Fa-f]{4})  |
-            \\U([0-9A-Fa-f]{8})  |
-            \\\\"
-        ).expect("Failed to create regex");
+                        // Calculate the total number of minutes in the interval
+                        let total_minutes = days * 24 * 60 + hours * 60 + minutes;
 
-        let array = input.into_iter().map(|opt_text| {
-            opt_text.map(|text| {
-                re.replace_all(&text, |caps: &Captures| {
-                    if let Some(hex) = caps.get(1).or(caps.get(2)).or(caps.get(3)).or(caps.get(4)) {
-                        let codepoint = u32::from_str_radix(hex.as_str(), 16).unwrap();
-                        char::from_u32(codepoint).unwrap().to_string()
+                        // Calculate the adjusted days and remaining minutes
+                        let adjusted_days = total_minutes / (24 * 60);
+                        let remaining_minutes = total_minutes % (24 * 60);
+
+                        b.append_value(IntervalDayTimeType::make_value(adjusted_days, remaining_minutes));
                     } else {
-                        "\\".to_string()
+                        b.append_null();
                     }
-                }).to_string()
-            })
-        }).collect::<StringArray>();
+                });
+            }
 
-        Ok(Arc::new(array) as ArrayRef)
+            _ => todo!(),
+        }
+        let result = b.finish();
+        cast(
+            &(Arc::new(result) as ArrayRef),
+            &DataType::Interval(IntervalUnit::DayTime),
+        )
+        .map_err(|err| DataFusionError::Execution(format!("Cast error: {}", err)))
     }
 }
 // Function package declaration
@@ -372,12 +110,13 @@ pub struct FunctionPackage;
 
 impl ScalarFunctionPackage for FunctionPackage {
     fn functions(&self) -> Vec<Box<dyn ScalarFunctionDef>> {
-        vec![Box::new(RegexpCountFunction), Box::new(RegexpLikeFunction),Box::new(RegexpReplaceFunction),Box::new(NormalizeFunction),Box::new(ToAsciiFunction),Box::new(UniStrFunction)]
+        vec![Box::new(JustifyHoursFunction)]
     }
 }
 
 #[cfg(test)]
 mod test {
+    use arrow::compute::kernels::substring;
     use datafusion::error::Result;
     use datafusion::prelude::SessionContext;
     use tokio;
@@ -387,51 +126,38 @@ mod test {
     use super::FunctionPackage;
 
     #[tokio::test]
-    async fn test_regexp_count() -> Result<()> {
-        test_expression!("regexp_count('123456789012', '\\d\\d\\d', 2)", "3");
-        test_expression!("regexp_count('abcabcabc', 'abc')", "3");
-        test_expression!("regexp_count('AaBaHHACcAa', '[Aa]', 2)", "4");
+    async fn test_age_function() -> Result<()> {
+        // // Test date difference within the same month
+        test_expression!(
+            "age(timestamp '2001-04-10')",
+            "0 years 0 mons 1 days 0 hours 0 mins 0.000 secs"
+        );
+        // // Test date difference between different months within the same year
+        // test_expression!(
+        //     "age(timestamp '2001-04-10', timestamp '2001-05-10')",
+        //     "0 years 1 months 0 days"
+        // );
+        // // Test date difference across different years
+        // test_expression!(
+        //     "age(timestamp '2000-04-10', timestamp '2001-04-10')",
+        //     "1 years 0 months 0 days"
+        // );
+        // // Test date difference involving a leap year
+        //  test_expression!(
+        //      "age(timestamp '2000-02-28', timestamp '2000-03-01')",
+        //     "0 years 0 months 2 days" // 2000 is a leap year
+        // );
+        // // Test date difference between the end of a month and the beginning of the next
+        // test_expression!(
+        //     "age(timestamp '2001-05-01', timestamp '2001-04-30')",
+        //     "0 years 0 months 1 days"
+        // );
+        // // age(timestamp '2001-04-10', timestamp '1957-06-13')
+        // test_expression!(
+        //     "age(timestamp '2001-04-10', timestamp '1957-06-13')",
+        //     "43 years 9 months 27 days"
+        // );
+
         Ok(())
     }
-    #[tokio::test]
-    async fn test_regexp_like() -> Result<()> {
-        test_expression!("regexp_like('abcabcabc', 'abc')", "true");
-        test_expression!("regexp_like('Hello World', 'world$', 'i')", "true");
-        Ok(())
-    }        
-
-    #[tokio::test]
-    async fn test_regexp_replace() -> Result<()> {
-        test_expression!("regexp_replace('Thomas', '.[mN]a.', 'M')", "ThM");
-        test_expression!("regexp_replace('Thomas', '.', 'X', 3, 2)", "ThoXas");
-        test_expression!("regexp_replace('banana', 'a', 'X', 1, 0)", "bXnXnX");
-        test_expression!("regexp_replace('banana', 'a', 'X', 1, 1)", "bXnana");
-        test_expression!("regexp_replace('bAnana', 'a', 'X', 1, 1, 'i')", "bXnana");
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_normalize() -> Result<()> {
-        test_expression!("normalize('a\u{0308}bc')", "\u{00E4}bc");
-        test_expression!("normalize('\u{00E4}bc', 'NFD')", "a\u{0308}bc");
-        test_expression!("normalize('a\u{0308}bc', 'NFKC')", "\u{00E4}bc");
-        test_expression!("normalize('\u{00E4}bc', 'NFKD')", "a\u{0308}bc");
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_to_ascii() -> Result<()> {
-        test_expression!("to_ascii('Karél')", "Karel");
-        test_expression!("to_ascii('álfa-βéta')", "alfa-beta");
-    Ok(())
-}
-
-#[tokio::test]
-    async fn test_unistr() -> Result<()> {
-        test_expression!("unistr('d\\0061t\\+000061')", "data");
-        test_expression!("unistr('d\\u0061t\\U00000061')", "data");
-        test_expression!("unistr('Backslash \\\\')", "Backslash \\");
-        Ok(())
-}
-
 }
