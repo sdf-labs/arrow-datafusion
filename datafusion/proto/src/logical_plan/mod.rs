@@ -1415,9 +1415,27 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlan::Unnest(_) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for Unnest",
             )),
-            LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(_)) => Err(proto_error(
-                "LogicalPlan serde is not yet implemented for CreateMemoryTable",
-            )),
+            LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(CreateMemoryTable {
+                name,
+                input,
+                if_not_exists,
+                or_replace,
+                ..
+            })) => Ok(protobuf::LogicalPlanNode {
+                logical_plan_type: Some(LogicalPlanType::CreateMemoryTable(Box::new(
+                    protobuf::CreateMemoryTableNode {
+                        name: Some(name.clone().into()),
+                        // TODO: Constraints cannot be constructed from protobuf due to private fields
+                        constraints: None,
+                        input: Some(Box::new(LogicalPlanNode::try_from_logical_plan(
+                            input,
+                            extension_codec,
+                        )?)),
+                        if_not_exists: *if_not_exists,
+                        or_replace: *or_replace,
+                    },
+                ))),
+            }),
             LogicalPlan::Ddl(DdlStatement::DropTable(_)) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for DropTable",
             )),
