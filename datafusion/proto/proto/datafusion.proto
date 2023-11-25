@@ -73,6 +73,7 @@ message LogicalPlanNode {
     CustomTableScanNode custom_scan = 25;
     PrepareNode prepare = 26;
     DropViewNode drop_view = 27;
+    CreateMemoryTableNode create_memory_table = 28;
   }
 }
 
@@ -195,6 +196,14 @@ message CreateExternalTableNode {
   repeated LogicalExprNodeCollection order_exprs = 13;
   bool unbounded = 14;
   map<string, string> options = 11;
+}
+
+message CreateMemoryTableNode {
+  OwnedTableReference name = 1;
+  Constraints constraints = 2;
+  LogicalPlanNode input = 3;
+  bool if_not_exists = 4;
+  bool or_replace = 5;
 }
 
 message PrepareNode {
@@ -1083,6 +1092,25 @@ message OwnedTableReference {
     PartialTableReference partial = 2;
     FullTableReference full = 3;
   }
+}
+
+message Constraints {
+  repeated Constraint inner = 1;
+}
+
+message Constraint {
+  oneof constraint_type {
+      PrimaryKey primaryKey = 1;
+      Unique unique = 2;
+  }
+}
+
+message PrimaryKey {
+  repeated uint32 indices = 1;
+}
+
+message Unique {
+  repeated uint32 indices = 1;
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////////////

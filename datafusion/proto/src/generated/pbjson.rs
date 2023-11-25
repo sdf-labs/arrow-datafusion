@@ -3425,6 +3425,206 @@ impl<'de> serde::Deserialize<'de> for ColumnStats {
         deserializer.deserialize_struct("datafusion.ColumnStats", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for Constraint {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.constraint_type.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.Constraint", len)?;
+        if let Some(v) = self.constraint_type.as_ref() {
+            match v {
+                constraint::ConstraintType::PrimaryKey(v) => {
+                    struct_ser.serialize_field("primaryKey", v)?;
+                }
+                constraint::ConstraintType::Unique(v) => {
+                    struct_ser.serialize_field("unique", v)?;
+                }
+            }
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for Constraint {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "primaryKey",
+            "unique",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            PrimaryKey,
+            Unique,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "primaryKey" => Ok(GeneratedField::PrimaryKey),
+                            "unique" => Ok(GeneratedField::Unique),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = Constraint;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.Constraint")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<Constraint, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut constraint_type__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::PrimaryKey => {
+                            if constraint_type__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("primaryKey"));
+                            }
+                            constraint_type__ = map_.next_value::<::std::option::Option<_>>()?.map(constraint::ConstraintType::PrimaryKey)
+;
+                        }
+                        GeneratedField::Unique => {
+                            if constraint_type__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("unique"));
+                            }
+                            constraint_type__ = map_.next_value::<::std::option::Option<_>>()?.map(constraint::ConstraintType::Unique)
+;
+                        }
+                    }
+                }
+                Ok(Constraint {
+                    constraint_type: constraint_type__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.Constraint", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for Constraints {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.inner.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.Constraints", len)?;
+        if !self.inner.is_empty() {
+            struct_ser.serialize_field("inner", &self.inner)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for Constraints {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "inner",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Inner,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "inner" => Ok(GeneratedField::Inner),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = Constraints;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.Constraints")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<Constraints, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut inner__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Inner => {
+                            if inner__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("inner"));
+                            }
+                            inner__ = Some(map_.next_value()?);
+                        }
+                    }
+                }
+                Ok(Constraints {
+                    inner: inner__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.Constraints", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for CreateCatalogNode {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -3980,6 +4180,167 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
             }
         }
         deserializer.deserialize_struct("datafusion.CreateExternalTableNode", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for CreateMemoryTableNode {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.name.is_some() {
+            len += 1;
+        }
+        if self.constraints.is_some() {
+            len += 1;
+        }
+        if self.input.is_some() {
+            len += 1;
+        }
+        if self.if_not_exists {
+            len += 1;
+        }
+        if self.or_replace {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.CreateMemoryTableNode", len)?;
+        if let Some(v) = self.name.as_ref() {
+            struct_ser.serialize_field("name", v)?;
+        }
+        if let Some(v) = self.constraints.as_ref() {
+            struct_ser.serialize_field("constraints", v)?;
+        }
+        if let Some(v) = self.input.as_ref() {
+            struct_ser.serialize_field("input", v)?;
+        }
+        if self.if_not_exists {
+            struct_ser.serialize_field("ifNotExists", &self.if_not_exists)?;
+        }
+        if self.or_replace {
+            struct_ser.serialize_field("orReplace", &self.or_replace)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for CreateMemoryTableNode {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "name",
+            "constraints",
+            "input",
+            "if_not_exists",
+            "ifNotExists",
+            "or_replace",
+            "orReplace",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Name,
+            Constraints,
+            Input,
+            IfNotExists,
+            OrReplace,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "name" => Ok(GeneratedField::Name),
+                            "constraints" => Ok(GeneratedField::Constraints),
+                            "input" => Ok(GeneratedField::Input),
+                            "ifNotExists" | "if_not_exists" => Ok(GeneratedField::IfNotExists),
+                            "orReplace" | "or_replace" => Ok(GeneratedField::OrReplace),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = CreateMemoryTableNode;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.CreateMemoryTableNode")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<CreateMemoryTableNode, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut name__ = None;
+                let mut constraints__ = None;
+                let mut input__ = None;
+                let mut if_not_exists__ = None;
+                let mut or_replace__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Name => {
+                            if name__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("name"));
+                            }
+                            name__ = map_.next_value()?;
+                        }
+                        GeneratedField::Constraints => {
+                            if constraints__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("constraints"));
+                            }
+                            constraints__ = map_.next_value()?;
+                        }
+                        GeneratedField::Input => {
+                            if input__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("input"));
+                            }
+                            input__ = map_.next_value()?;
+                        }
+                        GeneratedField::IfNotExists => {
+                            if if_not_exists__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("ifNotExists"));
+                            }
+                            if_not_exists__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::OrReplace => {
+                            if or_replace__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("orReplace"));
+                            }
+                            or_replace__ = Some(map_.next_value()?);
+                        }
+                    }
+                }
+                Ok(CreateMemoryTableNode {
+                    name: name__,
+                    constraints: constraints__,
+                    input: input__,
+                    if_not_exists: if_not_exists__.unwrap_or_default(),
+                    or_replace: or_replace__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.CreateMemoryTableNode", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for CreateViewNode {
@@ -12097,6 +12458,9 @@ impl serde::Serialize for LogicalPlanNode {
                 logical_plan_node::LogicalPlanType::DropView(v) => {
                     struct_ser.serialize_field("dropView", v)?;
                 }
+                logical_plan_node::LogicalPlanType::CreateMemoryTable(v) => {
+                    struct_ser.serialize_field("createMemoryTable", v)?;
+                }
             }
         }
         struct_ser.end()
@@ -12146,6 +12510,8 @@ impl<'de> serde::Deserialize<'de> for LogicalPlanNode {
             "prepare",
             "drop_view",
             "dropView",
+            "create_memory_table",
+            "createMemoryTable",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -12176,6 +12542,7 @@ impl<'de> serde::Deserialize<'de> for LogicalPlanNode {
             CustomScan,
             Prepare,
             DropView,
+            CreateMemoryTable,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -12223,6 +12590,7 @@ impl<'de> serde::Deserialize<'de> for LogicalPlanNode {
                             "customScan" | "custom_scan" => Ok(GeneratedField::CustomScan),
                             "prepare" => Ok(GeneratedField::Prepare),
                             "dropView" | "drop_view" => Ok(GeneratedField::DropView),
+                            "createMemoryTable" | "create_memory_table" => Ok(GeneratedField::CreateMemoryTable),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -12425,6 +12793,13 @@ impl<'de> serde::Deserialize<'de> for LogicalPlanNode {
                                 return Err(serde::de::Error::duplicate_field("dropView"));
                             }
                             logical_plan_type__ = map_.next_value::<::std::option::Option<_>>()?.map(logical_plan_node::LogicalPlanType::DropView)
+;
+                        }
+                        GeneratedField::CreateMemoryTable => {
+                            if logical_plan_type__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("createMemoryTable"));
+                            }
+                            logical_plan_type__ = map_.next_value::<::std::option::Option<_>>()?.map(logical_plan_node::LogicalPlanType::CreateMemoryTable)
 ;
                         }
                     }
@@ -18228,6 +18603,100 @@ impl<'de> serde::Deserialize<'de> for PrepareNode {
         deserializer.deserialize_struct("datafusion.PrepareNode", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for PrimaryKey {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.indices.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.PrimaryKey", len)?;
+        if !self.indices.is_empty() {
+            struct_ser.serialize_field("indices", &self.indices)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for PrimaryKey {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "indices",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Indices,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "indices" => Ok(GeneratedField::Indices),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = PrimaryKey;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.PrimaryKey")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<PrimaryKey, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut indices__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Indices => {
+                            if indices__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("indices"));
+                            }
+                            indices__ = 
+                                Some(map_.next_value::<Vec<::pbjson::private::NumberDeserialize<_>>>()?
+                                    .into_iter().map(|x| x.0).collect())
+                            ;
+                        }
+                    }
+                }
+                Ok(PrimaryKey {
+                    indices: indices__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.PrimaryKey", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for ProjectionColumns {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -23164,6 +23633,100 @@ impl<'de> serde::Deserialize<'de> for UnionNode {
             }
         }
         deserializer.deserialize_struct("datafusion.UnionNode", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for Unique {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.indices.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.Unique", len)?;
+        if !self.indices.is_empty() {
+            struct_ser.serialize_field("indices", &self.indices)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for Unique {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "indices",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Indices,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "indices" => Ok(GeneratedField::Indices),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = Unique;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.Unique")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<Unique, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut indices__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Indices => {
+                            if indices__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("indices"));
+                            }
+                            indices__ = 
+                                Some(map_.next_value::<Vec<::pbjson::private::NumberDeserialize<_>>>()?
+                                    .into_iter().map(|x| x.0).collect())
+                            ;
+                        }
+                    }
+                }
+                Ok(Unique {
+                    indices: indices__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.Unique", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for ValuesNode {
