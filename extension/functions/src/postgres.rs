@@ -20,26 +20,28 @@ use arrow::array::*;
 // use arrow::array::{ StringArray,Array,};
 use arrow::array::{ArrayRef, TimestampNanosecondArray};
 use arrow::compute::cast;
-use arrow::datatypes::{Field, IntervalDayTimeType};
 use arrow::datatypes::{self, IntervalUnit};
 use arrow::datatypes::{DataType, TimeUnit};
+use arrow::datatypes::{Field, IntervalDayTimeType};
 use datafusion::error::Result;
 // use datafusion::scalar::ScalarFunctionDef;
 //use datafusion::physical_plan::functions::{Signature, Volatility};
-use chrono::{Datelike, Duration, NaiveDate, NaiveDateTime};
 use chrono::prelude::*;
-use chrono:: Months;
+use chrono::Months;
+use chrono::{Datelike, Duration, NaiveDate, NaiveDateTime};
 use datafusion::logical_expr::Volatility;
 use datafusion::physical_plan::expressions::Column;
-use datafusion_common::cast::{as_float64_array, as_string_array, as_date32_array, as_timestamp_nanosecond_array};
+use datafusion_common::cast::{
+    as_date32_array, as_float64_array, as_string_array, as_timestamp_nanosecond_array,
+};
+use datafusion_common::scalar::ScalarValue;
 use datafusion_common::DataFusionError;
+use datafusion_expr::ColumnarValue;
 use datafusion_expr::{
     ReturnTypeFunction, ScalarFunctionDef, ScalarFunctionPackage, Signature,
 };
 use std::collections::HashSet;
 use std::sync::Arc;
-use datafusion_common::scalar::ScalarValue;
-use datafusion_expr::ColumnarValue;
 #[derive(Debug)]
 pub struct LuhnCheck;
 
@@ -399,56 +401,32 @@ impl ScalarFunctionDef for AgeFunction {
         Arc::new(move |_| Ok(return_type.clone()))
     }
 
-    fn execute(&self, args: &[ArrayRef]) -> Result<ArrayRef> { //这个函数需要数组吗
+    fn execute(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
+        //这个函数需要数组吗
         assert_eq!(args.len(), 1);
+        let array = &args[0];
+        let mut b = IntervalDayTimeBuilder::with_capacity(array.len());
+        match array.data_type() {
+            DataType::Timestamp(_, _) => {
+                let array = as_timestamp_nanosecond_array(&array)?;
+                let iter: ArrayIter<&PrimitiveArray<_>> = ArrayIter::new(array);
+                iter.into_iter().for_each(|value| {
+                    if let Some(value) = value {
+                        b.append_value(IntervalDayTimeType::make_value(1, 0));
+                    } else {
+                        b.append_null();
+                    }
+                });
+            }
 
-        // let start_array = args[0]
-        //     .as_any()
-        //     .downcast_ref::<TimestampNanosecondArray>()
-        //     .expect("cast to TimestampNanosecondArray failed");
-        // let end_array = args[1]
-        //     .as_any()
-        //     .downcast_ref::<TimestampNanosecondArray>()
-        //     .expect("cast to TimestampNanosecondArray failed");
-
-        // let start_value = start_array.value(0).to_string().as_str();
-        // let end_value = end_array.value(0).to_string().as_str();
-        // let start = NaiveDate::parse_from_str(start_value, "%Y-%m-%d").map_err(|err|{
-        //     DataFusionError::Execution(format!("Parse error: {}", err))
-        // })?;
-        // let end = NaiveDate::parse_from_str(end_value, "%Y-%m-%d").map_err(|err|{
-        //     DataFusionError::Execution(format!("Parse error: {}", err))
-        // })?;
-        // let duration = end.signed_duration_since(start);
-    //    let scalar_value = ScalarValue::DurationMicrosecond(Some(duration.num_microseconds()).unwrap());
-       //let columar_value = ColumnarValue::Scalar(scalar_value);
-
-    // let array_value: Arc<dyn arrow::array::Array> = Arc::new(DurationMicrosecondArray::from(vec![duration]));
-    // let columar_value = ColumnarValue::Array(array_value);
-    //     Ok(Arc::new(columar_value) as ArrayRef);
-
-    let array = &args[0];
-    let mut  b = IntervalDayTimeBuilder::with_capacity(array.len());
-    match array.data_type() {
-
-        DataType::Timestamp(_, _)  => {
-            let array = as_timestamp_nanosecond_array(&array)?;
-            let iter: ArrayIter<&PrimitiveArray<_>> = ArrayIter::new(array);
-            iter.into_iter().for_each(|value| {
-                if let Some(value) = value {
-                    b.append_value(IntervalDayTimeType::make_value(1, 0));
-                } else {
-                    b.append_null();
-                }
-            });
+            _ => todo!(),
         }
-        
-        _ => todo!()
-    }
-    let result = b.finish();
-    cast(&(Arc::new(result) as ArrayRef), &DataType::Interval(IntervalUnit::DayTime)).map_err(|err| {
-        DataFusionError::Execution(format!("Cast error: {}", err))
-    })
+        let result = b.finish();
+        cast(
+            &(Arc::new(result) as ArrayRef),
+            &DataType::Interval(IntervalUnit::DayTime),
+        )
+        .map_err(|err| DataFusionError::Execution(format!("Cast error: {}", err)))
     }
 }
 
@@ -550,38 +528,11 @@ mod test {
 
     #[tokio::test]
     async fn test_age_function() -> Result<()> {
-
         // // Test date difference within the same month
         test_expression!(
             "age(timestamp '2001-04-10')",
             "0 years 0 mons 1 days 0 hours 0 mins 0.000 secs"
         );
-        // // Test date difference between different months within the same year
-        // test_expression!(
-        //     "age(timestamp '2001-04-10', timestamp '2001-05-10')",
-        //     "0 years 1 months 0 days"
-        // );
-        // // Test date difference across different years
-        // test_expression!(
-        //     "age(timestamp '2000-04-10', timestamp '2001-04-10')",
-        //     "1 years 0 months 0 days"
-        // );
-        // // Test date difference involving a leap year
-        //  test_expression!(
-        //      "age(timestamp '2000-02-28', timestamp '2000-03-01')",
-        //     "0 years 0 months 2 days" // 2000 is a leap year
-        // );
-        // // Test date difference between the end of a month and the beginning of the next
-        // test_expression!(
-        //     "age(timestamp '2001-05-01', timestamp '2001-04-30')",
-        //     "0 years 0 months 1 days"
-        // );
-        // // age(timestamp '2001-04-10', timestamp '1957-06-13')
-        // test_expression!(
-        //     "age(timestamp '2001-04-10', timestamp '1957-06-13')",
-        //     "43 years 9 months 27 days"
-        // );
-
         Ok(())
     }
 }
