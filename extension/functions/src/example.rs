@@ -24,7 +24,6 @@ use datafusion_expr::{
     ReturnTypeFunction, ScalarFunctionDef, ScalarFunctionPackage, Signature,
 };
 use std::sync::Arc;
-
 #[derive(Debug)]
 pub struct AddOneFunction;
 

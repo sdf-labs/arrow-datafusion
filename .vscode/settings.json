@@ -1,0 +1,9 @@
+{
+    "rust-analyzer.cargo.features": [
+        "example",
+        "presto",
+        "postgres",
+        "ansi"
+    ],
+    "rust-analyzer.showUnlinkedFileNotification": false
+}
