@@ -29,13 +29,14 @@ use datafusion_expr::{expr, EmptyRelation, Expr, LogicalPlan, LogicalPlanBuilder
 use datafusion_physical_expr::execution_props::ExecutionProps;
 use std::collections::{BTreeSet, HashMap};
 use std::ops::Deref;
+use std::sync::Arc;
 
 /// This struct rewrite the sub query plan by pull up the correlated expressions(contains outer reference columns) from the inner subquery's 'Filter'.
 /// It adds the inner reference columns to the 'Projection' or 'Aggregate' of the subquery if they are missing, so that they can be evaluated by the parent operator as the join condition.
 pub struct PullUpCorrelatedExpr {
     pub join_filters: Vec<Expr>,
     // mapping from the plan to its holding correlated columns
-    pub correlated_subquery_cols_map: HashMap<LogicalPlan, BTreeSet<Column>>,
+    pub correlated_subquery_cols_map: HashMap<Arc<LogicalPlan>, BTreeSet<Column>>,
     pub in_predicate_opt: Option<Expr>,
     // indicate whether it is Exists(Not Exists) SubQuery
     pub exists_sub_query: bool,
@@ -44,7 +45,7 @@ pub struct PullUpCorrelatedExpr {
     // indicate whether need to handle the Count bug during the pull up process
     pub need_handle_count_bug: bool,
     // mapping from the plan to its expressions' evaluation result on empty batch
-    pub collected_count_expr_map: HashMap<LogicalPlan, ExprResultMap>,
+    pub collected_count_expr_map: HashMap<Arc<LogicalPlan>, ExprResultMap>,
     // pull up having expr, which must be evaluated after the Join
     pub pull_up_having_expr: Option<Expr>,
 }
@@ -137,23 +138,23 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                     (Some(_), None) => {
                         self.pull_up_having_expr = pull_up_expr_opt;
                         let new_plan =
-                            LogicalPlanBuilder::from((*plan_filter.input).clone())
+                            LogicalPlanBuilder::from((plan_filter.input).clone())
                                 .build()?;
                         self.correlated_subquery_cols_map
                             .insert(new_plan.clone(), correlated_subquery_cols);
-                        Ok(new_plan)
+                        LogicalPlanBuilder::from(new_plan).build_owned()
                     }
                     (None, _) => {
                         // if the subquery still has filter expressions, restore them.
                         let mut plan =
-                            LogicalPlanBuilder::from((*plan_filter.input).clone());
+                            LogicalPlanBuilder::from(plan_filter.input.clone());
                         if let Some(expr) = conjunction(subquery_filters) {
                             plan = plan.filter(expr)?
                         }
                         let new_plan = plan.build()?;
                         self.correlated_subquery_cols_map
                             .insert(new_plan.clone(), correlated_subquery_cols);
-                        Ok(new_plan)
+                        LogicalPlanBuilder::from(new_plan).build_owned()
                     }
                 }
             }
@@ -190,14 +191,14 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                     }
                 }
 
-                let new_plan = LogicalPlanBuilder::from((*projection.input).clone())
+                let new_plan = LogicalPlanBuilder::from(projection.input.clone())
                     .project(missing_exprs)?
                     .build()?;
                 if !expr_result_map_for_count_bug.is_empty() {
                     self.collected_count_expr_map
                         .insert(new_plan.clone(), expr_result_map_for_count_bug);
                 }
-                Ok(new_plan)
+                LogicalPlanBuilder::from(new_plan).build_owned()
             }
             LogicalPlan::Aggregate(aggregate)
                 if self.in_predicate_opt.is_some() || !self.join_filters.is_empty() =>
@@ -235,14 +236,14 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                         missing_exprs.push(un_matched_row);
                     }
                 }
-                let new_plan = LogicalPlanBuilder::from((*aggregate.input).clone())
+                let new_plan = LogicalPlanBuilder::from(aggregate.input.clone())
                     .aggregate(missing_exprs, aggregate.aggr_expr.to_vec())?
                     .build()?;
                 if !expr_result_map_for_count_bug.is_empty() {
                     self.collected_count_expr_map
                         .insert(new_plan.clone(), expr_result_map_for_count_bug);
                 }
-                Ok(new_plan)
+                LogicalPlanBuilder::from(new_plan).build_owned()
             }
             LogicalPlan::SubqueryAlias(alias) => {
                 let mut local_correlated_cols = BTreeSet::new();
@@ -256,13 +257,14 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                     new_correlated_cols
                         .insert(Column::new(Some(alias.alias.clone()), col.name.clone()));
                 }
+                let arc_plan = Arc::new(plan.clone());
                 self.correlated_subquery_cols_map
-                    .insert(plan.clone(), new_correlated_cols);
+                    .insert(arc_plan.clone(), new_correlated_cols);
                 if let Some(input_map) =
                     self.collected_count_expr_map.get(alias.input.deref())
                 {
                     self.collected_count_expr_map
-                        .insert(plan.clone(), input_map.clone());
+                        .insert(arc_plan, input_map.clone());
                 }
                 Ok(plan)
             }
@@ -282,14 +284,14 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                                 schema: limit.input.schema().clone(),
                             })
                         } else {
-                            LogicalPlanBuilder::from((*limit.input).clone()).build()?
+                            LogicalPlanBuilder::from(limit.input.clone()).build_owned()?
                         }
                     }
                     _ => plan,
                 };
                 if let Some(input_map) = input_expr_map {
                     self.collected_count_expr_map
-                        .insert(new_plan.clone(), input_map);
+                        .insert(Arc::new(new_plan.clone()), input_map);
                 }
                 Ok(new_plan)
             }
@@ -331,7 +333,7 @@ impl PullUpCorrelatedExpr {
 
 fn collect_local_correlated_cols(
     plan: &LogicalPlan,
-    all_cols_map: &HashMap<LogicalPlan, BTreeSet<Column>>,
+    all_cols_map: &HashMap<Arc<LogicalPlan>, BTreeSet<Column>>,
     local_cols: &mut BTreeSet<Column>,
 ) {
     for child in plan.inputs() {

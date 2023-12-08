@@ -145,7 +145,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             _ => None,
         };
 
-        LogicalPlanBuilder::from(input).limit(skip, fetch)?.build()
+        LogicalPlanBuilder::from(Arc::new(input))
+            .limit(skip, fetch)?
+            .build_owned()
     }
 
     /// Wrap the logical in a sort
@@ -161,6 +163,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         let order_by_rex =
             self.order_by_to_sort_expr(&order_by, plan.schema(), planner_context)?;
-        LogicalPlanBuilder::from(plan).sort(order_by_rex)?.build()
+        LogicalPlanBuilder::from(Arc::new(plan))
+            .sort(order_by_rex)?
+            .build_owned()
     }
 }

@@ -41,6 +41,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     .collect::<Result<Vec<_>>>()
             })
             .collect::<Result<Vec<_>>>()?;
-        LogicalPlanBuilder::values(values)?.build()
+        LogicalPlanBuilder::values(values)?.build_owned()
     }
 }

@@ -126,7 +126,7 @@ impl OptimizerRule for PushDownLimit {
                         fetch: scan.fetch.map(|x| min(x, limit)).or(Some(limit)),
                         projected_schema: scan.projected_schema.clone(),
                     });
-                    Some(plan.with_new_inputs(&[new_input])?)
+                    Some(plan.with_new_inputs(&[Arc::new(new_input)])?)
                 }
             }
             LogicalPlan::Union(union) => {
@@ -145,7 +145,7 @@ impl OptimizerRule for PushDownLimit {
                     inputs: new_inputs,
                     schema: union.schema.clone(),
                 });
-                Some(plan.with_new_inputs(&[union])?)
+                Some(plan.with_new_inputs(&[Arc::new(union)])?)
             }
 
             LogicalPlan::CrossJoin(cross_join) => {
@@ -166,15 +166,15 @@ impl OptimizerRule for PushDownLimit {
                     right: Arc::new(new_right),
                     schema: plan.schema().clone(),
                 });
-                Some(plan.with_new_inputs(&[new_cross_join])?)
+                Some(plan.with_new_inputs(&[Arc::new(new_cross_join)])?)
             }
 
             LogicalPlan::Join(join) => {
                 let new_join = push_down_join(join, fetch + skip);
                 match new_join {
-                    Some(new_join) => {
-                        Some(plan.with_new_inputs(&[LogicalPlan::Join(new_join)])?)
-                    }
+                    Some(new_join) => Some(
+                        plan.with_new_inputs(&[Arc::new(LogicalPlan::Join(new_join))])?,
+                    ),
                     None => None,
                 }
             }
@@ -192,14 +192,14 @@ impl OptimizerRule for PushDownLimit {
                         input: Arc::new((*sort.input).clone()),
                         fetch: new_fetch,
                     });
-                    Some(plan.with_new_inputs(&[new_sort])?)
+                    Some(plan.with_new_inputs(&[Arc::new(new_sort)])?)
                 }
             }
             LogicalPlan::Projection(_) | LogicalPlan::SubqueryAlias(_) => {
                 // commute
                 let new_limit =
-                    plan.with_new_inputs(&[child_plan.inputs()[0].clone()])?;
-                Some(child_plan.with_new_inputs(&[new_limit])?)
+                    plan.with_new_inputs(&[Arc::new(child_plan.inputs()[0].clone())])?;
+                Some(child_plan.with_new_inputs(&[Arc::new(new_limit)])?)
             }
             _ => None,
         };
@@ -593,7 +593,7 @@ mod test {
 
         let outer_query = LogicalPlanBuilder::from(table_scan_2)
             .project(vec![col("a")])?
-            .filter(exists(Arc::new(subquery)))?
+            .filter(exists(subquery))?
             .limit(10, Some(100))?
             .build()?;
 
@@ -622,7 +622,7 @@ mod test {
 
         let outer_query = LogicalPlanBuilder::from(table_scan_2)
             .project(vec![col("a")])?
-            .filter(exists(Arc::new(subquery)))?
+            .filter(exists(subquery))?
             .limit(10, Some(100))?
             .build()?;
 

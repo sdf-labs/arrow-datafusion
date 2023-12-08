@@ -497,7 +497,7 @@ impl SessionContext {
 
     // return an empty dataframe
     fn return_empty_dataframe(&self) -> Result<DataFrame> {
-        let plan = LogicalPlanBuilder::empty(false).build()?;
+        let plan = LogicalPlanBuilder::empty(false).build_owned()?;
         Ok(DataFrame::new(self.state(), plan))
     }
 
@@ -928,7 +928,7 @@ impl SessionContext {
     pub fn read_empty(&self) -> Result<DataFrame> {
         Ok(DataFrame::new(
             self.state(),
-            LogicalPlanBuilder::empty(true).build()?,
+            LogicalPlanBuilder::empty(true).build_owned()?,
         ))
     }
 
@@ -980,7 +980,7 @@ impl SessionContext {
         Ok(DataFrame::new(
             self.state(),
             LogicalPlanBuilder::scan(UNNAMED_TABLE, provider_as_source(provider), None)?
-                .build()?,
+                .build_owned()?,
         ))
     }
 
@@ -994,7 +994,7 @@ impl SessionContext {
                 provider_as_source(Arc::new(provider)),
                 None,
             )?
-            .build()?,
+            .build_owned()?,
         ))
     }
 
@@ -1233,7 +1233,7 @@ impl SessionContext {
             provider_as_source(Arc::clone(&provider)),
             None,
         )?
-        .build()?;
+        .build_owned()?;
         Ok(DataFrame::new(self.state(), plan))
     }
 

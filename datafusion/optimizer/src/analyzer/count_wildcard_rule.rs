@@ -62,9 +62,9 @@ fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
                 .collect::<Result<Vec<_>>>()?;
 
             Ok(Transformed::Yes(
-                LogicalPlanBuilder::from((*window.input).clone())
+                LogicalPlanBuilder::from(window.input.clone())
                     .window(window_expr)?
-                    .build()?,
+                    .build_owned()?,
             ))
         }
         LogicalPlan::Aggregate(agg) => {
@@ -256,12 +256,10 @@ mod tests {
         let plan = LogicalPlanBuilder::from(table_scan_t1)
             .filter(in_subquery(
                 col("a"),
-                Arc::new(
-                    LogicalPlanBuilder::from(table_scan_t2)
-                        .aggregate(Vec::<Expr>::new(), vec![count(Expr::Wildcard)])?
-                        .project(vec![count(Expr::Wildcard)])?
-                        .build()?,
-                ),
+                LogicalPlanBuilder::from(table_scan_t2)
+                    .aggregate(Vec::<Expr>::new(), vec![count(Expr::Wildcard)])?
+                    .project(vec![count(Expr::Wildcard)])?
+                    .build()?,
             ))?
             .build()?;
 
@@ -280,12 +278,12 @@ mod tests {
         let table_scan_t2 = test_table_scan_with_name("t2")?;
 
         let plan = LogicalPlanBuilder::from(table_scan_t1)
-            .filter(exists(Arc::new(
+            .filter(exists(
                 LogicalPlanBuilder::from(table_scan_t2)
                     .aggregate(Vec::<Expr>::new(), vec![count(Expr::Wildcard)])?
                     .project(vec![count(Expr::Wildcard)])?
                     .build()?,
-            )))?
+            ))?
             .build()?;
 
         let expected = "Filter: EXISTS (<subquery>) [a:UInt32, b:UInt32, c:UInt32]\
@@ -304,7 +302,7 @@ mod tests {
 
         let plan = LogicalPlanBuilder::from(table_scan_t1)
             .filter(
-                scalar_subquery(Arc::new(
+                scalar_subquery(
                     LogicalPlanBuilder::from(table_scan_t2)
                         .filter(out_ref_col(DataType::UInt32, "t1.a").eq(col("t2.a")))?
                         .aggregate(
@@ -313,7 +311,7 @@ mod tests {
                         )?
                         .project(vec![count(lit(COUNT_STAR_EXPANSION))])?
                         .build()?,
-                ))
+                )
                 .gt(lit(ScalarValue::UInt8(Some(0)))),
             )?
             .project(vec![col("t1.a"), col("t1.b")])?

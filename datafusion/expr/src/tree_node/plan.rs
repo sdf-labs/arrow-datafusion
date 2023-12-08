@@ -17,6 +17,8 @@
 
 //! Tree node implementation for logical plan
 
+use std::sync::Arc;
+
 use crate::LogicalPlan;
 use datafusion_common::tree_node::{TreeNodeVisitor, VisitRecursion};
 use datafusion_common::{tree_node::TreeNode, Result};
@@ -123,7 +125,13 @@ impl TreeNode for LogicalPlan {
             .zip(new_children.iter())
             .any(|(c1, c2)| c1 != &c2)
         {
-            self.with_new_inputs(new_children.as_slice())
+            self.with_new_inputs(
+                new_children
+                    .into_iter()
+                    .map(Arc::new)
+                    .collect::<Vec<_>>()
+                    .as_slice(),
+            )
         } else {
             Ok(self)
         }

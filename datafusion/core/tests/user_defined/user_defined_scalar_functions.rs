@@ -107,13 +107,13 @@ async fn scalar_udf() -> Result<()> {
 
     let t = ctx.table("t").await?;
 
-    let plan = LogicalPlanBuilder::from(t.into_optimized_plan()?)
+    let plan = LogicalPlanBuilder::from(Arc::new(t.into_optimized_plan()?))
         .project(vec![
             col("a"),
             col("b"),
             ctx.udf("my_add")?.call(vec![col("a"), col("b")]),
         ])?
-        .build()?;
+        .build_owned()?;
 
     assert_eq!(
         format!("{plan:?}"),

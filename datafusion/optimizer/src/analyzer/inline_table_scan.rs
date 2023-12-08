@@ -64,13 +64,13 @@ fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
         }) if filters.is_empty() && source.get_logical_plan().is_some() => {
             let sub_plan = source.get_logical_plan().unwrap();
             let projection_exprs = generate_projection_expr(&projection, sub_plan)?;
-            let plan = LogicalPlanBuilder::from(sub_plan.clone())
+            let plan = LogicalPlanBuilder::from(Arc::new(sub_plan.clone()))
                 .project(projection_exprs)?
                 // Ensures that the reference to the inlined table remains the
                 // same, meaning we don't have to change any of the parent nodes
                 // that reference this table.
                 .alias(table_name)?
-                .build()?;
+                .build_owned()?;
             Transformed::Yes(plan)
         }
         LogicalPlan::Filter(filter) => {
@@ -174,7 +174,7 @@ mod tests {
             Self {
                 plan: LogicalPlanBuilder::scan("y", Arc::new(RawTableSource {}), None)
                     .unwrap()
-                    .build()
+                    .build_owned()
                     .unwrap(),
             }
         }

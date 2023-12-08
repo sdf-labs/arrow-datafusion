@@ -526,14 +526,14 @@ impl LogicalPlan {
     }
 
     /// Returns a copy of this `LogicalPlan` with the new inputs
-    pub fn with_new_inputs(&self, inputs: &[LogicalPlan]) -> Result<LogicalPlan> {
+    pub fn with_new_inputs(&self, inputs: &[Arc<LogicalPlan>]) -> Result<LogicalPlan> {
         // with_new_inputs use original expression,
         // so we don't need to recompute Schema.
         match &self {
             LogicalPlan::Projection(projection) => {
                 Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
                     projection.expr.to_vec(),
-                    Arc::new(inputs[0].clone()),
+                    inputs[0].clone(),
                     projection.schema.clone(),
                 )?))
             }
@@ -542,7 +542,7 @@ impl LogicalPlan {
                 schema,
                 ..
             }) => Ok(LogicalPlan::Window(Window {
-                input: Arc::new(inputs[0].clone()),
+                input: inputs[0].clone(),
                 window_expr: window_expr.to_vec(),
                 schema: schema.clone(),
             })),
@@ -552,7 +552,7 @@ impl LogicalPlan {
                 schema,
                 ..
             }) => Ok(LogicalPlan::Aggregate(Aggregate::try_new_with_schema(
-                Arc::new(inputs[0].clone()),
+                inputs[0].clone(),
                 group_expr.to_vec(),
                 aggr_expr.to_vec(),
                 schema.clone(),
@@ -587,13 +587,13 @@ impl LogicalPlan {
     pub fn with_new_exprs(
         &self,
         mut expr: Vec<Expr>,
-        inputs: &[LogicalPlan],
+        inputs: &[Arc<LogicalPlan>],
     ) -> Result<LogicalPlan> {
         match self {
             LogicalPlan::Projection(Projection { schema, .. }) => {
                 Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
                     expr,
-                    Arc::new(inputs[0].clone()),
+                    inputs[0].clone(),
                     schema.clone(),
                 )?))
             }
@@ -606,7 +606,7 @@ impl LogicalPlan {
                 table_name: table_name.clone(),
                 table_schema: table_schema.clone(),
                 op: op.clone(),
-                input: Arc::new(inputs[0].clone()),
+                input: inputs[0].clone(),
             })),
             LogicalPlan::Copy(CopyTo {
                 input: _,
@@ -615,7 +615,7 @@ impl LogicalPlan {
                 copy_options,
                 single_file_output,
             }) => Ok(LogicalPlan::Copy(CopyTo {
-                input: Arc::new(inputs[0].clone()),
+                input: inputs[0].clone(),
                 output_url: output_url.clone(),
                 file_format: file_format.clone(),
                 single_file_output: *single_file_output,
@@ -674,7 +674,7 @@ impl LogicalPlan {
 
                 Ok(LogicalPlan::Filter(Filter::try_new(
                     predicate,
-                    Arc::new(inputs[0].clone()),
+                    inputs[0].clone(),
                 )?))
             }
             LogicalPlan::Repartition(Repartition {
@@ -684,17 +684,17 @@ impl LogicalPlan {
                 Partitioning::RoundRobinBatch(n) => {
                     Ok(LogicalPlan::Repartition(Repartition {
                         partitioning_scheme: Partitioning::RoundRobinBatch(*n),
-                        input: Arc::new(inputs[0].clone()),
+                        input: inputs[0].clone(),
                     }))
                 }
                 Partitioning::Hash(_, n) => Ok(LogicalPlan::Repartition(Repartition {
                     partitioning_scheme: Partitioning::Hash(expr, *n),
-                    input: Arc::new(inputs[0].clone()),
+                    input: inputs[0].clone(),
                 })),
                 Partitioning::DistributeBy(_) => {
                     Ok(LogicalPlan::Repartition(Repartition {
                         partitioning_scheme: Partitioning::DistributeBy(expr),
-                        input: Arc::new(inputs[0].clone()),
+                        input: inputs[0].clone(),
                     }))
                 }
             },
@@ -705,7 +705,7 @@ impl LogicalPlan {
             }) => {
                 assert_eq!(window_expr.len(), expr.len());
                 Ok(LogicalPlan::Window(Window {
-                    input: Arc::new(inputs[0].clone()),
+                    input: inputs[0].clone(),
                     window_expr: expr,
                     schema: schema.clone(),
                 }))
@@ -717,7 +717,7 @@ impl LogicalPlan {
                 let agg_expr = expr.split_off(group_expr.len());
 
                 Ok(LogicalPlan::Aggregate(Aggregate::try_new_with_schema(
-                    Arc::new(inputs[0].clone()),
+                    inputs[0].clone(),
                     expr,
                     agg_expr,
                     schema.clone(),
@@ -725,7 +725,7 @@ impl LogicalPlan {
             }
             LogicalPlan::Sort(Sort { fetch, .. }) => Ok(LogicalPlan::Sort(Sort {
                 expr,
-                input: Arc::new(inputs[0].clone()),
+                input: inputs[0].clone(),
                 fetch: *fetch,
             })),
             LogicalPlan::Join(Join {
@@ -765,8 +765,8 @@ impl LogicalPlan {
                 }).collect::<Result<Vec<(Expr, Expr)>>>()?;
 
                 Ok(LogicalPlan::Join(Join {
-                    left: Arc::new(inputs[0].clone()),
-                    right: Arc::new(inputs[1].clone()),
+                    left: inputs[0].clone(),
+                    right: inputs[1].clone(),
                     join_type: *join_type,
                     join_constraint: *join_constraint,
                     on: new_on,
@@ -778,14 +778,16 @@ impl LogicalPlan {
             LogicalPlan::CrossJoin(_) => {
                 let left = inputs[0].clone();
                 let right = inputs[1].clone();
-                LogicalPlanBuilder::from(left).cross_join(right)?.build()
+                LogicalPlanBuilder::from(left)
+                    .cross_join(right)?
+                    .build_owned()
             }
             LogicalPlan::Subquery(Subquery {
                 outer_ref_columns, ..
             }) => {
                 let subquery = LogicalPlanBuilder::from(inputs[0].clone()).build()?;
                 Ok(LogicalPlan::Subquery(Subquery {
-                    subquery: Arc::new(subquery),
+                    subquery: subquery,
                     outer_ref_columns: outer_ref_columns.clone(),
                 }))
             }
@@ -799,7 +801,7 @@ impl LogicalPlan {
                 Ok(LogicalPlan::Limit(Limit {
                     skip: *skip,
                     fetch: *fetch,
-                    input: Arc::new(inputs[0].clone()),
+                    input: inputs[0].clone(),
                 }))
             }
             LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(CreateMemoryTable {
@@ -809,7 +811,7 @@ impl LogicalPlan {
                 ..
             })) => Ok(LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(
                 CreateMemoryTable {
-                    input: Arc::new(inputs[0].clone()),
+                    input: inputs[0].clone(),
                     constraints: Constraints::empty(),
                     name: name.clone(),
                     if_not_exists: *if_not_exists,
@@ -822,21 +824,28 @@ impl LogicalPlan {
                 definition,
                 ..
             })) => Ok(LogicalPlan::Ddl(DdlStatement::CreateView(CreateView {
-                input: Arc::new(inputs[0].clone()),
+                input: inputs[0].clone(),
                 name: name.clone(),
                 or_replace: *or_replace,
                 definition: definition.clone(),
             }))),
             LogicalPlan::Extension(e) => Ok(LogicalPlan::Extension(Extension {
-                node: e.node.from_template(&expr, inputs),
+                node: e.node.from_template(
+                    &expr,
+                    inputs
+                        .iter()
+                        .map(|p| p.as_ref().to_owned())
+                        .collect::<Vec<_>>()
+                        .as_slice(),
+                ),
             })),
             LogicalPlan::Union(Union { schema, .. }) => Ok(LogicalPlan::Union(Union {
-                inputs: inputs.iter().cloned().map(Arc::new).collect(),
+                inputs: inputs.iter().cloned().collect(),
                 schema: schema.clone(),
             })),
             LogicalPlan::Distinct(Distinct { .. }) => {
                 Ok(LogicalPlan::Distinct(Distinct {
-                    input: Arc::new(inputs[0].clone()),
+                    input: inputs[0].clone(),
                 }))
             }
             LogicalPlan::Analyze(a) => {
@@ -845,7 +854,7 @@ impl LogicalPlan {
                 Ok(LogicalPlan::Analyze(Analyze {
                     verbose: a.verbose,
                     schema: a.schema.clone(),
-                    input: Arc::new(inputs[0].clone()),
+                    input: inputs[0].clone(),
                 }))
             }
             LogicalPlan::Explain(_) => {
@@ -867,7 +876,7 @@ impl LogicalPlan {
             }) => Ok(LogicalPlan::Prepare(Prepare {
                 name: name.clone(),
                 data_types: data_types.clone(),
-                input: Arc::new(inputs[0].clone()),
+                input: inputs[0].clone(),
             })),
             LogicalPlan::TableScan(ts) => {
                 assert!(inputs.is_empty(), "{self:?}  should have no inputs");
@@ -892,7 +901,7 @@ impl LogicalPlan {
                 ..
             }) => {
                 // Update schema with unnested column type.
-                let input = Arc::new(inputs[0].clone());
+                let input = inputs[0].clone();
                 let nested_field = input.schema().field_from_column(column)?;
                 let unnested_field = schema.field_from_column(column)?;
                 let fields = input
@@ -1128,7 +1137,7 @@ impl LogicalPlan {
         let new_inputs_with_values = self
             .inputs()
             .into_iter()
-            .map(|inp| inp.replace_params_with_values(param_values))
+            .map(|inp| Ok(Arc::new(inp.replace_params_with_values(param_values)?)))
             .collect::<Result<Vec<_>>>()?;
 
         self.with_new_exprs(new_exprs, &new_inputs_with_values)
@@ -1772,7 +1781,7 @@ pub struct SubqueryAlias {
 
 impl SubqueryAlias {
     pub fn try_new(
-        plan: LogicalPlan,
+        plan: Arc<LogicalPlan>,
         alias: impl Into<OwnedTableReference>,
     ) -> Result<Self> {
         let alias = alias.into();
@@ -1785,7 +1794,7 @@ impl SubqueryAlias {
                 .with_functional_dependencies(func_dependencies),
         );
         Ok(SubqueryAlias {
-            input: Arc::new(plan),
+            input: plan,
             alias,
             schema,
         })
@@ -2337,12 +2346,12 @@ mod tests {
         ])
     }
 
-    fn display_plan() -> Result<LogicalPlan> {
+    fn display_plan() -> Result<Arc<LogicalPlan>> {
         let plan1 = table_scan(Some("employee_csv"), &employee_schema(), Some(vec![3]))?
             .build()?;
 
         table_scan(Some("employee_csv"), &employee_schema(), Some(vec![0, 3]))?
-            .filter(in_subquery(col("state"), Arc::new(plan1)))?
+            .filter(in_subquery(col("state"), plan1))?
             .project(vec![col("id")])?
             .build()
     }
@@ -2379,7 +2388,6 @@ mod tests {
     fn test_display_subquery_alias() -> Result<()> {
         let plan1 = table_scan(Some("employee_csv"), &employee_schema(), Some(vec![3]))?
             .build()?;
-        let plan1 = Arc::new(plan1);
 
         let plan =
             table_scan(Some("employee_csv"), &employee_schema(), Some(vec![0, 3]))?
@@ -2676,7 +2684,7 @@ digraph {
         Ok(())
     }
 
-    fn test_plan() -> LogicalPlan {
+    fn test_plan() -> Arc<LogicalPlan> {
         let schema = Schema::new(vec![
             Field::new("id", DataType::Int32, false),
             Field::new("state", DataType::Utf8, false),

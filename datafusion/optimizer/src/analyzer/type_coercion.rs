@@ -117,7 +117,14 @@ fn analyze_internal(
             new_expr,
             Arc::new(new_inputs[0].clone()),
         )?)),
-        _ => plan.with_new_exprs(new_expr, &new_inputs),
+        _ => plan.with_new_exprs(
+            new_expr,
+            new_inputs
+                .into_iter()
+                .map(Arc::new)
+                .collect::<Vec<_>>()
+                .as_slice(),
+        ),
     }
 }
 

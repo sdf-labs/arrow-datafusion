@@ -42,7 +42,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     ) {
                         (Some(cte_plan), _) => Ok(cte_plan.clone()),
                         (_, Ok(provider)) => {
-                            LogicalPlanBuilder::scan(table_ref, provider, None)?.build()
+                            LogicalPlanBuilder::scan(table_ref, provider, None)?
+                                .build_owned()
                         }
                         (None, Err(e)) => Err(e),
                     }?,

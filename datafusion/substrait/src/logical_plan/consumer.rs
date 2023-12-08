@@ -180,9 +180,9 @@ pub async fn from_substrait_rel(
     match &rel.rel_type {
         Some(RelType::Project(p)) => {
             if let Some(input) = p.input.as_ref() {
-                let mut input = LogicalPlanBuilder::from(
+                let mut input = LogicalPlanBuilder::from(Arc::new(
                     from_substrait_rel(ctx, input, extensions).await?,
-                );
+                ));
                 let mut exprs: Vec<Expr> = vec![];
                 for e in &p.expressions {
                     let x =
@@ -200,20 +200,20 @@ pub async fn from_substrait_rel(
                         }
                     }
                 }
-                input.project(exprs)?.build()
+                input.project(exprs)?.build_owned()
             } else {
                 not_impl_err!("Projection without an input is not supported")
             }
         }
         Some(RelType::Filter(filter)) => {
             if let Some(input) = filter.input.as_ref() {
-                let input = LogicalPlanBuilder::from(
+                let input = LogicalPlanBuilder::from(Arc::new(
                     from_substrait_rel(ctx, input, extensions).await?,
-                );
+                ));
                 if let Some(condition) = filter.condition.as_ref() {
                     let expr =
                         from_substrait_rex(condition, input.schema(), extensions).await?;
-                    input.filter(expr.as_ref().clone())?.build()
+                    input.filter(expr.as_ref().clone())?.build_owned()
                 } else {
                     not_impl_err!("Filter without an condition is not valid")
                 }
@@ -223,9 +223,9 @@ pub async fn from_substrait_rel(
         }
         Some(RelType::Fetch(fetch)) => {
             if let Some(input) = fetch.input.as_ref() {
-                let input = LogicalPlanBuilder::from(
+                let input = LogicalPlanBuilder::from(Arc::new(
                     from_substrait_rel(ctx, input, extensions).await?,
-                );
+                ));
                 let offset = fetch.offset as usize;
                 // Since protobuf can't directly distinguish `None` vs `0` `None` is encoded as `MAX`
                 let count = if fetch.count as usize == usize::MAX {
@@ -233,28 +233,28 @@ pub async fn from_substrait_rel(
                 } else {
                     Some(fetch.count as usize)
                 };
-                input.limit(offset, count)?.build()
+                input.limit(offset, count)?.build_owned()
             } else {
                 not_impl_err!("Fetch without an input is not valid")
             }
         }
         Some(RelType::Sort(sort)) => {
             if let Some(input) = sort.input.as_ref() {
-                let input = LogicalPlanBuilder::from(
+                let input = LogicalPlanBuilder::from(Arc::new(
                     from_substrait_rel(ctx, input, extensions).await?,
-                );
+                ));
                 let sorts =
                     from_substrait_sorts(&sort.sorts, input.schema(), extensions).await?;
-                input.sort(sorts)?.build()
+                input.sort(sorts)?.build_owned()
             } else {
                 not_impl_err!("Sort without an input is not valid")
             }
         }
         Some(RelType::Aggregate(agg)) => {
             if let Some(input) = agg.input.as_ref() {
-                let input = LogicalPlanBuilder::from(
+                let input = LogicalPlanBuilder::from(Arc::new(
                     from_substrait_rel(ctx, input, extensions).await?,
-                );
+                ));
                 let mut group_expr = vec![];
                 let mut aggr_expr = vec![];
 
@@ -330,18 +330,18 @@ pub async fn from_substrait_rel(
                     aggr_expr.push(agg_func?.as_ref().clone());
                 }
 
-                input.aggregate(group_expr, aggr_expr)?.build()
+                input.aggregate(group_expr, aggr_expr)?.build_owned()
             } else {
                 not_impl_err!("Aggregate without an input is not valid")
             }
         }
         Some(RelType::Join(join)) => {
-            let left = LogicalPlanBuilder::from(
+            let left = LogicalPlanBuilder::from(Arc::new(
                 from_substrait_rel(ctx, join.left.as_ref().unwrap(), extensions).await?,
-            );
-            let right = LogicalPlanBuilder::from(
+            ));
+            let right = LogicalPlanBuilder::from(Arc::new(
                 from_substrait_rel(ctx, join.right.as_ref().unwrap(), extensions).await?,
-            );
+            ));
             let join_type = from_substrait_jointype(join.r#type)?;
             // The join condition expression needs full input schema and not the output schema from join since we lose columns from
             // certain join types such as semi and anti joins
@@ -392,7 +392,7 @@ pub async fn from_substrait_rel(
                         join_filter,
                         null_eq_nulls[0],
                     )?
-                    .build()
+                    .build_owned()
                 }
                 None => match &join_filter {
                     Some(_) => left
@@ -402,7 +402,7 @@ pub async fn from_substrait_rel(
                             (Vec::<Column>::new(), Vec::<Column>::new()),
                             join_filter,
                         )?
-                        .build(),
+                        .build_owned(),
                     None => plan_err!("Join without join keys require a valid filter"),
                 },
             }
@@ -465,14 +465,15 @@ pub async fn from_substrait_rel(
             Some(set_op) => match set_op {
                 set_rel::SetOp::UnionAll => {
                     if !set.inputs.is_empty() {
-                        let mut union_builder = Ok(LogicalPlanBuilder::from(
+                        let mut union_builder = Ok(LogicalPlanBuilder::from(Arc::new(
                             from_substrait_rel(ctx, &set.inputs[0], extensions).await?,
-                        ));
+                        )));
                         for input in &set.inputs[1..] {
-                            union_builder = union_builder?
-                                .union(from_substrait_rel(ctx, input, extensions).await?);
+                            union_builder = union_builder?.union(Arc::new(
+                                from_substrait_rel(ctx, input, extensions).await?,
+                            ));
                         }
-                        union_builder?.build()
+                        union_builder?.build_owned()
                     } else {
                         not_impl_err!("Union relation requires at least one input")
                     }

@@ -49,7 +49,7 @@ pub fn optimize_children(
     for input in plan.inputs() {
         let new_input = optimizer.try_optimize(input, config)?;
         plan_is_changed = plan_is_changed || new_input.is_some();
-        new_inputs.push(new_input.unwrap_or_else(|| input.clone()))
+        new_inputs.push(Arc::new(new_input.unwrap_or_else(|| input.clone())))
     }
     if plan_is_changed {
         Ok(Some(plan.with_new_inputs(&new_inputs)?))

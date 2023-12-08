@@ -166,7 +166,7 @@ async fn projection_on_table_scan() -> Result<()> {
     let ctx = partitioned_csv::create_ctx(&tmp_dir, partition_count).await?;
 
     let table = ctx.table("test").await?;
-    let logical_plan = LogicalPlanBuilder::from(table.into_optimized_plan()?)
+    let logical_plan = LogicalPlanBuilder::from(Arc::new(table.into_optimized_plan()?))
         .project(vec![col("c2")])?
         .build()?;
 
@@ -207,7 +207,7 @@ async fn preserve_nullability_on_projection() -> Result<()> {
 
     let plan = scan_empty(None, &schema, None)?
         .project(vec![col("c1")])?
-        .build()?;
+        .build_owned()?;
 
     let dataframe = DataFrame::new(ctx.state(), plan);
     let physical_plan = dataframe.create_physical_plan().await?;
@@ -240,7 +240,7 @@ async fn project_cast_dictionary() {
     )
     .unwrap();
 
-    let logical_plan = builder.project(vec![expr]).unwrap().build().unwrap();
+    let logical_plan = builder.project(vec![expr]).unwrap().build_owned().unwrap();
     let df = DataFrame::new(ctx.state(), logical_plan);
     let actual = df.collect().await.unwrap();
 

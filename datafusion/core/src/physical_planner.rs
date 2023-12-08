@@ -1010,12 +1010,12 @@ impl DefaultPhysicalPlanner {
                             let (left, left_col_keys, left_projected) =
                                 wrap_projection_for_join_if_necessary(
                                     left_keys.as_slice(),
-                                    left.as_ref().clone(),
+                                    left.clone(),
                                 )?;
                             let (right, right_col_keys, right_projected) =
                                 wrap_projection_for_join_if_necessary(
                                     &right_keys,
-                                    right.as_ref().clone(),
+                                    right.clone(),
                                 )?;
                             (
                                 left,
@@ -1028,8 +1028,8 @@ impl DefaultPhysicalPlanner {
                         let join_plan =
                             LogicalPlan::Join(Join::try_new_with_project_input(
                                 logical_plan,
-                                Arc::new(left),
-                                Arc::new(right),
+                                left,
+                                right,
                                 column_on,
                             )?);
 
@@ -2480,9 +2480,9 @@ mod tests {
         let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
         let ctx = SessionContext::new();
 
-        let logical_plan = LogicalPlanBuilder::from(
+        let logical_plan = LogicalPlanBuilder::from(Arc::new(
             ctx.read_table(Arc::new(table))?.into_optimized_plan()?,
-        )
+        ))
         .aggregate(vec![col("d1")], vec![sum(col("d2"))])?
         .build()?;
 
@@ -2723,7 +2723,7 @@ mod tests {
                 }
                 _ => unimplemented!(),
             };
-        Ok(LogicalPlanBuilder::from(logical_plan))
+        Ok(LogicalPlanBuilder::from(Arc::new(logical_plan)))
     }
 
     async fn test_csv_scan() -> Result<LogicalPlanBuilder> {
@@ -2731,9 +2731,9 @@ mod tests {
         let testdata = crate::test_util::arrow_test_data();
         let path = format!("{testdata}/csv/aggregate_test_100.csv");
         let options = CsvReadOptions::new().schema_infer_max_records(100);
-        Ok(LogicalPlanBuilder::from(
+        Ok(LogicalPlanBuilder::from(Arc::new(
             ctx.read_csv(path, options).await?.into_optimized_plan()?,
-        ))
+        )))
     }
 
     #[tokio::test]

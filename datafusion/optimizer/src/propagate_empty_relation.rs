@@ -385,10 +385,10 @@ mod tests {
             .map(DFField::from)
             .collect();
 
-        let empty = LogicalPlan::EmptyRelation(EmptyRelation {
+        let empty = Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
             produce_one_row: false,
             schema: Arc::new(DFSchema::new_with_metadata(fields, Default::default())?),
-        });
+        }));
 
         let one = LogicalPlanBuilder::from(empty.clone()).build()?;
         let two = LogicalPlanBuilder::from(table_scan).build()?;

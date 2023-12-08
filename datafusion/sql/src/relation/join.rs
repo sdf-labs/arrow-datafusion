@@ -19,7 +19,7 @@ use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_common::{not_impl_err, Column, DataFusionError, Result};
 use datafusion_expr::{JoinType, LogicalPlan, LogicalPlanBuilder};
 use sqlparser::ast::{Join, JoinConstraint, JoinOperator, TableWithJoins};
-use std::collections::HashSet;
+use std::{collections::HashSet, sync::Arc};
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     pub(crate) fn plan_table_with_joins(
@@ -115,7 +115,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         left: LogicalPlan,
         right: LogicalPlan,
     ) -> Result<LogicalPlan> {
-        LogicalPlanBuilder::from(left).cross_join(right)?.build()
+        LogicalPlanBuilder::from(Arc::new(left))
+            .cross_join(Arc::new(right))?
+            .build_owned()
     }
 
     fn parse_join(
@@ -131,23 +133,23 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let join_schema = left.schema().join(right.schema())?;
                 // parse ON expression
                 let expr = self.sql_to_expr(sql_expr, &join_schema, planner_context)?;
-                LogicalPlanBuilder::from(left)
+                LogicalPlanBuilder::from(Arc::new(left))
                     .join(
-                        right,
+                        Arc::new(right),
                         join_type,
                         (Vec::<Column>::new(), Vec::<Column>::new()),
                         Some(expr),
                     )?
-                    .build()
+                    .build_owned()
             }
             JoinConstraint::Using(idents) => {
                 let keys: Vec<Column> = idents
                     .into_iter()
                     .map(|x| Column::from_name(self.normalizer.normalize(x)))
                     .collect();
-                LogicalPlanBuilder::from(left)
-                    .join_using(right, join_type, keys)?
-                    .build()
+                LogicalPlanBuilder::from(Arc::new(left))
+                    .join_using(Arc::new(right), join_type, keys)?
+                    .build_owned()
             }
             JoinConstraint::Natural => {
                 let left_cols: HashSet<&String> = left
@@ -167,9 +169,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 if keys.is_empty() {
                     self.parse_cross_join(left, right)
                 } else {
-                    LogicalPlanBuilder::from(left)
-                        .join_using(right, join_type, keys)?
-                        .build()
+                    LogicalPlanBuilder::from(Arc::new(left))
+                        .join_using(Arc::new(right), join_type, keys)?
+                        .build_owned()
                 }
             }
             JoinConstraint::None => not_impl_err!("NONE constraint is not supported"),

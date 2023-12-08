@@ -79,7 +79,7 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                 }
 
                 // iterate through all subqueries in predicate, turning each into a left join
-                let mut cur_input = filter.input.as_ref().clone();
+                let mut cur_input = filter.input.clone();
                 for (subquery, alias) in subqueries {
                     if let Some((optimized_subquery, expr_check_map)) =
                         build_join(&subquery, &cur_input, &alias)?
@@ -108,7 +108,7 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                 }
                 let new_plan = LogicalPlanBuilder::from(cur_input)
                     .filter(rewrite_expr)?
-                    .build()?;
+                    .build_owned()?;
                 Ok(Some(new_plan))
             }
             LogicalPlan::Projection(projection) => {
@@ -129,7 +129,7 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                     return Ok(None);
                 }
                 // iterate through all subqueries in predicate, turning each into a left join
-                let mut cur_input = projection.input.as_ref().clone();
+                let mut cur_input = projection.input.clone();
                 for (subquery, alias) in all_subqueryies {
                     if let Some((optimized_subquery, expr_check_map)) =
                         build_join(&subquery, &cur_input, &alias)?
@@ -177,7 +177,7 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                 }
                 let new_plan = LogicalPlanBuilder::from(cur_input)
                     .project(proj_exprs)?
-                    .build()?;
+                    .build_owned()?;
                 Ok(Some(new_plan))
             }
 
@@ -269,7 +269,7 @@ fn build_join(
     subquery: &Subquery,
     filter_input: &LogicalPlan,
     subquery_alias: &str,
-) -> Result<Option<(LogicalPlan, HashMap<String, Expr>)>> {
+) -> Result<Option<(Arc<LogicalPlan>, HashMap<String, Expr>)>> {
     let subquery_plan = subquery.subquery.as_ref();
     let mut pull_up = PullUpCorrelatedExpr {
         join_filters: vec![],
@@ -281,7 +281,7 @@ fn build_join(
         collected_count_expr_map: Default::default(),
         pull_up_having_expr: None,
     };
-    let new_plan = subquery_plan.clone().rewrite(&mut pull_up)?;
+    let new_plan = Arc::new(subquery_plan.clone().rewrite(&mut pull_up)?);
     if !pull_up.can_pull_up {
         return Ok(None);
     }
@@ -314,7 +314,7 @@ fn build_join(
             }) => sub_query_alias,
             _ => {
                 // if not correlated, group down to 1 row and left join on that (preserving row count)
-                LogicalPlanBuilder::from(filter_input.clone())
+                LogicalPlanBuilder::from(Arc::new(filter_input.clone()))
                     .join(
                         sub_query_alias,
                         JoinType::Left,
@@ -326,7 +326,7 @@ fn build_join(
         }
     } else {
         // left join if correlated, grouping by the join keys so we don't change row count
-        LogicalPlanBuilder::from(filter_input.clone())
+        LogicalPlanBuilder::from(Arc::new(filter_input.clone()))
             .join(
                 sub_query_alias,
                 JoinType::Left,
@@ -393,16 +393,14 @@ mod tests {
     /// Test multiple correlated subqueries
     #[test]
     fn multiple_subqueries() -> Result<()> {
-        let orders = Arc::new(
-            LogicalPlanBuilder::from(scan_tpch_table("orders"))
-                .filter(
-                    col("orders.o_custkey")
-                        .eq(out_ref_col(DataType::Int64, "customer.c_custkey")),
-                )?
-                .aggregate(Vec::<Expr>::new(), vec![max(col("orders.o_custkey"))])?
-                .project(vec![max(col("orders.o_custkey"))])?
-                .build()?,
-        );
+        let orders = LogicalPlanBuilder::from(scan_tpch_table("orders"))
+            .filter(
+                col("orders.o_custkey")
+                    .eq(out_ref_col(DataType::Int64, "customer.c_custkey")),
+            )?
+            .aggregate(Vec::<Expr>::new(), vec![max(col("orders.o_custkey"))])?
+            .project(vec![max(col("orders.o_custkey"))])?
+            .build()?;
 
         let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
             .filter(
@@ -437,31 +435,27 @@ mod tests {
     /// Test recursive correlated subqueries
     #[test]
     fn recursive_subqueries() -> Result<()> {
-        let lineitem = Arc::new(
-            LogicalPlanBuilder::from(scan_tpch_table("lineitem"))
-                .filter(
-                    col("lineitem.l_orderkey")
-                        .eq(out_ref_col(DataType::Int64, "orders.o_orderkey")),
-                )?
-                .aggregate(
-                    Vec::<Expr>::new(),
-                    vec![sum(col("lineitem.l_extendedprice"))],
-                )?
-                .project(vec![sum(col("lineitem.l_extendedprice"))])?
-                .build()?,
-        );
+        let lineitem = LogicalPlanBuilder::from(scan_tpch_table("lineitem"))
+            .filter(
+                col("lineitem.l_orderkey")
+                    .eq(out_ref_col(DataType::Int64, "orders.o_orderkey")),
+            )?
+            .aggregate(
+                Vec::<Expr>::new(),
+                vec![sum(col("lineitem.l_extendedprice"))],
+            )?
+            .project(vec![sum(col("lineitem.l_extendedprice"))])?
+            .build()?;
 
-        let orders = Arc::new(
-            LogicalPlanBuilder::from(scan_tpch_table("orders"))
-                .filter(
-                    col("orders.o_custkey")
-                        .eq(out_ref_col(DataType::Int64, "customer.c_custkey"))
-                        .and(col("orders.o_totalprice").lt(scalar_subquery(lineitem))),
-                )?
-                .aggregate(Vec::<Expr>::new(), vec![sum(col("orders.o_totalprice"))])?
-                .project(vec![sum(col("orders.o_totalprice"))])?
-                .build()?,
-        );
+        let orders = LogicalPlanBuilder::from(scan_tpch_table("orders"))
+            .filter(
+                col("orders.o_custkey")
+                    .eq(out_ref_col(DataType::Int64, "customer.c_custkey"))
+                    .and(col("orders.o_totalprice").lt(scalar_subquery(lineitem))),
+            )?
+            .aggregate(Vec::<Expr>::new(), vec![sum(col("orders.o_totalprice"))])?
+            .project(vec![sum(col("orders.o_totalprice"))])?
+            .build()?;
 
         let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
             .filter(col("customer.c_acctbal").lt(scalar_subquery(orders)))?
@@ -493,17 +487,15 @@ mod tests {
     /// Test for correlated scalar subquery filter with additional subquery filters
     #[test]
     fn scalar_subquery_with_subquery_filters() -> Result<()> {
-        let sq = Arc::new(
-            LogicalPlanBuilder::from(scan_tpch_table("orders"))
-                .filter(
-                    out_ref_col(DataType::Int64, "customer.c_custkey")
-                        .eq(col("orders.o_custkey"))
-                        .and(col("o_orderkey").eq(lit(1))),
-                )?
-                .aggregate(Vec::<Expr>::new(), vec![max(col("orders.o_custkey"))])?
-                .project(vec![max(col("orders.o_custkey"))])?
-                .build()?,
-        );
+        let sq = LogicalPlanBuilder::from(scan_tpch_table("orders"))
+            .filter(
+                out_ref_col(DataType::Int64, "customer.c_custkey")
+                    .eq(col("orders.o_custkey"))
+                    .and(col("o_orderkey").eq(lit(1))),
+            )?
+            .aggregate(Vec::<Expr>::new(), vec![max(col("orders.o_custkey"))])?
+            .project(vec![max(col("orders.o_custkey"))])?
+            .build()?;
 
         let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
             .filter(col("customer.c_custkey").eq(scalar_subquery(sq)))?
@@ -531,16 +523,14 @@ mod tests {
     /// Test for correlated scalar subquery with no columns in schema
     #[test]
     fn scalar_subquery_no_cols() -> Result<()> {
-        let sq = Arc::new(
-            LogicalPlanBuilder::from(scan_tpch_table("orders"))
-                .filter(
-                    out_ref_col(DataType::Int64, "customer.c_custkey")
-                        .eq(out_ref_col(DataType::Int64, "customer.c_custkey")),
-                )?
-                .aggregate(Vec::<Expr>::new(), vec![max(col("orders.o_custkey"))])?
-                .project(vec![max(col("orders.o_custkey"))])?
-                .build()?,
-        );
+        let sq = LogicalPlanBuilder::from(scan_tpch_table("orders"))
+            .filter(
+                out_ref_col(DataType::Int64, "customer.c_custkey")
+                    .eq(out_ref_col(DataType::Int64, "customer.c_custkey")),
+            )?
+            .aggregate(Vec::<Expr>::new(), vec![max(col("orders.o_custkey"))])?
+            .project(vec![max(col("orders.o_custkey"))])?
+            .build()?;
 
         let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
             .filter(col("customer.c_custkey").eq(scalar_subquery(sq)))?
@@ -567,13 +557,11 @@ mod tests {
     /// Test for scalar subquery with both columns in schema
     #[test]
     fn scalar_subquery_with_no_correlated_cols() -> Result<()> {
-        let sq = Arc::new(
-            LogicalPlanBuilder::from(scan_tpch_table("orders"))
-                .filter(col("orders.o_custkey").eq(col("orders.o_custkey")))?
-                .aggregate(Vec::<Expr>::new(), vec![max(col("orders.o_custkey"))])?
-                .project(vec![max(col("orders.o_custkey"))])?
-                .build()?,
-        );
+        let sq = LogicalPlanBuilder::from(scan_tpch_table("orders"))
+            .filter(col("orders.o_custkey").eq(col("orders.o_custkey")))?
+            .aggregate(Vec::<Expr>::new(), vec![max(col("orders.o_custkey"))])?
+            .project(vec![max(col("orders.o_custkey"))])?
+            .build()?;
 
         let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
             .filter(col("customer.c_custkey").eq(scalar_subquery(sq)))?
@@ -601,16 +589,14 @@ mod tests {
     /// Test for correlated scalar subquery not equal
     #[test]
     fn scalar_subquery_where_not_eq() -> Result<()> {
-        let sq = Arc::new(
-            LogicalPlanBuilder::from(scan_tpch_table("orders"))
-                .filter(
-                    out_ref_col(DataType::Int64, "customer.c_custkey")
-                        .not_eq(col("orders.o_custkey")),
-                )?
-                .aggregate(Vec::<Expr>::new(), vec![max(col("orders.o_custkey"))])?
-                .project(vec![max(col("orders.o_custkey"))])?
-                .build()?,
-        );
+        let sq = LogicalPlanBuilder::from(scan_tpch_table("orders"))
+            .filter(
+                out_ref_col(DataType::Int64, "customer.c_custkey")
+                    .not_eq(col("orders.o_custkey")),
+            )?
+            .aggregate(Vec::<Expr>::new(), vec![max(col("orders.o_custkey"))])?
+            .project(vec![max(col("orders.o_custkey"))])?
+            .build()?;
 
         let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
             .filter(col("customer.c_custkey").eq(scalar_subquery(sq)))?
@@ -628,16 +614,14 @@ mod tests {
     /// Test for correlated scalar subquery less than
     #[test]
     fn scalar_subquery_where_less_than() -> Result<()> {
-        let sq = Arc::new(
-            LogicalPlanBuilder::from(scan_tpch_table("orders"))
-                .filter(
-                    out_ref_col(DataType::Int64, "customer.c_custkey")
-                        .lt(col("orders.o_custkey")),
-                )?
-                .aggregate(Vec::<Expr>::new(), vec![max(col("orders.o_custkey"))])?
-                .project(vec![max(col("orders.o_custkey"))])?
-                .build()?,
-        );
+        let sq = LogicalPlanBuilder::from(scan_tpch_table("orders"))
+            .filter(
+                out_ref_col(DataType::Int64, "customer.c_custkey")
+                    .lt(col("orders.o_custkey")),
+            )?
+            .aggregate(Vec::<Expr>::new(), vec![max(col("orders.o_custkey"))])?
+            .project(vec![max(col("orders.o_custkey"))])?
+            .build()?;
 
         let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
             .filter(col("customer.c_custkey").eq(scalar_subquery(sq)))?
@@ -655,17 +639,15 @@ mod tests {
     /// Test for correlated scalar subquery filter with subquery disjunction
     #[test]
     fn scalar_subquery_with_subquery_disjunction() -> Result<()> {
-        let sq = Arc::new(
-            LogicalPlanBuilder::from(scan_tpch_table("orders"))
-                .filter(
-                    out_ref_col(DataType::Int64, "customer.c_custkey")
-                        .eq(col("orders.o_custkey"))
-                        .or(col("o_orderkey").eq(lit(1))),
-                )?
-                .aggregate(Vec::<Expr>::new(), vec![max(col("orders.o_custkey"))])?
-                .project(vec![max(col("orders.o_custkey"))])?
-                .build()?,
-        );
+        let sq = LogicalPlanBuilder::from(scan_tpch_table("orders"))
+            .filter(
+                out_ref_col(DataType::Int64, "customer.c_custkey")
+                    .eq(col("orders.o_custkey"))
+                    .or(col("o_orderkey").eq(lit(1))),
+            )?
+            .aggregate(Vec::<Expr>::new(), vec![max(col("orders.o_custkey"))])?
+            .project(vec![max(col("orders.o_custkey"))])?
+            .build()?;
 
         let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
             .filter(col("customer.c_custkey").eq(scalar_subquery(sq)))?
@@ -683,11 +665,9 @@ mod tests {
     /// Test for correlated scalar without projection
     #[test]
     fn scalar_subquery_no_projection() -> Result<()> {
-        let sq = Arc::new(
-            LogicalPlanBuilder::from(scan_tpch_table("orders"))
-                .filter(col("customer.c_custkey").eq(col("orders.o_custkey")))?
-                .build()?,
-        );
+        let sq = LogicalPlanBuilder::from(scan_tpch_table("orders"))
+            .filter(col("customer.c_custkey").eq(col("orders.o_custkey")))?
+            .build()?;
 
         let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
             .filter(col("customer.c_custkey").eq(scalar_subquery(sq)))?
@@ -704,16 +684,14 @@ mod tests {
     /// Test for correlated scalar expressions
     #[test]
     fn scalar_subquery_project_expr() -> Result<()> {
-        let sq = Arc::new(
-            LogicalPlanBuilder::from(scan_tpch_table("orders"))
-                .filter(
-                    out_ref_col(DataType::Int64, "customer.c_custkey")
-                        .eq(col("orders.o_custkey")),
-                )?
-                .aggregate(Vec::<Expr>::new(), vec![max(col("orders.o_custkey"))])?
-                .project(vec![col("MAX(orders.o_custkey)").add(lit(1))])?
-                .build()?,
-        );
+        let sq = LogicalPlanBuilder::from(scan_tpch_table("orders"))
+            .filter(
+                out_ref_col(DataType::Int64, "customer.c_custkey")
+                    .eq(col("orders.o_custkey")),
+            )?
+            .aggregate(Vec::<Expr>::new(), vec![max(col("orders.o_custkey"))])?
+            .project(vec![col("MAX(orders.o_custkey)").add(lit(1))])?
+            .build()?;
 
         let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
             .filter(col("customer.c_custkey").eq(scalar_subquery(sq)))?
@@ -740,12 +718,10 @@ mod tests {
     /// Test for correlated scalar subquery multiple projected columns
     #[test]
     fn scalar_subquery_multi_col() -> Result<()> {
-        let sq = Arc::new(
-            LogicalPlanBuilder::from(scan_tpch_table("orders"))
-                .filter(col("customer.c_custkey").eq(col("orders.o_custkey")))?
-                .project(vec![col("orders.o_custkey"), col("orders.o_orderkey")])?
-                .build()?,
-        );
+        let sq = LogicalPlanBuilder::from(scan_tpch_table("orders"))
+            .filter(col("customer.c_custkey").eq(col("orders.o_custkey")))?
+            .project(vec![col("orders.o_custkey"), col("orders.o_orderkey")])?
+            .build()?;
 
         let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
             .filter(
@@ -766,16 +742,14 @@ mod tests {
     /// Test for correlated scalar subquery filter with additional filters
     #[test]
     fn scalar_subquery_additional_filters_with_non_equal_clause() -> Result<()> {
-        let sq = Arc::new(
-            LogicalPlanBuilder::from(scan_tpch_table("orders"))
-                .filter(
-                    out_ref_col(DataType::Int64, "customer.c_custkey")
-                        .eq(col("orders.o_custkey")),
-                )?
-                .aggregate(Vec::<Expr>::new(), vec![max(col("orders.o_custkey"))])?
-                .project(vec![max(col("orders.o_custkey"))])?
-                .build()?,
-        );
+        let sq = LogicalPlanBuilder::from(scan_tpch_table("orders"))
+            .filter(
+                out_ref_col(DataType::Int64, "customer.c_custkey")
+                    .eq(col("orders.o_custkey")),
+            )?
+            .aggregate(Vec::<Expr>::new(), vec![max(col("orders.o_custkey"))])?
+            .project(vec![max(col("orders.o_custkey"))])?
+            .build()?;
 
         let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
             .filter(
@@ -805,16 +779,14 @@ mod tests {
 
     #[test]
     fn scalar_subquery_additional_filters_with_equal_clause() -> Result<()> {
-        let sq = Arc::new(
-            LogicalPlanBuilder::from(scan_tpch_table("orders"))
-                .filter(
-                    out_ref_col(DataType::Int64, "customer.c_custkey")
-                        .eq(col("orders.o_custkey")),
-                )?
-                .aggregate(Vec::<Expr>::new(), vec![max(col("orders.o_custkey"))])?
-                .project(vec![max(col("orders.o_custkey"))])?
-                .build()?,
-        );
+        let sq = LogicalPlanBuilder::from(scan_tpch_table("orders"))
+            .filter(
+                out_ref_col(DataType::Int64, "customer.c_custkey")
+                    .eq(col("orders.o_custkey")),
+            )?
+            .aggregate(Vec::<Expr>::new(), vec![max(col("orders.o_custkey"))])?
+            .project(vec![max(col("orders.o_custkey"))])?
+            .build()?;
 
         let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
             .filter(
@@ -845,16 +817,14 @@ mod tests {
     /// Test for correlated scalar subquery filter with disjustions
     #[test]
     fn scalar_subquery_disjunction() -> Result<()> {
-        let sq = Arc::new(
-            LogicalPlanBuilder::from(scan_tpch_table("orders"))
-                .filter(
-                    out_ref_col(DataType::Int64, "customer.c_custkey")
-                        .eq(col("orders.o_custkey")),
-                )?
-                .aggregate(Vec::<Expr>::new(), vec![max(col("orders.o_custkey"))])?
-                .project(vec![max(col("orders.o_custkey"))])?
-                .build()?,
-        );
+        let sq = LogicalPlanBuilder::from(scan_tpch_table("orders"))
+            .filter(
+                out_ref_col(DataType::Int64, "customer.c_custkey")
+                    .eq(col("orders.o_custkey")),
+            )?
+            .aggregate(Vec::<Expr>::new(), vec![max(col("orders.o_custkey"))])?
+            .project(vec![max(col("orders.o_custkey"))])?
+            .build()?;
 
         let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
             .filter(
@@ -885,13 +855,11 @@ mod tests {
     /// Test for correlated scalar subquery filter
     #[test]
     fn exists_subquery_correlated() -> Result<()> {
-        let sq = Arc::new(
-            LogicalPlanBuilder::from(test_table_scan_with_name("sq")?)
-                .filter(out_ref_col(DataType::UInt32, "test.a").eq(col("sq.a")))?
-                .aggregate(Vec::<Expr>::new(), vec![min(col("c"))])?
-                .project(vec![min(col("c"))])?
-                .build()?,
-        );
+        let sq = LogicalPlanBuilder::from(test_table_scan_with_name("sq")?)
+            .filter(out_ref_col(DataType::UInt32, "test.a").eq(col("sq.a")))?
+            .aggregate(Vec::<Expr>::new(), vec![min(col("c"))])?
+            .project(vec![min(col("c"))])?
+            .build()?;
 
         let plan = LogicalPlanBuilder::from(test_table_scan_with_name("test")?)
             .filter(col("test.c").lt(scalar_subquery(sq)))?
@@ -918,12 +886,10 @@ mod tests {
     /// Test for non-correlated scalar subquery with no filters
     #[test]
     fn scalar_subquery_non_correlated_no_filters_with_non_equal_clause() -> Result<()> {
-        let sq = Arc::new(
-            LogicalPlanBuilder::from(scan_tpch_table("orders"))
-                .aggregate(Vec::<Expr>::new(), vec![max(col("orders.o_custkey"))])?
-                .project(vec![max(col("orders.o_custkey"))])?
-                .build()?,
-        );
+        let sq = LogicalPlanBuilder::from(scan_tpch_table("orders"))
+            .aggregate(Vec::<Expr>::new(), vec![max(col("orders.o_custkey"))])?
+            .project(vec![max(col("orders.o_custkey"))])?
+            .build()?;
 
         let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
             .filter(col("customer.c_custkey").lt(scalar_subquery(sq)))?
@@ -949,12 +915,10 @@ mod tests {
 
     #[test]
     fn scalar_subquery_non_correlated_no_filters_with_equal_clause() -> Result<()> {
-        let sq = Arc::new(
-            LogicalPlanBuilder::from(scan_tpch_table("orders"))
-                .aggregate(Vec::<Expr>::new(), vec![max(col("orders.o_custkey"))])?
-                .project(vec![max(col("orders.o_custkey"))])?
-                .build()?,
-        );
+        let sq = LogicalPlanBuilder::from(scan_tpch_table("orders"))
+            .aggregate(Vec::<Expr>::new(), vec![max(col("orders.o_custkey"))])?
+            .project(vec![max(col("orders.o_custkey"))])?
+            .build()?;
 
         let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
             .filter(col("customer.c_custkey").eq(scalar_subquery(sq)))?
@@ -980,26 +944,22 @@ mod tests {
 
     #[test]
     fn correlated_scalar_subquery_in_between_clause() -> Result<()> {
-        let sq1 = Arc::new(
-            LogicalPlanBuilder::from(scan_tpch_table("orders"))
-                .filter(
-                    out_ref_col(DataType::Int64, "customer.c_custkey")
-                        .eq(col("orders.o_custkey")),
-                )?
-                .aggregate(Vec::<Expr>::new(), vec![min(col("orders.o_custkey"))])?
-                .project(vec![min(col("orders.o_custkey"))])?
-                .build()?,
-        );
-        let sq2 = Arc::new(
-            LogicalPlanBuilder::from(scan_tpch_table("orders"))
-                .filter(
-                    out_ref_col(DataType::Int64, "customer.c_custkey")
-                        .eq(col("orders.o_custkey")),
-                )?
-                .aggregate(Vec::<Expr>::new(), vec![max(col("orders.o_custkey"))])?
-                .project(vec![max(col("orders.o_custkey"))])?
-                .build()?,
-        );
+        let sq1 = LogicalPlanBuilder::from(scan_tpch_table("orders"))
+            .filter(
+                out_ref_col(DataType::Int64, "customer.c_custkey")
+                    .eq(col("orders.o_custkey")),
+            )?
+            .aggregate(Vec::<Expr>::new(), vec![min(col("orders.o_custkey"))])?
+            .project(vec![min(col("orders.o_custkey"))])?
+            .build()?;
+        let sq2 = LogicalPlanBuilder::from(scan_tpch_table("orders"))
+            .filter(
+                out_ref_col(DataType::Int64, "customer.c_custkey")
+                    .eq(col("orders.o_custkey")),
+            )?
+            .aggregate(Vec::<Expr>::new(), vec![max(col("orders.o_custkey"))])?
+            .project(vec![max(col("orders.o_custkey"))])?
+            .build()?;
 
         let between_expr = Expr::Between(Between {
             expr: Box::new(col("customer.c_custkey")),
@@ -1037,18 +997,14 @@ mod tests {
 
     #[test]
     fn uncorrelated_scalar_subquery_in_between_clause() -> Result<()> {
-        let sq1 = Arc::new(
-            LogicalPlanBuilder::from(scan_tpch_table("orders"))
-                .aggregate(Vec::<Expr>::new(), vec![min(col("orders.o_custkey"))])?
-                .project(vec![min(col("orders.o_custkey"))])?
-                .build()?,
-        );
-        let sq2 = Arc::new(
-            LogicalPlanBuilder::from(scan_tpch_table("orders"))
-                .aggregate(Vec::<Expr>::new(), vec![max(col("orders.o_custkey"))])?
-                .project(vec![max(col("orders.o_custkey"))])?
-                .build()?,
-        );
+        let sq1 = LogicalPlanBuilder::from(scan_tpch_table("orders"))
+            .aggregate(Vec::<Expr>::new(), vec![min(col("orders.o_custkey"))])?
+            .project(vec![min(col("orders.o_custkey"))])?
+            .build()?;
+        let sq2 = LogicalPlanBuilder::from(scan_tpch_table("orders"))
+            .aggregate(Vec::<Expr>::new(), vec![max(col("orders.o_custkey"))])?
+            .project(vec![max(col("orders.o_custkey"))])?
+            .build()?;
 
         let between_expr = Expr::Between(Between {
             expr: Box::new(col("customer.c_custkey")),

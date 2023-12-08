@@ -201,7 +201,9 @@ impl DataFrame {
         } else {
             LogicalPlanBuilder::window_plan(self.plan, window_func_exprs)?
         };
-        let project_plan = LogicalPlanBuilder::from(plan).project(expr_list)?.build()?;
+        let project_plan = LogicalPlanBuilder::from(Arc::new(plan))
+            .project(expr_list)?
+            .build_owned()?;
 
         Ok(DataFrame::new(self.session_state, project_plan))
     }
@@ -238,9 +240,9 @@ impl DataFrame {
         column: &str,
         options: UnnestOptions,
     ) -> Result<DataFrame> {
-        let plan = LogicalPlanBuilder::from(self.plan)
+        let plan = LogicalPlanBuilder::from(Arc::new(self.plan))
             .unnest_column_with_options(column, options)?
-            .build()?;
+            .build_owned()?;
         Ok(DataFrame::new(self.session_state, plan))
     }
 
@@ -258,9 +260,9 @@ impl DataFrame {
     /// # }
     /// ```
     pub fn filter(self, predicate: Expr) -> Result<DataFrame> {
-        let plan = LogicalPlanBuilder::from(self.plan)
+        let plan = LogicalPlanBuilder::from(Arc::new(self.plan))
             .filter(predicate)?
-            .build()?;
+            .build_owned()?;
         Ok(DataFrame::new(self.session_state, plan))
     }
 
@@ -287,17 +289,17 @@ impl DataFrame {
         group_expr: Vec<Expr>,
         aggr_expr: Vec<Expr>,
     ) -> Result<DataFrame> {
-        let plan = LogicalPlanBuilder::from(self.plan)
+        let plan = LogicalPlanBuilder::from(Arc::new(self.plan))
             .aggregate(group_expr, aggr_expr)?
-            .build()?;
+            .build_owned()?;
         Ok(DataFrame::new(self.session_state, plan))
     }
 
     /// Apply one or more window functions ([`Expr::WindowFunction`]) to extend the schema
     pub fn window(self, window_exprs: Vec<Expr>) -> Result<DataFrame> {
-        let plan = LogicalPlanBuilder::from(self.plan)
+        let plan = LogicalPlanBuilder::from(Arc::new(self.plan))
             .window(window_exprs)?
-            .build()?;
+            .build_owned()?;
         Ok(DataFrame::new(self.session_state, plan))
     }
 
@@ -318,9 +320,9 @@ impl DataFrame {
     /// # }
     /// ```
     pub fn limit(self, skip: usize, fetch: Option<usize>) -> Result<DataFrame> {
-        let plan = LogicalPlanBuilder::from(self.plan)
+        let plan = LogicalPlanBuilder::from(Arc::new(self.plan))
             .limit(skip, fetch)?
-            .build()?;
+            .build_owned()?;
         Ok(DataFrame::new(self.session_state, plan))
     }
 
@@ -340,9 +342,9 @@ impl DataFrame {
     /// # }
     /// ```
     pub fn union(self, dataframe: DataFrame) -> Result<DataFrame> {
-        let plan = LogicalPlanBuilder::from(self.plan)
-            .union(dataframe.plan)?
-            .build()?;
+        let plan = LogicalPlanBuilder::from(Arc::new(self.plan))
+            .union(Arc::new(dataframe.plan))?
+            .build_owned()?;
         Ok(DataFrame::new(self.session_state, plan))
     }
 
@@ -364,9 +366,9 @@ impl DataFrame {
     pub fn union_distinct(self, dataframe: DataFrame) -> Result<DataFrame> {
         Ok(DataFrame::new(
             self.session_state,
-            LogicalPlanBuilder::from(self.plan)
-                .union_distinct(dataframe.plan)?
-                .build()?,
+            LogicalPlanBuilder::from(Arc::new(self.plan))
+                .union_distinct(Arc::new(dataframe.plan))?
+                .build_owned()?,
         ))
     }
 
@@ -386,7 +388,9 @@ impl DataFrame {
     pub fn distinct(self) -> Result<DataFrame> {
         Ok(DataFrame::new(
             self.session_state,
-            LogicalPlanBuilder::from(self.plan).distinct()?.build()?,
+            LogicalPlanBuilder::from(Arc::new(self.plan))
+                .distinct()?
+                .build_owned()?,
         ))
     }
 
@@ -559,7 +563,7 @@ impl DataFrame {
                 provider_as_source(Arc::new(provider)),
                 None,
             )?
-            .build()?,
+            .build_owned()?,
         ))
     }
 
@@ -578,7 +582,9 @@ impl DataFrame {
     /// # }
     /// ```
     pub fn sort(self, expr: Vec<Expr>) -> Result<DataFrame> {
-        let plan = LogicalPlanBuilder::from(self.plan).sort(expr)?.build()?;
+        let plan = LogicalPlanBuilder::from(Arc::new(self.plan))
+            .sort(expr)?
+            .build_owned()?;
         Ok(DataFrame::new(self.session_state, plan))
     }
 
@@ -613,14 +619,14 @@ impl DataFrame {
         right_cols: &[&str],
         filter: Option<Expr>,
     ) -> Result<DataFrame> {
-        let plan = LogicalPlanBuilder::from(self.plan)
+        let plan = LogicalPlanBuilder::from(Arc::new(self.plan))
             .join(
-                right.plan,
+                Arc::new(right.plan),
                 join_type,
                 (left_cols.to_vec(), right_cols.to_vec()),
                 filter,
             )?
-            .build()?;
+            .build_owned()?;
         Ok(DataFrame::new(self.session_state, plan))
     }
 
@@ -662,14 +668,14 @@ impl DataFrame {
         on_exprs: impl IntoIterator<Item = Expr>,
     ) -> Result<DataFrame> {
         let expr = on_exprs.into_iter().reduce(Expr::and);
-        let plan = LogicalPlanBuilder::from(self.plan)
+        let plan = LogicalPlanBuilder::from(Arc::new(self.plan))
             .join(
-                right.plan,
+                Arc::new(right.plan),
                 join_type,
                 (Vec::<Column>::new(), Vec::<Column>::new()),
                 expr,
             )?
-            .build()?;
+            .build_owned()?;
         Ok(DataFrame::new(self.session_state, plan))
     }
 
@@ -687,9 +693,9 @@ impl DataFrame {
     /// # }
     /// ```
     pub fn repartition(self, partitioning_scheme: Partitioning) -> Result<DataFrame> {
-        let plan = LogicalPlanBuilder::from(self.plan)
+        let plan = LogicalPlanBuilder::from(Arc::new(self.plan))
             .repartition(partitioning_scheme)?
-            .build()?;
+            .build_owned()?;
         Ok(DataFrame::new(self.session_state, plan))
     }
 
@@ -929,9 +935,9 @@ impl DataFrame {
     /// # }
     /// ```
     pub fn explain(self, verbose: bool, analyze: bool) -> Result<DataFrame> {
-        let plan = LogicalPlanBuilder::from(self.plan)
+        let plan = LogicalPlanBuilder::from(Arc::new(self.plan))
             .explain(verbose, analyze)?
-            .build()?;
+            .build_owned()?;
         Ok(DataFrame::new(self.session_state, plan))
     }
 
@@ -1012,12 +1018,12 @@ impl DataFrame {
     ) -> Result<Vec<RecordBatch>, DataFusionError> {
         let arrow_schema = Schema::from(self.schema());
         let plan = LogicalPlanBuilder::insert_into(
-            self.plan,
+            Arc::new(self.plan),
             table_name.to_owned(),
             &arrow_schema,
             write_options.overwrite,
         )?
-        .build()?;
+        .build_owned()?;
         DataFrame::new(self.session_state, plan).collect().await
     }
 
@@ -1049,7 +1055,7 @@ impl DataFrame {
             options.single_file_output,
             copy_options,
         )?
-        .build()?;
+        .build_owned()?;
         DataFrame::new(self.session_state, plan).collect().await
     }
 
@@ -1083,7 +1089,7 @@ impl DataFrame {
             options.single_file_output,
             copy_options,
         )?
-        .build()?;
+        .build_owned()?;
         DataFrame::new(self.session_state, plan).collect().await
     }
 
@@ -1108,7 +1114,7 @@ impl DataFrame {
             options.single_file_output,
             copy_options,
         )?
-        .build()?;
+        .build_owned()?;
         DataFrame::new(self.session_state, plan).collect().await
     }
 
@@ -1156,7 +1162,9 @@ impl DataFrame {
             fields.push(new_column);
         }
 
-        let project_plan = LogicalPlanBuilder::from(plan).project(fields)?.build()?;
+        let project_plan = LogicalPlanBuilder::from(Arc::new(plan))
+            .project(fields)?
+            .build_owned()?;
 
         Ok(DataFrame::new(self.session_state, project_plan))
     }
@@ -1212,9 +1220,9 @@ impl DataFrame {
                 }
             })
             .collect::<Vec<_>>();
-        let project_plan = LogicalPlanBuilder::from(self.plan)
+        let project_plan = LogicalPlanBuilder::from(Arc::new(self.plan))
             .project(projection)?
-            .build()?;
+            .build_owned()?;
         Ok(DataFrame::new(self.session_state, project_plan))
     }
 
@@ -1286,7 +1294,7 @@ impl TableProvider for DataFrameTableProvider {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let mut expr = LogicalPlanBuilder::from(self.plan.clone());
+        let mut expr = LogicalPlanBuilder::from(Arc::new(self.plan.clone()));
         // Add filter when given
         let filter = filters.iter().cloned().reduce(|acc, new| acc.and(new));
         if let Some(filter) = filter {

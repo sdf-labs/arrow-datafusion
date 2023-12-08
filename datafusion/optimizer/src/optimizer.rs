@@ -378,6 +378,7 @@ impl Optimizer {
                 Some(plan) => plan,
                 None => (*(inputs.get(i).unwrap())).clone(),
             })
+            .map(Arc::new)
             .collect::<Vec<_>>();
 
         Ok(Some(plan.with_new_inputs(&new_inputs)?))
@@ -529,7 +530,7 @@ mod tests {
         let opt = Optimizer::with_rules(vec![Arc::new(GetTableScanRule {})]);
         let config = OptimizerContext::new().with_skip_failing_rules(false);
 
-        let input = Arc::new(test_table_scan()?);
+        let input = test_table_scan()?;
         let input_schema = input.schema().clone();
 
         let plan = LogicalPlan::Projection(Projection::try_new_with_schema(
@@ -567,7 +568,7 @@ mod tests {
         assert_eq!(3, plans.len());
 
         // we got again the initial_plan with [1, 2, 3]
-        assert_eq!(initial_plan, final_plan);
+        assert_eq!(*initial_plan, final_plan);
 
         Ok(())
     }
@@ -648,7 +649,7 @@ mod tests {
             _: &dyn OptimizerConfig,
         ) -> Result<Option<LogicalPlan>> {
             let table_scan = test_table_scan()?;
-            Ok(Some(LogicalPlanBuilder::from(table_scan).build()?))
+            Ok(Some(LogicalPlanBuilder::from(table_scan).build_owned()?))
         }
 
         fn name(&self) -> &str {

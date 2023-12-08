@@ -193,9 +193,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                     .alias(field.name())
                                 })
                                 .collect::<Vec<_>>();
-                            LogicalPlanBuilder::from(plan.clone())
+                            LogicalPlanBuilder::from(Arc::new(plan.clone()))
                                 .project(project_exprs)?
-                                .build()?
+                                .build_owned()?
                         } else {
                             plan
                         };
@@ -597,7 +597,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     table_source,
                     None,
                 )?
-                .build()?
+                .build_owned()?
             }
             CopyToSource::Query(query) => {
                 self.query_to_plan(query, &mut PlannerContext::new())?
@@ -870,7 +870,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let schema = DFSchema::try_from(schema)?;
         let scan =
             LogicalPlanBuilder::scan(object_name_to_string(&table_name), provider, None)?
-                .build()?;
+                .build_owned()?;
         let mut planner_context = PlannerContext::new();
 
         let source = match predicate_expr {
@@ -997,13 +997,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             let expr = expr.alias(col_name);
             exprs.push(expr);
         }
-        let source = project(source, exprs)?;
+        let source = project(Arc::new(source), exprs)?;
 
         let plan = LogicalPlan::Dml(DmlStatement {
             table_name,
             table_schema,
             op: WriteOp::Update,
-            input: Arc::new(source),
+            input: source,
         });
         Ok(plan)
     }
@@ -1105,7 +1105,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 Ok(expr)
             })
             .collect::<Result<Vec<datafusion_expr::Expr>>>()?;
-        let source = project(source, exprs)?;
+        let source = project(Arc::new(source), exprs)?;
 
         let op = if overwrite {
             WriteOp::InsertOverwrite
@@ -1117,7 +1117,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             table_name,
             table_schema: Arc::new(table_schema),
             op,
-            input: Arc::new(source),
+            input: source,
         });
         Ok(plan)
     }

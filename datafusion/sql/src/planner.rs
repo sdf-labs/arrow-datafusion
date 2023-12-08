@@ -232,11 +232,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         plan: LogicalPlan,
         alias: TableAlias,
     ) -> Result<LogicalPlan> {
-        let plan = self.apply_expr_alias(plan, alias.columns)?;
+        let plan = Arc::new(self.apply_expr_alias(plan, alias.columns)?);
 
         LogicalPlanBuilder::from(plan)
             .alias(self.normalizer.normalize(alias.name))?
-            .build()
+            .build_owned()
     }
 
     pub(crate) fn apply_expr_alias(
@@ -254,11 +254,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             )
         } else {
             let fields = plan.schema().fields().clone();
-            LogicalPlanBuilder::from(plan)
+            LogicalPlanBuilder::from(Arc::new(plan))
                 .project(fields.iter().zip(idents.into_iter()).map(|(field, ident)| {
                     col(field.name()).alias(self.normalizer.normalize(ident))
                 }))?
-                .build()
+                .build_owned()
         }
     }
 

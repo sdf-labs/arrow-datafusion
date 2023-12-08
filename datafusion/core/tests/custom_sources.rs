@@ -213,7 +213,7 @@ async fn custom_source_dataframe() -> Result<()> {
 
     let table = ctx.read_table(Arc::new(CustomTableProvider))?;
     let (state, plan) = table.into_parts();
-    let logical_plan = LogicalPlanBuilder::from(plan)
+    let logical_plan = LogicalPlanBuilder::from(Arc::new(plan))
         .project(vec![col("c2")])?
         .build()?;
 

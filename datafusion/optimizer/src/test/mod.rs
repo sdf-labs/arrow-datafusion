@@ -35,13 +35,13 @@ pub fn test_table_scan_fields() -> Vec<Field> {
 }
 
 /// some tests share a common table with different names
-pub fn test_table_scan_with_name(name: &str) -> Result<LogicalPlan> {
+pub fn test_table_scan_with_name(name: &str) -> Result<Arc<LogicalPlan>> {
     let schema = Schema::new(test_table_scan_fields());
     table_scan(Some(name), &schema, None)?.build()
 }
 
 /// some tests share a common table
-pub fn test_table_scan() -> Result<LogicalPlan> {
+pub fn test_table_scan() -> Result<Arc<LogicalPlan>> {
     test_table_scan_with_name("test")
 }
 
@@ -66,14 +66,12 @@ pub fn assert_fields_eq(plan: &LogicalPlan, expected: Vec<&str>) {
 
 pub fn test_subquery_with_name(name: &str) -> Result<Arc<LogicalPlan>> {
     let table_scan = test_table_scan_with_name(name)?;
-    Ok(Arc::new(
-        LogicalPlanBuilder::from(table_scan)
-            .project(vec![col("c")])?
-            .build()?,
-    ))
+    LogicalPlanBuilder::from(table_scan)
+        .project(vec![col("c")])?
+        .build()
 }
 
-pub fn scan_tpch_table(table: &str) -> LogicalPlan {
+pub fn scan_tpch_table(table: &str) -> Arc<LogicalPlan> {
     let schema = Arc::new(get_tpch_table_schema(table));
     table_scan(Some(table), &schema, None)
         .unwrap()

@@ -201,9 +201,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         };
 
         let plan = if let Some(having_expr_post_aggr) = having_expr_post_aggr {
-            LogicalPlanBuilder::from(plan)
+            LogicalPlanBuilder::from(Arc::new(plan))
                 .filter(having_expr_post_aggr)?
-                .build()?
+                .build_owned()?
         } else {
             plan
         };
@@ -226,7 +226,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         };
 
         // final projection
-        let plan = project(plan, select_exprs_post_aggr)?;
+        let plan = project(Arc::new(plan), select_exprs_post_aggr)?;
 
         // process distinct clause
         let distinct = select
@@ -264,7 +264,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             plan
         };
 
-        Ok(plan)
+        Ok(Arc::into_inner(plan).unwrap())
     }
 
     fn plan_selection(
@@ -307,7 +307,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
         match from.len() {
-            0 => Ok(LogicalPlanBuilder::empty(true).build()?),
+            0 => Ok(LogicalPlanBuilder::empty(true).build_owned()?),
             1 => {
                 let from = from.remove(0);
                 self.plan_table_with_joins(from, planner_context)
@@ -315,14 +315,17 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             _ => {
                 let mut plans = from
                     .into_iter()
-                    .map(|t| self.plan_table_with_joins(t, planner_context));
+                    .map(|t| self.plan_table_with_joins(t, planner_context))
+                    .collect::<Result<Vec<_>>>()?
+                    .into_iter()
+                    .map(Arc::new);
 
-                let mut left = LogicalPlanBuilder::from(plans.next().unwrap()?);
+                let mut left = LogicalPlanBuilder::from(plans.next().unwrap());
 
                 for right in plans {
-                    left = left.cross_join(right?)?;
+                    left = left.cross_join(right)?;
                 }
-                Ok(left.build()?)
+                Ok(left.build_owned()?)
             }
         }
     }
@@ -482,7 +485,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     /// Wrap a plan in a projection
     fn project(&self, input: LogicalPlan, expr: Vec<Expr>) -> Result<LogicalPlan> {
         self.validate_schema_satisfies_exprs(input.schema(), &expr)?;
-        LogicalPlanBuilder::from(input).project(expr)?.build()
+        LogicalPlanBuilder::from(Arc::new(input))
+            .project(expr)?
+            .build_owned()
     }
 
     /// Create an aggregate plan.
@@ -521,9 +526,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             get_updated_group_by_exprs(&group_by_exprs, select_exprs, input.schema())?;
 
         // create the aggregate plan
-        let plan = LogicalPlanBuilder::from(input.clone())
+        let plan = LogicalPlanBuilder::from(Arc::new(input.clone()))
             .aggregate(group_by_exprs.clone(), aggr_exprs.clone())?
-            .build()?;
+            .build_owned()?;
 
         // in this next section of code we are re-writing the projection to refer to columns
         // output by the aggregate plan. For example, if the projection contains the expression

@@ -248,11 +248,11 @@ mod tests {
     }
 
     fn build_plan(
-        left_table: LogicalPlan,
-        right_table: LogicalPlan,
+        left_table: Arc<LogicalPlan>,
+        right_table: Arc<LogicalPlan>,
         left_key: &str,
         right_key: &str,
-    ) -> Result<LogicalPlan> {
+    ) -> Result<Arc<LogicalPlan>> {
         LogicalPlanBuilder::from(left_table)
             .join(
                 right_table,
@@ -266,7 +266,7 @@ mod tests {
             .build()
     }
 
-    fn test_tables() -> Result<(LogicalPlan, LogicalPlan)> {
+    fn test_tables() -> Result<(Arc<LogicalPlan>, Arc<LogicalPlan>)> {
         let schema = Schema::new(vec![
             Field::new("id", DataType::UInt32, false),
             Field::new("optional_id", DataType::UInt32, true),

@@ -30,6 +30,7 @@ use datafusion_common::{
 use sqlparser::ast::{ExceptSelectItem, ExcludeSelectItem, WildcardAdditionalOptions};
 use std::cmp::Ordering;
 use std::collections::HashSet;
+use std::sync::Arc;
 
 ///  The value to which `COUNT(*)` is expanded to in
 ///  `COUNT(<constant>)` expressions
@@ -718,7 +719,7 @@ where
 pub fn from_plan(
     plan: &LogicalPlan,
     expr: &[Expr],
-    inputs: &[LogicalPlan],
+    inputs: &[Arc<LogicalPlan>],
 ) -> Result<LogicalPlan> {
     plan.with_new_exprs(expr.to_vec(), inputs)
 }

@@ -181,7 +181,7 @@ impl ContextWithParquet {
         .unwrap()
         .filter(expr)
         .unwrap()
-        .build()
+        .build_owned()
         .unwrap();
         self.run_test(logical_plan, sql).await
     }

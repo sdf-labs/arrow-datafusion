@@ -90,15 +90,16 @@ impl CommonSubexprEliminate {
         input: &LogicalPlan,
         expr_set: &ExprSet,
         config: &dyn OptimizerConfig,
-    ) -> Result<(Vec<Vec<Expr>>, LogicalPlan)> {
+    ) -> Result<(Vec<Vec<Expr>>, Arc<LogicalPlan>)> {
         let mut affected_id = BTreeSet::<Identifier>::new();
 
         let rewrite_exprs =
             self.rewrite_exprs_list(exprs_list, arrays_list, expr_set, &mut affected_id)?;
 
-        let mut new_input = self
-            .try_optimize(input, config)?
-            .unwrap_or_else(|| input.clone());
+        let mut new_input = Arc::new(
+            self.try_optimize(input, config)?
+                .unwrap_or_else(|| input.clone()),
+        );
         if !affected_id.is_empty() {
             new_input = build_common_expr_project_plan(new_input, affected_id, expr_set)?;
         }
@@ -126,7 +127,7 @@ impl CommonSubexprEliminate {
 
         Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
             pop_expr(&mut new_expr)?,
-            Arc::new(new_input),
+            new_input,
             schema.clone(),
         )?))
     }
@@ -157,10 +158,7 @@ impl CommonSubexprEliminate {
         )?;
 
         if let Some(predicate) = pop_expr(&mut new_expr)?.pop() {
-            Ok(LogicalPlan::Filter(Filter::try_new(
-                predicate,
-                Arc::new(new_input),
-            )?))
+            Ok(LogicalPlan::Filter(Filter::try_new(predicate, new_input)?))
         } else {
             internal_err!("Failed to pop predicate expr")
         }
@@ -186,7 +184,7 @@ impl CommonSubexprEliminate {
             self.rewrite_expr(&[window_expr], &[&arrays], input, &expr_set, config)?;
 
         Ok(LogicalPlan::Window(Window {
-            input: Arc::new(new_input),
+            input: new_input,
             window_expr: pop_expr(&mut new_expr)?,
             schema: schema.clone(),
         }))
@@ -248,7 +246,7 @@ impl CommonSubexprEliminate {
 
         if affected_id.is_empty() {
             Ok(LogicalPlan::Aggregate(Aggregate::try_new_with_schema(
-                Arc::new(new_input),
+                new_input,
                 new_group_expr,
                 new_aggr_expr,
                 schema.clone(),
@@ -292,7 +290,7 @@ impl CommonSubexprEliminate {
             }
 
             let agg = LogicalPlan::Aggregate(Aggregate::try_new(
-                Arc::new(new_input),
+                new_input,
                 new_group_expr,
                 agg_exprs,
             )?);
@@ -320,7 +318,7 @@ impl CommonSubexprEliminate {
 
         Ok(LogicalPlan::Sort(Sort {
             expr: pop_expr(&mut new_expr)?,
-            input: Arc::new(new_input),
+            input: new_input,
             fetch: *fetch,
         }))
     }
@@ -433,10 +431,10 @@ fn to_arrays(
 
 /// Build the "intermediate" projection plan that evaluates the extracted common expressions.
 fn build_common_expr_project_plan(
-    input: LogicalPlan,
+    input: Arc<LogicalPlan>,
     affected_id: BTreeSet<Identifier>,
     expr_set: &ExprSet,
-) -> Result<LogicalPlan> {
+) -> Result<Arc<LogicalPlan>> {
     let mut project_exprs = vec![];
     let mut fields_set = BTreeSet::new();
 
@@ -460,10 +458,10 @@ fn build_common_expr_project_plan(
         }
     }
 
-    Ok(LogicalPlan::Projection(Projection::try_new(
+    Ok(Arc::new(LogicalPlan::Projection(Projection::try_new(
         project_exprs,
-        Arc::new(input),
-    )?))
+        input,
+    )?)))
 }
 
 /// Build the projection plan to eliminate unexpected columns produced by

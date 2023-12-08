@@ -455,7 +455,7 @@ fn push_down_all_join(
     if !join_conditions.is_empty() {
         new_exprs.push(join_conditions.into_iter().reduce(Expr::and).unwrap());
     }
-    let plan = join_plan.with_new_exprs(new_exprs, &[left, right])?;
+    let plan = join_plan.with_new_exprs(new_exprs, &[Arc::new(left), Arc::new(right)])?;
 
     if keep_predicates.is_empty() {
         Ok(plan)
@@ -623,8 +623,8 @@ impl OptimizerRule for PushDownFilter {
             | LogicalPlan::Sort(_) => {
                 // commutable
                 let new_filter =
-                    plan.with_new_inputs(&[child_plan.inputs()[0].clone()])?;
-                child_plan.with_new_inputs(&[new_filter])?
+                    plan.with_new_inputs(&[Arc::new(child_plan.inputs()[0].clone())])?;
+                child_plan.with_new_inputs(&[Arc::new(new_filter)])?
             }
             LogicalPlan::SubqueryAlias(subquery_alias) => {
                 let mut replace_map = HashMap::new();
@@ -647,7 +647,7 @@ impl OptimizerRule for PushDownFilter {
                     new_predicate,
                     subquery_alias.input.clone(),
                 )?);
-                child_plan.with_new_inputs(&[new_filter])?
+                child_plan.with_new_inputs(&[Arc::new(new_filter)])?
             }
             LogicalPlan::Projection(projection) => {
                 // A projection is filter-commutable, but re-writes all predicate expressions
@@ -675,7 +675,7 @@ impl OptimizerRule for PushDownFilter {
                     projection.input.clone(),
                 )?);
 
-                child_plan.with_new_inputs(&[new_filter])?
+                child_plan.with_new_inputs(&[Arc::new(new_filter)])?
             }
             LogicalPlan::Union(union) => {
                 let mut inputs = Vec::with_capacity(union.inputs.len());
@@ -736,11 +736,11 @@ impl OptimizerRule for PushDownFilter {
                 let child = match conjunction(replaced_push_predicates) {
                     Some(predicate) => LogicalPlan::Filter(Filter::try_new(
                         predicate,
-                        Arc::new((*agg.input).clone()),
+                        agg.input.clone(),
                     )?),
                     None => (*agg.input).clone(),
                 };
-                let new_agg = filter.input.with_new_inputs(&vec![child])?;
+                let new_agg = filter.input.with_new_inputs(&vec![Arc::new(child)])?;
                 match conjunction(keep_predicates) {
                     Some(predicate) => LogicalPlan::Filter(Filter::try_new(
                         predicate,
@@ -830,13 +830,19 @@ impl OptimizerRule for PushDownFilter {
                         .inputs()
                         .into_iter()
                         .map(|child| {
-                            Ok(LogicalPlan::Filter(Filter::try_new(
+                            Ok(Arc::new(LogicalPlan::Filter(Filter::try_new(
                                 predicate.clone(),
                                 Arc::new(child.clone()),
-                            )?))
+                            )?)))
                         })
                         .collect::<Result<Vec<_>>>()?,
-                    None => extension_plan.node.inputs().into_iter().cloned().collect(),
+                    None => extension_plan
+                        .node
+                        .inputs()
+                        .into_iter()
+                        .cloned()
+                        .map(Arc::new)
+                        .collect(),
                 };
                 // extension with new inputs.
                 let new_extension = child_plan.with_new_inputs(&new_children)?;
@@ -1138,7 +1144,7 @@ mod tests {
 
     #[derive(Debug, PartialEq, Eq, Hash)]
     struct NoopPlan {
-        input: Vec<LogicalPlan>,
+        input: Vec<Arc<LogicalPlan>>,
         schema: DFSchemaRef,
     }
 
@@ -1148,7 +1154,7 @@ mod tests {
         }
 
         fn inputs(&self) -> Vec<&LogicalPlan> {
-            self.input.iter().collect()
+            self.input.iter().map(|p| p.as_ref()).collect()
         }
 
         fn schema(&self) -> &DFSchemaRef {
@@ -1172,7 +1178,7 @@ mod tests {
 
         fn from_template(&self, _exprs: &[Expr], inputs: &[LogicalPlan]) -> Self {
             Self {
-                input: inputs.to_vec(),
+                input: inputs.iter().map(|p| Arc::new(p.clone())).collect(),
                 schema: self.schema.clone(),
             }
         }
@@ -1182,12 +1188,12 @@ mod tests {
     fn user_defined_plan() -> Result<()> {
         let table_scan = test_table_scan()?;
 
-        let custom_plan = LogicalPlan::Extension(Extension {
+        let custom_plan = Arc::new(LogicalPlan::Extension(Extension {
             node: Arc::new(NoopPlan {
                 input: vec![table_scan.clone()],
                 schema: table_scan.schema().clone(),
             }),
-        });
+        }));
         let plan = LogicalPlanBuilder::from(custom_plan)
             .filter(col("a").eq(lit(1i64)))?
             .build()?;
@@ -1198,12 +1204,12 @@ mod tests {
             \n  TableScan: test, full_filters=[test.a = Int64(1)]";
         assert_optimized_plan_eq(&plan, expected)?;
 
-        let custom_plan = LogicalPlan::Extension(Extension {
+        let custom_plan = Arc::new(LogicalPlan::Extension(Extension {
             node: Arc::new(NoopPlan {
                 input: vec![table_scan.clone()],
                 schema: table_scan.schema().clone(),
             }),
-        });
+        }));
         let plan = LogicalPlanBuilder::from(custom_plan)
             .filter(col("a").eq(lit(1i64)).and(col("c").eq(lit(2i64))))?
             .build()?;
@@ -1215,12 +1221,12 @@ mod tests {
             \n    TableScan: test, full_filters=[test.a = Int64(1)]";
         assert_optimized_plan_eq(&plan, expected)?;
 
-        let custom_plan = LogicalPlan::Extension(Extension {
+        let custom_plan = Arc::new(LogicalPlan::Extension(Extension {
             node: Arc::new(NoopPlan {
                 input: vec![table_scan.clone(), table_scan.clone()],
                 schema: table_scan.schema().clone(),
             }),
-        });
+        }));
         let plan = LogicalPlanBuilder::from(custom_plan)
             .filter(col("a").eq(lit(1i64)))?
             .build()?;
@@ -1232,12 +1238,12 @@ mod tests {
             \n  TableScan: test, full_filters=[test.a = Int64(1)]";
         assert_optimized_plan_eq(&plan, expected)?;
 
-        let custom_plan = LogicalPlan::Extension(Extension {
+        let custom_plan = Arc::new(LogicalPlan::Extension(Extension {
             node: Arc::new(NoopPlan {
                 input: vec![table_scan.clone(), table_scan.clone()],
                 schema: table_scan.schema().clone(),
             }),
-        });
+        }));
         let plan = LogicalPlanBuilder::from(custom_plan)
             .filter(col("a").eq(lit(1i64)).and(col("c").eq(lit(2i64))))?
             .build()?;
@@ -1506,7 +1512,7 @@ mod tests {
         let table_scan = test_table_scan()?;
         let plan = LogicalPlanBuilder::from(table_scan)
             .filter(col("a").lt_eq(lit(1i64)))?
-            .build()?;
+            .build_owned()?;
 
         let plan = user_defined::new(plan);
 
@@ -2117,7 +2123,7 @@ mod tests {
 
     fn table_scan_with_pushdown_provider(
         filter_support: TableProviderFilterPushDown,
-    ) -> Result<LogicalPlan> {
+    ) -> Result<Arc<LogicalPlan>> {
         let test_provider = PushDownProvider { filter_support };
 
         let table_scan = LogicalPlan::TableScan(TableScan {
@@ -2131,7 +2137,7 @@ mod tests {
             fetch: None,
         });
 
-        LogicalPlanBuilder::from(table_scan)
+        LogicalPlanBuilder::from(Arc::new(table_scan))
             .filter(col("a").eq(lit(1i64)))?
             .build()
     }
@@ -2203,7 +2209,7 @@ mod tests {
             fetch: None,
         });
 
-        let plan = LogicalPlanBuilder::from(table_scan)
+        let plan = LogicalPlanBuilder::from(Arc::new(table_scan))
             .filter(and(col("a").eq(lit(10i64)), col("b").gt(lit(11i64))))?
             .project(vec![col("a"), col("b")])?
             .build()?;
@@ -2232,7 +2238,7 @@ mod tests {
             fetch: None,
         });
 
-        let plan = LogicalPlanBuilder::from(table_scan)
+        let plan = LogicalPlanBuilder::from(Arc::new(table_scan))
             .filter(and(col("a").eq(lit(10i64)), col("b").gt(lit(11i64))))?
             .project(vec![col("a"), col("b")])?
             .build()?;
@@ -2438,11 +2444,9 @@ Projection: a, b
         // but we rename it as 'b', and use col 'b' in subquery filter
         let table_scan = test_table_scan()?;
         let table_scan_sq = test_table_scan_with_name("sq")?;
-        let subplan = Arc::new(
-            LogicalPlanBuilder::from(table_scan_sq)
-                .project(vec![col("c")])?
-                .build()?,
-        );
+        let subplan = LogicalPlanBuilder::from(table_scan_sq)
+            .project(vec![col("c")])?
+            .build()?;
         let plan = LogicalPlanBuilder::from(table_scan)
             .project(vec![col("a").alias("b"), col("c")])?
             .filter(in_subquery(col("b"), subplan))?

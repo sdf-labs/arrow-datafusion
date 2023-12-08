@@ -109,7 +109,7 @@ impl TableProvider for ViewTable {
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let filter = filters.iter().cloned().reduce(|acc, new| acc.and(new));
-        let plan = self.logical_plan().clone();
+        let plan = Arc::new(self.logical_plan().clone());
         let mut plan = LogicalPlanBuilder::from(plan);
 
         if let Some(filter) = filter {
@@ -141,7 +141,7 @@ impl TableProvider for ViewTable {
             plan = plan.limit(0, Some(limit))?;
         }
 
-        state.create_physical_plan(&plan.build()?).await
+        state.create_physical_plan(&plan.build_owned()?).await
     }
 }
 

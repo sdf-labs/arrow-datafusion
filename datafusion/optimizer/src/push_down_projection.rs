@@ -48,7 +48,7 @@ macro_rules! generate_plan {
         if $projection_is_empty {
             $new_plan
         } else {
-            $plan.with_new_inputs(&[$new_plan])?
+            $plan.with_new_inputs(&[Arc::new($new_plan)])?
         }
     };
 }
@@ -79,7 +79,7 @@ impl OptimizerRule for PushDownProjection {
                 let optimized_child = self
                     .try_optimize(&projection, _config)?
                     .unwrap_or(projection);
-                return Ok(Some(plan.with_new_inputs(&[optimized_child])?));
+                return Ok(Some(plan.with_new_inputs(&[Arc::new(optimized_child)])?));
             }
             LogicalPlan::TableScan(scan) if scan.projection.is_none() => {
                 return Ok(Some(push_down_scan(&HashSet::new(), scan, false)?));
@@ -157,7 +157,7 @@ impl OptimizerRule for PushDownProjection {
                     }
                     let new_scan = push_down_scan(&used_columns, scan, true)?;
 
-                    plan.with_new_inputs(&[new_scan])?
+                    plan.with_new_inputs(&[Arc::new(new_scan)])?
                 }
             }
             LogicalPlan::Values(values) if projection_is_empty => {
@@ -231,7 +231,8 @@ impl OptimizerRule for PushDownProjection {
                     new_expr,
                     subquery_alias.input.clone(),
                 )?);
-                let new_alias = child_plan.with_new_inputs(&[new_projection])?;
+                let new_alias =
+                    child_plan.with_new_inputs(&[Arc::new(new_projection)])?;
 
                 generate_plan!(projection_is_empty, plan, new_alias)
             }
@@ -286,9 +287,13 @@ impl OptimizerRule for PushDownProjection {
                     // none columns in window expr are needed, remove the window expr
                     let input = window.input.clone();
                     let new_window = restrict_outputs(input.clone(), &required_columns)?
-                        .unwrap_or((*input).clone());
+                        .unwrap_or(input.clone());
 
-                    generate_plan!(projection_is_empty, plan, new_window)
+                    generate_plan!(
+                        projection_is_empty,
+                        plan,
+                        LogicalPlanBuilder::from(new_window).build_owned()?
+                    )
                 } else {
                     let mut referenced_inputs = HashSet::new();
                     exprlist_to_columns(&new_window_expr, &mut referenced_inputs)?;
@@ -304,10 +309,10 @@ impl OptimizerRule for PushDownProjection {
 
                     let input = window.input.clone();
                     let new_input = restrict_outputs(input.clone(), &referenced_inputs)?
-                        .unwrap_or((*input).clone());
+                        .unwrap_or(input.clone());
                     let new_window = LogicalPlanBuilder::from(new_input)
                         .window(new_window_expr)?
-                        .build()?;
+                        .build_owned()?;
 
                     generate_plan!(projection_is_empty, plan, new_window)
                 }
@@ -315,9 +320,8 @@ impl OptimizerRule for PushDownProjection {
             LogicalPlan::Filter(filter) => {
                 if can_eliminate(projection, child_plan.schema()) {
                     // when projection schema == filter schema, we can commute directly.
-                    let new_proj =
-                        plan.with_new_inputs(&[filter.input.as_ref().clone()])?;
-                    child_plan.with_new_inputs(&[new_proj])?
+                    let new_proj = plan.with_new_inputs(&[filter.input.clone()])?;
+                    child_plan.with_new_inputs(&[Arc::new(new_proj)])?
                 } else {
                     let mut required_columns = HashSet::new();
                     exprlist_to_columns(&projection.expr, &mut required_columns)?;
@@ -331,7 +335,8 @@ impl OptimizerRule for PushDownProjection {
                         new_expr,
                         filter.input.clone(),
                     )?);
-                    let new_filter = child_plan.with_new_inputs(&[new_projection])?;
+                    let new_filter =
+                        child_plan.with_new_inputs(&[Arc::new(new_projection)])?;
 
                     generate_plan!(projection_is_empty, plan, new_filter)
                 }
@@ -339,8 +344,8 @@ impl OptimizerRule for PushDownProjection {
             LogicalPlan::Sort(sort) => {
                 if can_eliminate(projection, child_plan.schema()) {
                     // can commute
-                    let new_proj = plan.with_new_inputs(&[(*sort.input).clone()])?;
-                    child_plan.with_new_inputs(&[new_proj])?
+                    let new_proj = plan.with_new_inputs(&[sort.input.clone()])?;
+                    child_plan.with_new_inputs(&[Arc::new(new_proj)])?
                 } else {
                     let mut required_columns = HashSet::new();
                     exprlist_to_columns(&projection.expr, &mut required_columns)?;
@@ -351,15 +356,16 @@ impl OptimizerRule for PushDownProjection {
                         new_expr,
                         sort.input.clone(),
                     )?);
-                    let new_sort = child_plan.with_new_inputs(&[new_projection])?;
+                    let new_sort =
+                        child_plan.with_new_inputs(&[Arc::new(new_projection)])?;
 
                     generate_plan!(projection_is_empty, plan, new_sort)
                 }
             }
             LogicalPlan::Limit(limit) => {
                 // can commute
-                let new_proj = plan.with_new_inputs(&[limit.input.as_ref().clone()])?;
-                child_plan.with_new_inputs(&[new_proj])?
+                let new_proj = plan.with_new_inputs(&[limit.input.clone()])?;
+                child_plan.with_new_inputs(&[Arc::new(new_proj)])?
             }
             _ => return Ok(None),
         };
@@ -449,7 +455,7 @@ fn generate_projection(
     used_columns: &HashSet<Column>,
     schema: &DFSchemaRef,
     input: Arc<LogicalPlan>,
-) -> Result<LogicalPlan> {
+) -> Result<Arc<LogicalPlan>> {
     let expr = schema
         .fields()
         .iter()
@@ -463,7 +469,9 @@ fn generate_projection(
         })
         .collect::<Vec<_>>();
 
-    Ok(LogicalPlan::Projection(Projection::try_new(expr, input)?))
+    Ok(Arc::new(LogicalPlan::Projection(Projection::try_new(
+        expr, input,
+    )?)))
 }
 
 fn push_down_scan(
@@ -543,7 +551,7 @@ fn push_down_scan(
 fn restrict_outputs(
     plan: Arc<LogicalPlan>,
     permitted_outputs: &HashSet<Column>,
-) -> Result<Option<LogicalPlan>> {
+) -> Result<Option<Arc<LogicalPlan>>> {
     let schema = plan.schema();
     if permitted_outputs.len() == schema.fields().len() {
         return Ok(None);
@@ -876,8 +884,7 @@ mod tests {
         // that the Column references are unqualified (e.g. their
         // relation is `None`). PlanBuilder resolves the expressions
         let expr = vec![col("a"), col("b")];
-        let plan =
-            LogicalPlan::Projection(Projection::try_new(expr, Arc::new(table_scan))?);
+        let plan = LogicalPlan::Projection(Projection::try_new(expr, table_scan)?);
 
         assert_fields_eq(&plan, vec!["a", "b"]);
 

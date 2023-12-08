@@ -83,7 +83,10 @@ impl SimplifyExpressions {
             .inputs()
             .iter()
             .map(|input| Self::optimize_internal(input, execution_props))
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .map(Arc::new)
+            .collect::<Vec<_>>();
 
         let expr = plan
             .expressions()
@@ -152,7 +155,7 @@ mod tests {
         };
     }
 
-    fn test_table_scan() -> LogicalPlan {
+    fn test_table_scan() -> Arc<LogicalPlan> {
         let schema = Schema::new(vec![
             Field::new("a", DataType::Boolean, false),
             Field::new("b", DataType::Boolean, false),

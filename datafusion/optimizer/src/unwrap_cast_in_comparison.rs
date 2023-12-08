@@ -109,7 +109,8 @@ impl OptimizerRule for UnwrapCastInComparison {
             .map(|expr| rewrite_preserving_name(expr, &mut expr_rewriter))
             .collect::<Result<Vec<_>>>()?;
 
-        let inputs: Vec<LogicalPlan> = plan.inputs().into_iter().cloned().collect();
+        let inputs: Vec<Arc<LogicalPlan>> =
+            plan.inputs().into_iter().cloned().map(Arc::new).collect();
         Ok(Some(plan.with_new_exprs(new_exprs, inputs.as_slice())?))
     }
 

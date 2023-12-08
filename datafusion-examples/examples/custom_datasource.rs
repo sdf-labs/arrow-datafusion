@@ -68,7 +68,7 @@ async fn search_accounts(
         None,
         vec![],
     )?
-    .build()?;
+    .build_owned()?;
 
     let mut dataframe = DataFrame::new(ctx.state(), logical_plan)
         .select_columns(&["id", "bank_account"])?;

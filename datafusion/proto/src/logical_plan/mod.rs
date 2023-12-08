@@ -235,7 +235,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                         .collect::<Result<Vec<_>, _>>()
                         .map_err(|e| e.into())
                 }?;
-                LogicalPlanBuilder::values(values)?.build()
+                LogicalPlanBuilder::values(values)?.build_owned()
             }
             LogicalPlanType::Projection(projection) => {
                 let input: LogicalPlan =
@@ -246,7 +246,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .map(|expr| from_proto::parse_expr(expr, ctx))
                     .collect::<Result<Vec<_>, _>>()?;
 
-                let new_proj = project(input, expr)?;
+                let new_proj = project(Arc::new(input), expr)?;
                 match projection.optional_alias.as_ref() {
                     Some(a) => match a {
                         protobuf::projection_node::OptionalAlias::Alias(alias) => {
@@ -256,7 +256,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                             )?))
                         }
                     },
-                    _ => Ok(new_proj),
+                    _ => LogicalPlanBuilder::from(new_proj).build_owned(),
                 }
             }
             LogicalPlanType::Selection(selection) => {
@@ -271,7 +271,9 @@ impl AsLogicalPlan for LogicalPlanNode {
                         DataFusionError::Internal("expression required".to_string())
                     })?;
                 // .try_into()?;
-                LogicalPlanBuilder::from(input).filter(expr)?.build()
+                LogicalPlanBuilder::from(Arc::new(input))
+                    .filter(expr)?
+                    .build_owned()
             }
             LogicalPlanType::Window(window) => {
                 let input: LogicalPlan =
@@ -281,7 +283,9 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .iter()
                     .map(|expr| from_proto::parse_expr(expr, ctx))
                     .collect::<Result<Vec<Expr>, _>>()?;
-                LogicalPlanBuilder::from(input).window(window_expr)?.build()
+                LogicalPlanBuilder::from(Arc::new(input))
+                    .window(window_expr)?
+                    .build_owned()
             }
             LogicalPlanType::Aggregate(aggregate) => {
                 let input: LogicalPlan =
@@ -296,9 +300,9 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .iter()
                     .map(|expr| from_proto::parse_expr(expr, ctx))
                     .collect::<Result<Vec<Expr>, _>>()?;
-                LogicalPlanBuilder::from(input)
+                LogicalPlanBuilder::from(Arc::new(input))
                     .aggregate(group_expr, aggr_expr)?
-                    .build()
+                    .build_owned()
             }
             LogicalPlanType::ListingScan(scan) => {
                 let schema: Schema = convert_required!(scan.schema)?;
@@ -405,7 +409,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     projection,
                     filters,
                 )?
-                .build()
+                .build_owned()
             }
             LogicalPlanType::CustomScan(scan) => {
                 let schema: Schema = convert_required!(scan.schema)?;
@@ -440,7 +444,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     projection,
                     filters,
                 )?
-                .build()
+                .build_owned()
             }
             LogicalPlanType::Sort(sort) => {
                 let input: LogicalPlan =
@@ -450,7 +454,9 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .iter()
                     .map(|expr| from_proto::parse_expr(expr, ctx))
                     .collect::<Result<Vec<Expr>, _>>()?;
-                LogicalPlanBuilder::from(input).sort(sort_expr)?.build()
+                LogicalPlanBuilder::from(Arc::new(input))
+                    .sort(sort_expr)?
+                    .build_owned()
             }
             LogicalPlanType::Repartition(repartition) => {
                 use datafusion::logical_expr::Partitioning;
@@ -479,12 +485,12 @@ impl AsLogicalPlan for LogicalPlanNode {
                     }
                 };
 
-                LogicalPlanBuilder::from(input)
+                LogicalPlanBuilder::from(Arc::new(input))
                     .repartition(partitioning_scheme)?
-                    .build()
+                    .build_owned()
             }
             LogicalPlanType::EmptyRelation(empty_relation) => {
-                LogicalPlanBuilder::empty(empty_relation.produce_one_row).build()
+                LogicalPlanBuilder::empty(empty_relation.produce_one_row).build_owned()
             }
             LogicalPlanType::CreateExternalTable(create_extern_table) => {
                 let pb_schema = (create_extern_table.schema.clone()).ok_or_else(|| {
@@ -589,16 +595,16 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlanType::Analyze(analyze) => {
                 let input: LogicalPlan =
                     into_logical_plan!(analyze.input, ctx, extension_codec)?;
-                LogicalPlanBuilder::from(input)
+                LogicalPlanBuilder::from(Arc::new(input))
                     .explain(analyze.verbose, true)?
-                    .build()
+                    .build_owned()
             }
             LogicalPlanType::Explain(explain) => {
                 let input: LogicalPlan =
                     into_logical_plan!(explain.input, ctx, extension_codec)?;
-                LogicalPlanBuilder::from(input)
+                LogicalPlanBuilder::from(Arc::new(input))
                     .explain(explain.verbose, false)?
-                    .build()
+                    .build_owned()
             }
             LogicalPlanType::SubqueryAlias(aliased_relation) => {
                 let input: LogicalPlan =
@@ -607,7 +613,9 @@ impl AsLogicalPlan for LogicalPlanNode {
                     aliased_relation.alias.as_ref(),
                     "SubqueryAlias",
                 )?;
-                LogicalPlanBuilder::from(input).alias(alias)?.build()
+                LogicalPlanBuilder::from(Arc::new(input))
+                    .alias(alias)?
+                    .build_owned()
             }
             LogicalPlanType::Limit(limit) => {
                 let input: LogicalPlan =
@@ -620,7 +628,9 @@ impl AsLogicalPlan for LogicalPlanNode {
                     Some(limit.fetch as usize)
                 };
 
-                LogicalPlanBuilder::from(input).limit(skip, fetch)?.build()
+                LogicalPlanBuilder::from(Arc::new(input))
+                    .limit(skip, fetch)?
+                    .build_owned()
             }
             LogicalPlanType::Join(join) => {
                 let left_keys: Vec<Expr> = join
@@ -655,14 +665,14 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .map(|expr| from_proto::parse_expr(expr, ctx))
                     .map_or(Ok(None), |v| v.map(Some))?;
 
-                let builder = LogicalPlanBuilder::from(into_logical_plan!(
+                let builder = LogicalPlanBuilder::from(Arc::new(into_logical_plan!(
                     join.left,
                     ctx,
                     extension_codec
-                )?);
+                )?));
                 let builder = match join_constraint.into() {
                     JoinConstraint::On => builder.join_with_expr_keys(
-                        into_logical_plan!(join.right, ctx, extension_codec)?,
+                        Arc::new(into_logical_plan!(join.right, ctx, extension_codec)?),
                         join_type.into(),
                         (left_keys, right_keys),
                         filter,
@@ -674,14 +684,18 @@ impl AsLogicalPlan for LogicalPlanNode {
                             .map(|key| key.try_into_col())
                             .collect::<Result<Vec<_>, _>>()?;
                         builder.join_using(
-                            into_logical_plan!(join.right, ctx, extension_codec)?,
+                            Arc::new(into_logical_plan!(
+                                join.right,
+                                ctx,
+                                extension_codec
+                            )?),
                             join_type.into(),
                             using_keys,
                         )?
                     }
                 };
 
-                builder.build()
+                builder.build_owned()
             }
             LogicalPlanType::Union(union) => {
                 let mut input_plans: Vec<LogicalPlan> = union
@@ -699,17 +713,19 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let first = input_plans.pop().ok_or_else(|| DataFusionError::Internal(String::from(
                     "Protobuf deserialization error, Union was require at least two input.",
                 )))?;
-                let mut builder = LogicalPlanBuilder::from(first);
+                let mut builder = LogicalPlanBuilder::from(Arc::new(first));
                 for plan in input_plans {
-                    builder = builder.union(plan)?;
+                    builder = builder.union(Arc::new(plan))?;
                 }
-                builder.build()
+                builder.build_owned()
             }
             LogicalPlanType::CrossJoin(crossjoin) => {
                 let left = into_logical_plan!(crossjoin.left, ctx, extension_codec)?;
                 let right = into_logical_plan!(crossjoin.right, ctx, extension_codec)?;
 
-                LogicalPlanBuilder::from(left).cross_join(right)?.build()
+                LogicalPlanBuilder::from(Arc::new(left))
+                    .cross_join(Arc::new(right))?
+                    .build_owned()
             }
             LogicalPlanType::Extension(LogicalExtensionNode { node, inputs }) => {
                 let input_plans: Vec<LogicalPlan> = inputs
@@ -724,7 +740,9 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlanType::Distinct(distinct) => {
                 let input: LogicalPlan =
                     into_logical_plan!(distinct.input, ctx, extension_codec)?;
-                LogicalPlanBuilder::from(input).distinct()?.build()
+                LogicalPlanBuilder::from(Arc::new(input))
+                    .distinct()?
+                    .build_owned()
             }
             LogicalPlanType::ViewScan(scan) => {
                 let schema: Schema = convert_required!(scan.schema)?;
@@ -758,7 +776,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     provider_as_source(Arc::new(provider)),
                     projection,
                 )?
-                .build()
+                .build_owned()
             }
             LogicalPlanType::Prepare(prepare) => {
                 let input: LogicalPlan =
@@ -768,9 +786,9 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .iter()
                     .map(DataType::try_from)
                     .collect::<Result<_, _>>()?;
-                LogicalPlanBuilder::from(input)
+                LogicalPlanBuilder::from(Arc::new(input))
                     .prepare(prepare.name.clone(), data_types)?
-                    .build()
+                    .build_owned()
             }
             LogicalPlanType::DropView(dropview) => Ok(datafusion_expr::LogicalPlan::Ddl(
                 datafusion_expr::DdlStatement::DropView(DropView {
