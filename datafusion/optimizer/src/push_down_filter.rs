@@ -740,7 +740,7 @@ impl OptimizerRule for PushDownFilter {
                     )?),
                     None => (*agg.input).clone(),
                 };
-                let new_agg = filter.input.with_new_inputs(&vec![Arc::new(child)])?;
+                let new_agg = filter.input.with_new_inputs(&[Arc::new(child)])?;
                 match conjunction(keep_predicates) {
                     Some(predicate) => LogicalPlan::Filter(Filter::try_new(
                         predicate,

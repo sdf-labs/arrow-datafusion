@@ -787,7 +787,7 @@ impl LogicalPlan {
             }) => {
                 let subquery = LogicalPlanBuilder::from(inputs[0].clone()).build()?;
                 Ok(LogicalPlan::Subquery(Subquery {
-                    subquery: subquery,
+                    subquery,
                     outer_ref_columns: outer_ref_columns.clone(),
                 }))
             }
@@ -840,7 +840,7 @@ impl LogicalPlan {
                 ),
             })),
             LogicalPlan::Union(Union { schema, .. }) => Ok(LogicalPlan::Union(Union {
-                inputs: inputs.iter().cloned().collect(),
+                inputs: inputs.to_vec(),
                 schema: schema.clone(),
             })),
             LogicalPlan::Distinct(Distinct { .. }) => {

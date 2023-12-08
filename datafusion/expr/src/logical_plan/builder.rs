@@ -466,7 +466,7 @@ impl LogicalPlanBuilder {
             }) if missing_cols.iter().all(|c| input.schema().has_column(c)) => {
                 let mut missing_exprs = missing_cols
                     .iter()
-                    .map(|c| normalize_col(Expr::Column(c.clone()), &input))
+                    .map(|c| normalize_col(Expr::Column(c.clone()), input))
                     .collect::<Result<Vec<_>>>()?;
 
                 // Do not let duplicate columns to be added, some of the
@@ -474,7 +474,7 @@ impl LogicalPlanBuilder {
                 // projected alias.
                 missing_exprs.retain(|e| !expr.contains(e));
                 if is_distinct {
-                    Self::ambiguous_distinct_check(&missing_exprs, missing_cols, &expr)?;
+                    Self::ambiguous_distinct_check(&missing_exprs, missing_cols, expr)?;
                 }
 
                 Ok(project(
@@ -756,7 +756,7 @@ impl LogicalPlanBuilder {
 
         Ok(Self::from(Arc::new(LogicalPlan::Join(Join {
             left: self.plan,
-            right: right,
+            right,
             on,
             filter,
             join_type,
@@ -820,7 +820,7 @@ impl LogicalPlanBuilder {
         } else {
             Ok(Self::from(Arc::new(LogicalPlan::Join(Join {
                 left: self.plan,
-                right: right,
+                right,
                 on: join_on,
                 filter: filters,
                 join_type,
@@ -1054,7 +1054,7 @@ impl LogicalPlanBuilder {
 
         Ok(Self::from(Arc::new(LogicalPlan::Join(Join {
             left: self.plan,
-            right: right,
+            right,
             on: join_key_pairs,
             filter,
             join_type,
@@ -1247,9 +1247,7 @@ pub fn union(
     let inputs = vec![left_plan, right_plan]
         .into_iter()
         .flat_map(|p| match *p {
-            LogicalPlan::Union(Union { ref inputs, .. }) => {
-                inputs.iter().cloned().collect()
-            }
+            LogicalPlan::Union(Union { ref inputs, .. }) => inputs.to_vec(),
             _ => vec![Arc::clone(&p)],
         })
         .map(|p| {

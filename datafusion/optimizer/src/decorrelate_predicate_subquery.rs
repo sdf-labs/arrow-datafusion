@@ -347,9 +347,9 @@ mod tests {
 
     fn test_subquery_with_name(name: &str) -> Result<Arc<LogicalPlan>> {
         let table_scan = test_table_scan_with_name(name)?;
-        Ok(LogicalPlanBuilder::from(table_scan)
+        LogicalPlanBuilder::from(table_scan)
             .project(vec![col("c")])?
-            .build()?)
+            .build()
     }
 
     /// Test for several IN subquery expressions

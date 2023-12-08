@@ -229,6 +229,8 @@ impl TreeNodeRewriter for ExtractScalarSubQuery {
     }
 }
 
+type ExprMap = HashMap<String, Expr>;
+
 /// Takes a query like:
 ///
 /// ```text
@@ -269,7 +271,7 @@ fn build_join(
     subquery: &Subquery,
     filter_input: &LogicalPlan,
     subquery_alias: &str,
-) -> Result<Option<(Arc<LogicalPlan>, HashMap<String, Expr>)>> {
+) -> Result<Option<(Arc<LogicalPlan>, ExprMap)>> {
     let subquery_plan = subquery.subquery.as_ref();
     let mut pull_up = PullUpCorrelatedExpr {
         join_filters: vec![],
