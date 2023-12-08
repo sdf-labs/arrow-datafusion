@@ -48,30 +48,31 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     }
                 };
 
-                let left_plan = self.set_expr_to_plan(*left, planner_context)?;
-                let right_plan = self.set_expr_to_plan(*right, planner_context)?;
+                let left_plan = Arc::new(self.set_expr_to_plan(*left, planner_context)?);
+                let right_plan =
+                    Arc::new(self.set_expr_to_plan(*right, planner_context)?);
                 match (op, all) {
-                    (SetOperator::Union, true) => {
-                        LogicalPlanBuilder::from(Arc::new(left_plan))
-                            .union(Arc::new(right_plan))?
-                            .build_owned()
-                    }
-                    (SetOperator::Union, false) => {
-                        LogicalPlanBuilder::from(Arc::new(left_plan))
-                            .union_distinct(Arc::new(right_plan))?
-                            .build_owned()
-                    }
+                    (SetOperator::Union, true) => LogicalPlanBuilder::from(left_plan)
+                        .union(right_plan)?
+                        .build_owned(),
+                    (SetOperator::Union, false) => LogicalPlanBuilder::from(left_plan)
+                        .union_distinct(right_plan)?
+                        .build_owned(),
                     (SetOperator::Intersect, true) => {
-                        LogicalPlanBuilder::intersect(left_plan, right_plan, true)
+                        LogicalPlanBuilder::intersect(left_plan, right_plan, true)?
+                            .build_owned()
                     }
                     (SetOperator::Intersect, false) => {
-                        LogicalPlanBuilder::intersect(left_plan, right_plan, false)
+                        LogicalPlanBuilder::intersect(left_plan, right_plan, false)?
+                            .build_owned()
                     }
                     (SetOperator::Except, true) => {
-                        LogicalPlanBuilder::except(left_plan, right_plan, true)
+                        LogicalPlanBuilder::except(left_plan, right_plan, true)?
+                            .build_owned()
                     }
                     (SetOperator::Except, false) => {
-                        LogicalPlanBuilder::except(left_plan, right_plan, false)
+                        LogicalPlanBuilder::except(left_plan, right_plan, false)?
+                            .build_owned()
                     }
                 }
             }

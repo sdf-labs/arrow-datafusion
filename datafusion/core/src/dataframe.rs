@@ -978,7 +978,12 @@ impl DataFrame {
         let right_plan = dataframe.plan;
         Ok(DataFrame::new(
             self.session_state,
-            LogicalPlanBuilder::intersect(left_plan, right_plan, true)?,
+            LogicalPlanBuilder::intersect(
+                Arc::new(left_plan),
+                Arc::new(right_plan),
+                true,
+            )?
+            .build_owned()?,
         ))
     }
 
@@ -1002,7 +1007,8 @@ impl DataFrame {
 
         Ok(DataFrame::new(
             self.session_state,
-            LogicalPlanBuilder::except(left_plan, right_plan, true)?,
+            LogicalPlanBuilder::except(Arc::new(left_plan), Arc::new(right_plan), true)?
+                .build_owned()?,
         ))
     }
 

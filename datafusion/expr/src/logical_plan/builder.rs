@@ -912,38 +912,36 @@ impl LogicalPlanBuilder {
 
     /// Process intersect set operator
     pub fn intersect(
-        left_plan: LogicalPlan,
-        right_plan: LogicalPlan,
+        left_plan: Arc<LogicalPlan>,
+        right_plan: Arc<LogicalPlan>,
         is_all: bool,
-    ) -> Result<LogicalPlan> {
+    ) -> Result<LogicalPlanBuilder> {
         LogicalPlanBuilder::intersect_or_except(
             left_plan,
             right_plan,
             JoinType::LeftSemi,
             is_all,
-        )?
-        .build_owned()
+        )
     }
 
     /// Process except set operator
     pub fn except(
-        left_plan: LogicalPlan,
-        right_plan: LogicalPlan,
+        left_plan: Arc<LogicalPlan>,
+        right_plan: Arc<LogicalPlan>,
         is_all: bool,
-    ) -> Result<LogicalPlan> {
+    ) -> Result<LogicalPlanBuilder> {
         LogicalPlanBuilder::intersect_or_except(
             left_plan,
             right_plan,
             JoinType::LeftAnti,
             is_all,
-        )?
-        .build_owned()
+        )
     }
 
     /// Process intersect or except
     fn intersect_or_except(
-        left_plan: LogicalPlan,
-        right_plan: LogicalPlan,
+        left_plan: Arc<LogicalPlan>,
+        right_plan: Arc<LogicalPlan>,
         join_type: JoinType,
         is_all: bool,
     ) -> Result<LogicalPlanBuilder> {
@@ -969,17 +967,12 @@ impl LogicalPlanBuilder {
             })
             .unzip();
         if is_all {
-            LogicalPlanBuilder::from(Arc::new(left_plan)).join_detailed(
-                Arc::new(right_plan),
-                join_type,
-                join_keys,
-                None,
-                true,
-            )
+            LogicalPlanBuilder::from(left_plan)
+                .join_detailed(right_plan, join_type, join_keys, None, true)
         } else {
-            LogicalPlanBuilder::from(Arc::new(left_plan))
+            LogicalPlanBuilder::from(left_plan)
                 .distinct()?
-                .join_detailed(Arc::new(right_plan), join_type, join_keys, None, true)
+                .join_detailed(right_plan, join_type, join_keys, None, true)
         }
     }
 
@@ -1901,12 +1894,9 @@ mod tests {
 
         let expected = "Error during planning: INTERSECT/EXCEPT query must have the same number of columns. \
          Left is 1 and right is 2.";
-        let err_msg1 = LogicalPlanBuilder::intersect(
-            plan1.build_owned()?,
-            plan2.build_owned()?,
-            true,
-        )
-        .unwrap_err();
+        let err_msg1 =
+            LogicalPlanBuilder::intersect(plan1.build()?, plan2.build()?, true)
+                .unwrap_err();
 
         assert_eq!(err_msg1.strip_backtrace(), expected);
 
