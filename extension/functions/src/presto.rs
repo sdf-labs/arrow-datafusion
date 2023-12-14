@@ -428,6 +428,50 @@ impl ScalarFunctionDef for FromIso8601DateFunction {
     }
 }
 
+#[derive(Debug)]
+pub struct UnixTimeFunction;
+
+impl ScalarFunctionDef for UnixTimeFunction {
+    fn name(&self) -> &str {
+        "to_unixtime"
+    }
+
+    fn signature(&self) -> Signature {
+        Signature::exact(
+            vec![DataType::Timestamp(TimeUnit::Nanosecond, None)],
+            Volatility::Immutable,
+        )
+    }
+
+    fn return_type(&self) -> ReturnTypeFunction {
+        Arc::new(move |_| Ok(Arc::new(DataType::Float64)))
+    }
+
+    fn execute(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
+        assert_eq!(args.len(), 1);
+        let timestamp_array = args[0]
+            .as_any()
+            .downcast_ref::<TimestampNanosecondArray>()
+            .expect("cast to TimestampNanosecondArray failed");
+
+        let mut b = Float64Builder::with_capacity(timestamp_array.len());
+
+        for i in 0..timestamp_array.len() {
+            if timestamp_array.is_null(i) {
+                b.append_null();
+                continue;
+            }
+
+            let timestamp_value = timestamp_array.value(i);
+            // Convert nanoseconds to seconds
+            let unixtime = (timestamp_value as f64) / 1_000_000_000.0;
+            b.append_value(unixtime);
+        }
+
+        Ok(Arc::new(b.finish()))
+    }
+}
+
 // Function package declaration
 pub struct FunctionPackage;
 
@@ -441,6 +485,7 @@ impl ScalarFunctionPackage for FunctionPackage {
             Box::new(CurrentTimestampPFunction),
             Box::new(ToIso8601Function),
             Box::new(FromIso8601DateFunction),
+            Box::new(UnixTimeFunction),
         ]
     }
 }
@@ -565,6 +610,27 @@ mod test {
         test_expression!("from_iso8601_date('2020-W10')", "2020-03-02");
         test_expression!("from_iso8601_date('2020-W10-1')", "2020-03-02");
         test_expression!("from_iso8601_date('2020-123')", "2020-05-02");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_to_unixtime() -> Result<()> {
+        test_expression!(
+            "to_unixtime(Date '2023-03-15')",
+            "1678838400.0" // UNIX timestamp for 2023-03-15 00:00:00 UTC
+        );
+
+        // Test case for a specific timestamp without sub-second precision
+        test_expression!(
+            "to_unixtime(timestamp '2001-04-13T02:00:00')",
+            "987127200.0" // UNIX timestamp for 2001-04-13 02:00:00 UTC
+        );
+
+        // Test case for a specific timestamp with sub-second precision
+        test_expression!(
+            "to_unixtime(timestamp '2020-06-10 15:55:23.383345')",
+            "1591804523.383345" // UNIX timestamp for 2020-06-10 15:55:23.383345 UTC
+        );
         Ok(())
     }
 }
