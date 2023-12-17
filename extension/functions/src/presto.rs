@@ -44,7 +44,7 @@ use arrow::{
     },
     datatypes::{DataType, IntervalUnit, TimeUnit},
 };
-use chrono::{Datelike, Timelike};
+use chrono::{Datelike, Timelike, NaiveDateTime};
 use datafusion::error::Result;
 use datafusion_common::DataFusionError;
 use datafusion_expr::{
@@ -472,6 +472,49 @@ impl ScalarFunctionDef for UnixTimeFunction {
     }
 }
 
+#[derive(Debug)]
+pub struct FromUnixtimeFunction;
+
+impl ScalarFunctionDef for FromUnixtimeFunction {
+    fn name(&self) -> &str {
+        "from_unixtime"
+    }
+
+    fn signature(&self) -> Signature {
+        Signature::exact(
+            vec![DataType::Int64],
+            Volatility::Immutable,
+        )
+    }
+
+    fn return_type(&self) -> ReturnTypeFunction {
+        let return_type = Arc::new(DataType::Timestamp(TimeUnit::Microsecond, None));
+        Arc::new(move |_| Ok(return_type.clone()))
+    }
+
+    fn execute(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
+        assert_eq!(args.len(), 1);
+        let unixtime_array = args[0]
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .expect("cast to Int64Array failed");
+
+        let mut builder = TimestampMicrosecondArray::builder(unixtime_array.len());
+
+        for i in 0..unixtime_array.len() {
+            if unixtime_array.is_null(i) {
+                builder.append_null();
+                continue;
+            }
+
+            let unixtime_value = unixtime_array.value(i);
+            let timestamp = NaiveDateTime::from_timestamp_opt(unixtime_value, 0);
+            builder.append_value((timestamp.unwrap().nanosecond() / 1_000).into());
+        }
+
+        Ok(Arc::new(builder.finish()))
+    }
+}
 // Function package declaration
 pub struct FunctionPackage;
 
@@ -486,6 +529,7 @@ impl ScalarFunctionPackage for FunctionPackage {
             Box::new(ToIso8601Function),
             Box::new(FromIso8601DateFunction),
             Box::new(UnixTimeFunction),
+            Box::new(FromUnixtimeFunction),
         ]
     }
 }
@@ -630,6 +674,15 @@ mod test {
         test_expression!(
             "to_unixtime(timestamp '2020-06-10 15:55:23.383345')",
             "1591804523.383345" // UNIX timestamp for 2020-06-10 15:55:23.383345 UTC
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_from_unixtime() -> Result<()> {
+        test_expression!(
+            "from_unixtime(1591804523)",
+            "2020-06-10 15:55:23.000"
         );
         Ok(())
     }
