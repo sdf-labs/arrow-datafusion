@@ -44,7 +44,7 @@ use arrow::{
     },
     datatypes::{DataType, IntervalUnit, TimeUnit},
 };
-use chrono::{Datelike, Timelike, NaiveDateTime};
+use chrono::{Datelike, Timelike};
 use datafusion::error::Result;
 use datafusion_common::DataFusionError;
 use datafusion_expr::{
@@ -481,14 +481,11 @@ impl ScalarFunctionDef for FromUnixtimeFunction {
     }
 
     fn signature(&self) -> Signature {
-        Signature::exact(
-            vec![DataType::Int64],
-            Volatility::Immutable,
-        )
+        Signature::exact(vec![DataType::Int64], Volatility::Immutable)
     }
 
     fn return_type(&self) -> ReturnTypeFunction {
-        let return_type = Arc::new(DataType::Timestamp(TimeUnit::Microsecond, None));
+        let return_type = Arc::new(DataType::Timestamp(TimeUnit::Second, None));
         Arc::new(move |_| Ok(return_type.clone()))
     }
 
@@ -499,7 +496,7 @@ impl ScalarFunctionDef for FromUnixtimeFunction {
             .downcast_ref::<Int64Array>()
             .expect("cast to Int64Array failed");
 
-        let mut builder = TimestampMicrosecondArray::builder(unixtime_array.len());
+        let mut builder = TimestampSecondArray::builder(unixtime_array.len());
 
         for i in 0..unixtime_array.len() {
             if unixtime_array.is_null(i) {
@@ -508,8 +505,11 @@ impl ScalarFunctionDef for FromUnixtimeFunction {
             }
 
             let unixtime_value = unixtime_array.value(i);
-            let timestamp = NaiveDateTime::from_timestamp_opt(unixtime_value, 0);
-            builder.append_value((timestamp.unwrap().nanosecond() / 1_000).into());
+            dbg!(unixtime_value);
+            //let timestamp = NaiveDateTime::from_timestamp_opt(unixtime_value, 0);
+            //dbg!(timestamp);
+            //builder.append_value((timestamp.unwrap().nanosecond() / 1_000).into());
+            builder.append_value(unixtime_value);
         }
 
         Ok(Arc::new(builder.finish()))
@@ -682,7 +682,7 @@ mod test {
     async fn test_from_unixtime() -> Result<()> {
         test_expression!(
             "from_unixtime(1591804523)",
-            "2020-06-10 15:55:23.000"
+            "2020-06-10T15:55:23" //"2020-06-10 15:55:23.000"
         );
         Ok(())
     }
