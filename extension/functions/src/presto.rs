@@ -481,7 +481,13 @@ impl ScalarFunctionDef for FromUnixtimeFunction {
     }
 
     fn signature(&self) -> Signature {
-        Signature::exact(vec![DataType::Int64], Volatility::Immutable)
+        Signature::one_of(
+            vec![
+                TypeSignature::Exact(vec![DataType::Int64]),
+                //TypeSignature::Exact(vec![DataType::Int64, DataType::Utf8]),
+            ],
+            Volatility::Immutable,
+        )
     }
 
     fn return_type(&self) -> ReturnTypeFunction {
