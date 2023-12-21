@@ -44,7 +44,7 @@ use arrow::{
     },
     datatypes::{DataType, TimeUnit},
 };
-use chrono::{Local, Timelike, Utc};
+use chrono::{Local, Offset, Timelike, Utc};
 use datafusion::error::Result;
 use datafusion_common::DataFusionError;
 use datafusion_expr::{
@@ -161,15 +161,9 @@ impl ScalarFunctionDef for CurrentTimezoneFunction {
     }
 
     fn execute(&self, _args: &[ArrayRef]) -> Result<ArrayRef> {
-        let local_time = Local::now();
-        let utc_time = Utc::now();
-        let offset_seconds = local_time.timestamp() - utc_time.timestamp();
-        let hours_offset = offset_seconds / 3600;
-        let minutes_offset = (offset_seconds % 3600) / 60;
-
-        let formatted_offset = format!("{:+03}:{:02}", hours_offset, minutes_offset);
-
-        let array = StringArray::from(vec![Some(formatted_offset)]);
+        let now_local = Local::now();
+        let timezone = format!("{}", now_local.offset().fix());
+        let array = StringArray::from(vec![Some(timezone)]);
         Ok(Arc::new(array) as ArrayRef)
     }
 }
@@ -294,7 +288,7 @@ mod test {
     use arrow::array::{
         Array, ArrayRef, Int64Array, TimestampMillisecondArray, TimestampNanosecondArray,
     };
-    use chrono::{Local, Utc};
+    use chrono::{DateTime, Local, Offset, Utc};
     use datafusion::error::Result;
     use datafusion::prelude::SessionContext;
     use datafusion_expr::ScalarFunctionDef;
@@ -364,7 +358,9 @@ mod test {
 
     #[tokio::test]
     async fn test_current_timezone() -> Result<()> {
-        test_expression!("current_timezone()", "+00:00");
+        let now_local: DateTime<Local> = Local::now();
+        let timezone = format!("{}", now_local.offset().fix());
+        test_expression!("current_timezone()", timezone);
         Ok(())
     }
 
