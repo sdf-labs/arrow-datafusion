@@ -819,7 +819,8 @@ impl ScalarFunctionDef for DayOfYearFunction {
                                     timestamp / 1_000_000_000,
                                     (timestamp % 1_000_000_000) as u32,
                                 );
-                                datetime.map(|dt| dt.ordinal() as i64).unwrap_or(0) // day of the year
+                                datetime.map(|dt| dt.ordinal() as i64).unwrap_or(0)
+                                // day of the year
                             })
                             .unwrap_or(0)
                     })
@@ -834,8 +835,6 @@ impl ScalarFunctionDef for DayOfYearFunction {
         Ok(result?)
     }
 }
-
-// Rest of your implementation...
 // Function package declaration
 pub struct FunctionPackage;
 
