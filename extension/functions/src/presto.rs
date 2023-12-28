@@ -750,6 +750,92 @@ impl ScalarFunctionDef for DayOfWeekFunction {
         Ok(result?)
     }
 }
+
+#[derive(Debug)]
+pub struct DayOfYearFunction;
+
+impl ScalarFunctionDef for DayOfYearFunction {
+    fn name(&self) -> &str {
+        "day_of_year"
+    }
+
+    fn signature(&self) -> Signature {
+        // Function accepts Date, Interval Day to Second, or Timestamp
+        Signature::one_of(
+            vec![
+                TypeSignature::Exact(vec![DataType::Date32]),
+                TypeSignature::Exact(vec![DataType::Interval(IntervalUnit::DayTime)]),
+                TypeSignature::Exact(vec![DataType::Timestamp(
+                    TimeUnit::Nanosecond,
+                    None,
+                )]),
+            ],
+            Volatility::Immutable,
+        )
+    }
+
+    fn return_type(&self) -> ReturnTypeFunction {
+        let return_type = Arc::new(DataType::Int64); // Returning as bigint
+        Arc::new(move |_| Ok(return_type.clone()))
+    }
+
+    fn execute(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
+        assert_eq!(args.len(), 1);
+
+        let input = &args[0];
+        let result = match input.data_type() {
+            DataType::Date32 => {
+                let date_array = input
+                    .as_any()
+                    .downcast_ref::<Date32Array>()
+                    .expect("Expected a date array");
+
+                let day_of_years: Vec<i64> = date_array
+                    .iter()
+                    .map(|date_opt| {
+                        date_opt
+                            .map(|date| {
+                                let naive_date = Date32Type::to_naive_date(date);
+                                naive_date.ordinal() as i64 // Gets the day of the year
+                            })
+                            .unwrap_or(0)
+                    })
+                    .collect();
+
+                Ok(Arc::new(Int64Array::from(day_of_years)) as ArrayRef)
+            }
+            DataType::Timestamp(TimeUnit::Nanosecond, _) => {
+                let timestamp_array = input
+                    .as_any()
+                    .downcast_ref::<TimestampNanosecondArray>()
+                    .expect("Expected a nanosecond timestamp array");
+
+                let day_of_years: Vec<i64> = timestamp_array
+                    .iter()
+                    .map(|timestamp_opt| {
+                        timestamp_opt
+                            .map(|timestamp| {
+                                let datetime = NaiveDateTime::from_timestamp_opt(
+                                    timestamp / 1_000_000_000,
+                                    (timestamp % 1_000_000_000) as u32,
+                                );
+                                datetime.map(|dt| dt.ordinal() as i64).unwrap_or(0) // day of the year
+                            })
+                            .unwrap_or(0)
+                    })
+                    .collect();
+
+                Ok(Arc::new(Int64Array::from(day_of_years)) as ArrayRef)
+            }
+            _ => Err(ArrowError::InvalidArgumentError(
+                "Invalid input type".to_string(),
+            )),
+        };
+        Ok(result?)
+    }
+}
+
+// Rest of your implementation...
 // Function package declaration
 pub struct FunctionPackage;
 
@@ -768,6 +854,7 @@ impl ScalarFunctionPackage for FunctionPackage {
             Box::new(FromUnixtimeNanosFunction),
             Box::new(DayFunction),
             Box::new(DayOfWeekFunction),
+            Box::new(DayOfYearFunction),
         ]
     }
 }
@@ -948,6 +1035,12 @@ mod test {
     async fn test_day_of_week() -> Result<()> {
         test_expression!("day_of_week(Date '2023-03-15')", "3");
         test_expression!("day_of_week(timestamp '2020-06-10 15:55:23.383345')", "3");
+        Ok(())
+    }
+    #[tokio::test]
+    async fn test_day_of_year() -> Result<()> {
+        test_expression!("day_of_year(Date '2023-03-15')", "74");
+        test_expression!("day_of_year(timestamp '2020-06-10 15:55:23.383345')", "162");
         Ok(())
     }
 }
