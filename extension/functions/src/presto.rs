@@ -44,7 +44,7 @@ use arrow::{
     },
     datatypes::{DataType, Date32Type, IntervalDayTimeType, IntervalUnit, TimeUnit},
 };
-use chrono::{Datelike, Local, Offset, Timelike, Utc, Duration, NaiveDate, TimeZone};
+use chrono::{Datelike, Duration, Local, NaiveDate, Offset, TimeZone, Timelike, Utc};
 use datafusion::error::Result;
 use datafusion_common::DataFusionError;
 use datafusion_expr::{
@@ -151,7 +151,6 @@ impl ScalarFunctionDef for HumanReadableSecondsFunction {
         Ok(Arc::new(array) as ArrayRef)
     }
 }
-
 
 #[derive(Debug)]
 pub struct CurrentTimeFunction;
@@ -935,7 +934,7 @@ mod test {
         );
         Ok(())
     }
-    
+
     #[tokio::test]
     async fn test_to_iso8601() -> Result<()> {
         //Test cases for different input types
