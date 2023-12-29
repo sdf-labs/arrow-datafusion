@@ -42,7 +42,7 @@ use arrow::{
         ArrayRef, Int64Array, StringArray, Time32MillisecondArray,
         TimestampMillisecondArray, TimestampNanosecondArray,
     },
-    datatypes::{DataType, IntervalUnit, TimeUnit},
+    datatypes::{DataType, Date32Type, IntervalDayTimeType, IntervalUnit, TimeUnit},
 };
 use chrono::{Datelike, Local, Offset, Timelike, Utc, Duration, NaiveDate, TimeZone};
 use datafusion::error::Result;
@@ -680,6 +680,112 @@ impl ScalarFunctionDef for FromUnixtimeNanosFunction {
     }
 }
 
+#[derive(Debug)]
+pub struct DayFunction;
+
+impl ScalarFunctionDef for DayFunction {
+    fn name(&self) -> &str {
+        "day"
+    }
+
+    fn signature(&self) -> Signature {
+        // Function accepts Date, Interval Day to Second, or Timestamp
+        Signature::one_of(
+            vec![
+                TypeSignature::Exact(vec![DataType::Date32]),
+                TypeSignature::Exact(vec![DataType::Interval(IntervalUnit::DayTime)]),
+                TypeSignature::Exact(vec![DataType::Timestamp(
+                    TimeUnit::Nanosecond,
+                    None,
+                )]),
+            ],
+            Volatility::Immutable,
+        )
+    }
+
+    fn return_type(&self) -> ReturnTypeFunction {
+        let return_type = Arc::new(DataType::Int64);
+        Arc::new(move |_| Ok(return_type.clone()))
+    }
+
+    fn execute(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
+        assert_eq!(args.len(), 1);
+
+        let input = &args[0];
+        let result = match input.data_type() {
+            DataType::Date32 => {
+                let date_array = input
+                    .as_any()
+                    .downcast_ref::<Date32Array>()
+                    .expect("Expected a date array");
+
+                let days: Vec<i64> = date_array
+                    .iter()
+                    .map(|date_opt| {
+                        date_opt
+                            .map(|date| {
+                                let naive_date = Date32Type::to_naive_date(date);
+
+                                naive_date.day() as i64
+                            })
+                            .unwrap_or(0)
+                    })
+                    .collect();
+
+                Ok(Arc::new(Int64Array::from(days)) as ArrayRef)
+            }
+            DataType::Interval(IntervalUnit::DayTime) => {
+                let interval_array = input
+                    .as_any()
+                    .downcast_ref::<IntervalDayTimeArray>()
+                    .expect("Expected an interval day to second array");
+
+                let days: Vec<i64> = interval_array
+                    .iter()
+                    .map(|interval_opt| {
+                        interval_opt
+                            .map(|interval| {
+                                let (days, _ms) = IntervalDayTimeType::to_parts(interval);
+                                days as i64
+                            })
+                            .unwrap_or(0)
+                    })
+                    .collect();
+
+                Ok(Arc::new(Int64Array::from(days)) as ArrayRef)
+            }
+            DataType::Timestamp(TimeUnit::Nanosecond, _) => {
+                let timestamp_array = input
+                    .as_any()
+                    .downcast_ref::<TimestampNanosecondArray>()
+                    .expect("Expected a nanosecond timestamp array");
+
+                let days: Vec<i64> = timestamp_array
+                    .iter()
+                    .map(|timestamp_opt| {
+                        timestamp_opt
+                            .map(|timestamp| {
+                                let datetime = NaiveDateTime::from_timestamp_opt(
+                                    timestamp / 1_000_000_000,
+                                    (timestamp % 1_000_000_000) as u32,
+                                );
+
+                                datetime.map(|dt| dt.date().day() as i64).unwrap_or(0)
+                            })
+                            .unwrap_or(0)
+                    })
+                    .collect();
+
+                Ok(Arc::new(Int64Array::from(days)) as ArrayRef)
+            }
+            _ => Err(ArrowError::InvalidArgumentError(
+                "Invalid input type".to_string(),
+            )),
+        };
+        Ok(result?)
+    }
+}
+
 // Function package declaration
 pub struct FunctionPackage;
 
@@ -700,6 +806,7 @@ impl ScalarFunctionPackage for FunctionPackage {
             Box::new(LocaltimeFunction),
             Box::new(LocaltimestampFunction),
             Box::new(LocaltimestampPFunction),
+            Box::new(DayFunction),
         ]
     }
 }
@@ -892,6 +999,16 @@ mod test {
             "from_unixtime_nanos(1591804523000000000)",
             "2020-06-10T15:55:23" //"2020-06-10 15:55:23.000"
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_day() -> Result<()> {
+        test_expression!("day(Date '2023-03-15')", "15");
+        //test_expression!("day(Interval '10' DAY)", "10");
+        //test_expression!("day(Interval '-20' DAY)", "-20");
+        test_expression!("day(timestamp '2001-04-13T02:00:00')", "13");
+        test_expression!("day(timestamp '2020-06-10 15:55:23.383345')", "10");
         Ok(())
     }
 }
