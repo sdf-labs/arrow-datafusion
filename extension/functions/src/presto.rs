@@ -44,7 +44,7 @@ use arrow::{
     },
     datatypes::{DataType, Date32Type, IntervalDayTimeType, IntervalUnit, TimeUnit},
 };
-use chrono::{Datelike, Duration, Local, NaiveDate, Offset, TimeZone, Timelike, Utc};
+use chrono::{Datelike, Duration, Local, NaiveDate, Offset, TimeZone, Timelike, Utc, NaiveDateTime};
 use datafusion::error::Result;
 use datafusion_common::DataFusionError;
 use datafusion_expr::{
