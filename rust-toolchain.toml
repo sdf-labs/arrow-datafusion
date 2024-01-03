@@ -14,34 +14,14 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+#
 
-[package]
-name = "datafusion-extension-functions"
-authors.workspace = true
-edition.workspace = true
-homepage.workspace = true
-license.workspace = true
-readme.workspace = true
-repository.workspace = true
-rust-version.workspace = true
-version.workspace = true
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
-[dependencies]
-datafusion = { path = "../../datafusion/core" }
-datafusion-common = { path = "../../datafusion/common" }
-datafusion-expr = { path = "../../datafusion/expr" }
-arrow = { workspace = true }
-#arrow-flight = { workspace = true }
-#arrow-schema = { workspace = true }
-tokio = "1.33.0"
-chrono = "0.4"
-chrono-tz = "0.5"
-regex = "1.5"
-
-[features]
-example = []
-ansi = []
-presto = ["ansi"]
-postgres = ["ansi"]
+[toolchain]
+channel = "1.74"
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
+    "x86_64-unknown-linux-musl",
+    "arm-unknown-linux-gnueabihf",
+    "aarch64-apple-darwin",
+]

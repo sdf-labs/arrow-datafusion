@@ -39,14 +39,13 @@ use std::{
 
 use arrow::{
     array::{
-        ArrayRef, Int64Array, StringArray, Time32MillisecondArray,
-        TimestampMillisecondArray, TimestampNanosecondArray,
+        ArrayRef, Int64Array, Time32MillisecondArray, TimestampMillisecondArray,
+        TimestampNanosecondArray,
     },
     datatypes::{DataType, Date32Type, IntervalDayTimeType, IntervalUnit, TimeUnit},
 };
-use chrono::{
-    Datelike, Duration, Local, NaiveDate, NaiveDateTime, Offset, TimeZone, Timelike, Utc,
-};
+
+use chrono::{Datelike, Duration, NaiveDate, NaiveDateTime, TimeZone, Timelike, Utc};
 use datafusion::error::Result;
 use datafusion_common::DataFusionError;
 use datafusion_expr::{
@@ -56,6 +55,7 @@ use datafusion_expr::{
 
 use arrow::array::*;
 use arrow::error::ArrowError;
+use regex::Regex;
 
 #[derive(Debug)]
 pub struct HumanReadableSecondsFunction;
@@ -172,7 +172,7 @@ impl ScalarFunctionDef for CurrentTimeFunction {
     }
 
     fn execute(&self, _args: &[ArrayRef]) -> Result<ArrayRef> {
-        let current_time = chrono::Utc::now();
+        let current_time = chrono::Utc::now().time();
         let milliseconds_since_midnight = current_time.num_seconds_from_midnight() * 1000;
         let array =
             Time32MillisecondArray::from(vec![Some(milliseconds_since_midnight as i32)]);
@@ -192,17 +192,17 @@ impl ScalarFunctionDef for CurrentTimestampFunction {
     }
 
     fn return_type(&self) -> ReturnTypeFunction {
-        Arc::new(move |_| Ok(Arc::new(DataType::Timestamp(TimeUnit::Millisecond, None))))
+        Arc::new(move |_| Ok(Arc::new(DataType::Timestamp(TimeUnit::Microsecond, None))))
     }
 
     fn execute(&self, _args: &[ArrayRef]) -> Result<ArrayRef> {
-        let now = Utc::now();
-        let milliseconds_since_epoch = now.timestamp_millis();
-        let array = TimestampMillisecondArray::from(vec![Some(milliseconds_since_epoch)]);
+        let n = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|err| DataFusionError::Execution(err.to_string()))?;
+        let array = TimestampMillisecondArray::from(vec![Some(n.as_millis() as i64)]);
         Ok(Arc::new(array) as ArrayRef)
     }
 }
-
 #[derive(Debug)]
 pub struct CurrentTimestampPFunction;
 
@@ -216,154 +216,32 @@ impl ScalarFunctionDef for CurrentTimestampPFunction {
     }
 
     fn return_type(&self) -> ReturnTypeFunction {
-        let return_type = Arc::new(DataType::Timestamp(TimeUnit::Nanosecond, None));
-        Arc::new(move |_| Ok(return_type.clone()))
-    }
-
-    fn execute(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
-        let precision = match args.get(0) {
-            Some(array) => {
-                let array = array.as_any().downcast_ref::<Int64Array>().unwrap();
-                array.value(0) as usize
-            }
-            None => 6,
-        };
-
-        if precision > 9 {
-            return Err(DataFusionError::Execution(
-                "Precision greater than nanoseconds is not supported".to_string(),
-            ));
-        }
-
-        let now = chrono::Utc::now();
-        let nanos = now.timestamp_subsec_nanos();
-        let timestamp = now.timestamp() as i64 * 1_000_000_000 + nanos as i64;
-
-        let divisor = 10_i64.pow(9 - precision as u32);
-        let adjusted_timestamp = (timestamp / divisor) * divisor;
-
-        let array = TimestampNanosecondArray::from(vec![Some(adjusted_timestamp)]);
-        Ok(Arc::new(array) as ArrayRef)
-    }
-}
-
-#[derive(Debug)]
-pub struct CurrentTimezoneFunction;
-
-impl ScalarFunctionDef for CurrentTimezoneFunction {
-    fn name(&self) -> &str {
-        "current_timezone"
-    }
-
-    fn signature(&self) -> Signature {
-        Signature::exact(vec![], Volatility::Immutable)
-    }
-
-    fn return_type(&self) -> ReturnTypeFunction {
-        Arc::new(move |_| Ok(Arc::new(DataType::Utf8)))
-    }
-
-    fn execute(&self, _args: &[ArrayRef]) -> Result<ArrayRef> {
-        let now_local = Local::now();
-        let timezone = format!("{}", now_local.offset().fix());
-        let array = StringArray::from(vec![Some(timezone)]);
-        Ok(Arc::new(array) as ArrayRef)
-    }
-}
-
-#[derive(Debug)]
-pub struct LocaltimeFunction;
-
-impl ScalarFunctionDef for LocaltimeFunction {
-    fn name(&self) -> &str {
-        "localtime"
-    }
-    fn signature(&self) -> Signature {
-        Signature::exact(vec![], Volatility::Immutable)
-    }
-
-    fn return_type(&self) -> ReturnTypeFunction {
-        let return_type = Arc::new(DataType::Time32(TimeUnit::Millisecond));
-        Arc::new(move |_| Ok(return_type.clone()))
-    }
-
-    fn execute(&self, _args: &[ArrayRef]) -> Result<ArrayRef> {
-        let local_time = chrono::Local::now().time();
-        let milliseconds_since_midnight = local_time.num_seconds_from_midnight() * 1000;
-        let array =
-            Time32MillisecondArray::from(vec![Some(milliseconds_since_midnight as i32)]);
-        Ok(Arc::new(array) as ArrayRef)
-    }
-}
-#[derive(Debug)]
-pub struct LocaltimestampFunction;
-
-impl ScalarFunctionDef for LocaltimestampFunction {
-    fn name(&self) -> &str {
-        "localtimestamp"
-    }
-
-    fn signature(&self) -> Signature {
-        Signature::exact(vec![], Volatility::Immutable)
-    }
-
-    fn return_type(&self) -> ReturnTypeFunction {
-        Arc::new(move |_| Ok(Arc::new(DataType::Timestamp(TimeUnit::Millisecond, None))))
-    }
-
-    fn execute(&self, _args: &[ArrayRef]) -> Result<ArrayRef> {
-        let n = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|err| DataFusionError::Execution(err.to_string()))?;
-        let array = TimestampMillisecondArray::from(vec![Some(n.as_millis() as i64)]);
-        Ok(Arc::new(array) as ArrayRef)
-    }
-}
-
-#[derive(Debug)]
-pub struct LocaltimestampPFunction;
-
-impl ScalarFunctionDef for LocaltimestampPFunction {
-    fn name(&self) -> &str {
-        "localtimestamp_p"
-    }
-
-    fn signature(&self) -> Signature {
-        Signature::exact(vec![DataType::Int64], Volatility::Immutable)
-    }
-
-    fn return_type(&self) -> ReturnTypeFunction {
         Arc::new(move |_| Ok(Arc::new(DataType::Timestamp(TimeUnit::Nanosecond, None))))
     }
 
     fn execute(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
-        let precision = match args.get(0) {
-            Some(array) => {
-                let array = array.as_any().downcast_ref::<Int64Array>().unwrap();
-                array.value(0) as usize
-            }
-            None => 6,
-        };
-
-        if precision > 9 {
-            return Err(DataFusionError::Execution(
-                "Precision greater than nanoseconds is not supported".to_string(),
-            ));
-        }
+        let precision = args[0]
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap()
+            .value(0) as usize;
 
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(|err| DataFusionError::Execution(err.to_string()))?;
         let nanos = now.as_nanos() as i64;
 
-        let factor = 10_i64.pow(9 - precision as u32);
-        let adjusted_timestamp = (nanos / factor) * factor;
+        let adjusted_nanos = if precision > 9 {
+            nanos
+        } else {
+            let factor = 10_i64.pow(9 - precision as u32);
+            (nanos / factor) * factor
+        };
 
-        let array = TimestampNanosecondArray::from(vec![Some(adjusted_timestamp)]);
+        let array = TimestampNanosecondArray::from(vec![Some(adjusted_nanos)]);
         Ok(Arc::new(array) as ArrayRef)
     }
 }
-
 #[derive(Debug)]
 pub struct ToMilliSecondsFunction;
 
@@ -408,7 +286,6 @@ impl ScalarFunctionDef for ToMilliSecondsFunction {
         Ok(Arc::new(array) as ArrayRef)
     }
 }
-
 #[derive(Debug)]
 pub struct ToIso8601Function;
 
@@ -787,6 +664,171 @@ impl ScalarFunctionDef for DayFunction {
     }
 }
 
+#[derive(Debug)]
+pub struct DateDiffFunction;
+
+impl ScalarFunctionDef for DateDiffFunction {
+    fn name(&self) -> &str {
+        "date_diff"
+    }
+
+    fn signature(&self) -> Signature {
+        Signature::exact(
+            vec![
+                DataType::Utf8,
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
+            ],
+            Volatility::Immutable,
+        )
+    }
+    fn return_type(&self) -> ReturnTypeFunction {
+        Arc::new(move |_| Ok(Arc::new(DataType::Int64)))
+    }
+
+    fn execute(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
+        assert_eq!(args.len(), 3);
+        let unit_array = args[0]
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("unit should be string");
+
+        let timestamp1_array = args[1]
+            .as_any()
+            .downcast_ref::<TimestampNanosecondArray>()
+            .expect("timestamp1 should be a TimestampNanosecondArray");
+
+        let timestamp2_array = args[2]
+            .as_any()
+            .downcast_ref::<TimestampNanosecondArray>()
+            .expect("timestamp2 should be a TimestampNanosecondArray");
+
+        // 计算时间差
+        let array: Vec<i64> = unit_array
+            .iter()
+            .zip(timestamp1_array.iter())
+            .zip(timestamp2_array.iter())
+            .map(|((unit_opt, timestamp1_opt), timestamp2_opt)| {
+                if let (Some(unit), Some(timestamp1), Some(timestamp2)) =
+                    (unit_opt, timestamp1_opt, timestamp2_opt)
+                {
+                    let dt1 = NaiveDateTime::from_timestamp_opt(
+                        timestamp1 / 1_000_000_000,
+                        (timestamp1 % 1_000_000_000) as u32,
+                    )
+                    .unwrap();
+                    let dt2 = NaiveDateTime::from_timestamp_opt(
+                        timestamp2 / 1_000_000_000,
+                        (timestamp2 % 1_000_000_000) as u32,
+                    )
+                    .unwrap();
+                    match unit {
+                        "millisecond" => (timestamp2 - timestamp1) / 1_000_000,
+                        "second" => (timestamp2 - timestamp1) / 1_000_000_000,
+                        "minute" => (timestamp2 - timestamp1) / 60_000_000_000,
+                        "hour" => (timestamp2 - timestamp1) / 3_600_000_000_000,
+                        "day" => (timestamp2 - timestamp1) / (24 * 3_600_000_000_000),
+                        "week" => {
+                            (timestamp2 - timestamp1) / (7 * 24 * 3_600_000_000_000)
+                        }
+                        "month" => {
+                            let years = (dt2.year() - dt1.year()) as i64;
+                            let months = dt2.month() as i64 - dt1.month() as i64;
+                            years * 12 + months
+                        }
+                        "quarter" => {
+                            let years = (dt2.year() - dt1.year()) as i64;
+                            let months = dt2.month() as i64 - dt1.month() as i64;
+                            (years * 12 + months) / 3
+                        }
+                        "year" => (dt2.year() - dt1.year()) as i64,
+                        _ => 0, // 处理未知单位
+                    }
+                } else {
+                    0 // 处理空值或错误
+                }
+            })
+            .collect();
+        Ok(Arc::new(Int64Array::from(array)) as ArrayRef)
+    }
+}
+
+#[derive(Debug)]
+pub struct ParseDurationFunction;
+
+impl ScalarFunctionDef for ParseDurationFunction {
+    fn name(&self) -> &str {
+        "parse_duration"
+    }
+
+    fn signature(&self) -> Signature {
+        Signature::exact(vec![DataType::Utf8], Volatility::Immutable)
+    }
+
+    fn return_type(&self) -> ReturnTypeFunction {
+        Arc::new(move |_| Ok(Arc::new(DataType::Duration(TimeUnit::Nanosecond))))
+    }
+
+    fn execute(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
+        assert_eq!(args.len(), 1);
+        let duration_array = args[0]
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("duration should be string");
+
+        let array: Vec<String> = duration_array
+            .iter()
+            .map(|duration_opt| {
+                if let Some(duration_str) = duration_opt {
+                    let re = Regex::new(r"(?i)(\d+(\.\d+)?)\s*([a-z]+)").unwrap();
+                    if let Some(caps) = re.captures(duration_str) {
+                        if let (Ok(value), Some(unit)) =
+                            (caps[1].parse::<f64>(), caps.get(3))
+                        {
+                            let nanos_total = match unit.as_str().to_lowercase().as_str()
+                            {
+                                "ns" => value * 1.0,
+                                "us" => value * 1_000.0,
+                                "ms" => value * 1_000_000.0,
+                                "s" => value * 1_000_000_000.0,
+                                "m" => value * 60_000_000_000.0,
+                                "h" => value * 3_600_000_000_000.0,
+                                "d" => value * 86_400_000_000_000.0,
+                                _ => 0.0, // 未知单位处理
+                            } as i64;
+
+                            let millis_total =
+                                (nanos_total as f64 / 1_000_000.0).round() as i64;
+                            let seconds_total = millis_total / 1000;
+                            let millis = millis_total % 1000;
+
+                            let days = seconds_total / 86_400;
+                            let seconds_remainder = seconds_total % 86_400;
+
+                            let hours = seconds_remainder / 3600;
+                            let minutes = (seconds_remainder % 3600) / 60;
+                            let seconds = seconds_remainder % 60;
+
+                            format!(
+                                "{} {:02}:{:02}:{:02}.{:03}",
+                                days, hours, minutes, seconds, millis
+                            )
+                        } else {
+                            "Error: Parsing value".to_string()
+                        }
+                    } else {
+                        "Error: Pattern not matched".to_string()
+                    }
+                } else {
+                    "Error: Null or wrong data".to_string()
+                }
+            })
+            .collect();
+
+        Ok(Arc::new(StringArray::from(array)) as ArrayRef)
+    }
+}
+
 // Function package declaration
 pub struct FunctionPackage;
 
@@ -803,11 +845,9 @@ impl ScalarFunctionPackage for FunctionPackage {
             Box::new(UnixTimeFunction),
             Box::new(FromUnixtimeFunction),
             Box::new(FromUnixtimeNanosFunction),
-            Box::new(CurrentTimezoneFunction),
-            Box::new(LocaltimeFunction),
-            Box::new(LocaltimestampFunction),
-            Box::new(LocaltimestampPFunction),
             Box::new(DayFunction),
+            Box::new(DateDiffFunction),
+            Box::new(ParseDurationFunction),
         ]
     }
 }
@@ -822,101 +862,19 @@ mod test {
     use arrow::array::{
         Array, ArrayRef, Int64Array, TimestampMillisecondArray, TimestampNanosecondArray,
     };
-    use chrono::{DateTime, Local, Offset, Utc};
+    use chrono::Utc;
     use datafusion::error::Result;
     use datafusion::prelude::SessionContext;
     use datafusion_expr::ScalarFunctionDef;
     use tokio;
 
     use crate::{
-        presto::{
-            CurrentTimestampFunction, CurrentTimestampPFunction, LocaltimestampFunction,
-            LocaltimestampPFunction,
-        },
+        presto::{CurrentTimestampFunction, CurrentTimestampPFunction},
         utils::{execute, test_expression},
     };
 
     use super::FunctionPackage;
 
-    fn roughly_equal_to_now(millisecond: i64) -> bool {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as i64;
-        (millisecond - now).abs() <= 1
-    }
-
-    fn test_timestamp<E: ScalarFunctionDef>(timestamp_func: E) -> Result<()> {
-        let result = timestamp_func.execute(&[]).unwrap();
-        let result_array = result
-            .as_any()
-            .downcast_ref::<TimestampMillisecondArray>()
-            .unwrap()
-            .value(0);
-        assert!(roughly_equal_to_now(result_array));
-        Ok(())
-    }
-
-    fn test_timestamp_p<E: ScalarFunctionDef>(timestamp_p_func: E) -> Result<()> {
-        let precision_array = Int64Array::from(vec![9]);
-        let args = vec![Arc::new(precision_array) as ArrayRef];
-        let result = timestamp_p_func.execute(&args).unwrap();
-        let result_array = result
-            .as_any()
-            .downcast_ref::<TimestampNanosecondArray>()
-            .unwrap()
-            .value(0);
-        assert!(roughly_equal_to_now(result_array / 1_000_000));
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_current_time() -> Result<()> {
-        let current = Utc::now();
-        let formatted = current.format("%H:%M:%S").to_string();
-        test_expression!("current_time()", formatted);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_current_timestamp() -> Result<()> {
-        test_timestamp(CurrentTimestampFunction {})?;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_current_timestamp_p() -> Result<()> {
-        test_timestamp_p(CurrentTimestampPFunction {})?;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_current_timezone() -> Result<()> {
-        let now_local: DateTime<Local> = Local::now();
-        let timezone = format!("{}", now_local.offset().fix());
-        test_expression!("current_timezone()", timezone);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_localtime() -> Result<()> {
-        let local = Local::now();
-        let formatted = local.format("%H:%M:%S").to_string();
-        test_expression!("localtime", formatted);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_localtimestamp() -> Result<()> {
-        test_timestamp(LocaltimestampFunction {})?;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_localtimestamp_p() -> Result<()> {
-        test_timestamp_p(LocaltimestampPFunction {})?;
-        Ok(())
-    }
     #[tokio::test]
     async fn test_human_readable_seconds() -> Result<()> {
         test_expression!("human_readable_seconds(604800.0)", "1 week");
@@ -934,6 +892,59 @@ mod test {
             "human_readable_seconds(56363463)",
             "93 weeks, 1 day, 8 hours, 31 minutes, 3 seconds"
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_current_time() -> Result<()> {
+        let current = Utc::now();
+        let formatted = current.format("%H:%M:%S").to_string();
+        test_expression!("current_time()", formatted);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_to_milliseconds() -> Result<()> {
+        test_expression!("to_milliseconds(interval '1' day)", "86400000");
+        test_expression!("to_milliseconds(interval '1' hour)", "3600000");
+        test_expression!("to_milliseconds(interval '10' day)", "864000000");
+        Ok(())
+    }
+
+    fn roughly_equal_to_now(millisecond: i64) -> bool {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        (millisecond - now).abs() <= 1
+    }
+
+    #[tokio::test]
+    async fn test_current_timestamp() -> Result<()> {
+        let current_timestamp_function = CurrentTimestampFunction {};
+        let result = current_timestamp_function.execute(&[]).unwrap();
+        let result_array = result
+            .as_any()
+            .downcast_ref::<TimestampMillisecondArray>()
+            .unwrap()
+            .value(0);
+        assert!(roughly_equal_to_now(result_array));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_current_timestamp_p() -> Result<()> {
+        let function = CurrentTimestampPFunction {};
+        let precision_array = Int64Array::from(vec![9]);
+        let args = vec![Arc::new(precision_array) as ArrayRef];
+        let result = function.execute(&args).unwrap();
+        let result_array = result
+            .as_any()
+            .downcast_ref::<TimestampNanosecondArray>()
+            .unwrap()
+            .value(0);
+        assert!(roughly_equal_to_now(result_array / 1_000_000));
         Ok(())
     }
 
@@ -1010,6 +1021,28 @@ mod test {
         //test_expression!("day(Interval '-20' DAY)", "-20");
         test_expression!("day(timestamp '2001-04-13T02:00:00')", "13");
         test_expression!("day(timestamp '2020-06-10 15:55:23.383345')", "10");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_date_diff() -> Result<()> {
+        test_expression!("date_diff('second', TIMESTAMP '2020-03-01 00:00:00', TIMESTAMP '2020-03-02 00:00:00')","86400");
+        test_expression!("date_diff('hour', TIMESTAMP '2020-03-01 00:00:00 UTC', TIMESTAMP '2020-03-02 00:00:00 UTC')","24");
+        test_expression!("date_diff('second', TIMESTAMP '2020-06-01 12:30:45.000000000', TIMESTAMP '2020-06-02 12:30:45.123456789')","86400");
+        test_expression!(
+            "date_diff('day', DATE '2020-03-01', DATE '2020-03-02')",
+            "1"
+        );
+        test_expression!("date_diff('millisecond', TIMESTAMP '2020-06-01 12:30:45.000000000', TIMESTAMP '2020-06-02 12:30:45.123456789')","86400123");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_parse_duration() -> Result<()> {
+        test_expression!("parse_duration('42.8ms')", "0 00:00:00.043");
+        test_expression!("parse_duration('42.8ns')", "0 00:00:00.000");
+        test_expression!("parse_duration('3.81 d')", "3 19:26:24.000");
+        test_expression!("parse_duration('5m')", "0 00:05:00.000");
         Ok(())
     }
 }
