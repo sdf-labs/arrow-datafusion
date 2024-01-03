@@ -807,7 +807,7 @@ impl ScalarFunctionDef for DateTruncFunction {
                             .unwrap(),
                         "week" => {
                             let weekday =
-                                naive_date_time.weekday().num_days_from_sunday() as i64;
+                                naive_date_time.weekday().num_days_from_monday() as i64;
                             (naive_date_time - Duration::days(weekday))
                                 .date()
                                 .and_hms_opt(0, 0, 0)
@@ -1109,6 +1109,22 @@ mod test {
         test_expression!(
             "date_trunc( 'day',TIMESTAMP '2023-02-15T08:30:01')",
             "2023-02-15T00:00:00"
+        );
+        test_expression!(
+            "date_trunc( 'week',TIMESTAMP '2023-02-15T08:30:01')",
+            "2023-02-13T00:00:00"
+        );
+        test_expression!(
+            "date_trunc( 'month',TIMESTAMP '2023-02-15T08:30:01')",
+            "2023-02-01T00:00:00"
+        );
+        test_expression!(
+            "date_trunc( 'quarter',TIMESTAMP '2023-02-15T08:30:01')",
+            "2023-01-01T00:00:00"
+        );
+        test_expression!(
+            "date_trunc( 'year',TIMESTAMP '2023-02-15T08:30:01')",
+            "2023-01-01T00:00:00"
         );
         // Time
         test_expression!("date_trunc('hour',TIME '08:09:10.123')", "08:00:00");
