@@ -44,7 +44,7 @@ use arrow::{
     },
     datatypes::{DataType, Date32Type, IntervalDayTimeType, IntervalUnit, TimeUnit},
 };
-use chrono::{Datelike, NaiveDateTime, Timelike};
+use chrono::{Datelike, NaiveDateTime, NaiveTime, Timelike};
 use datafusion::error::Result;
 use datafusion_common::DataFusionError;
 use datafusion_expr::{
@@ -663,6 +663,235 @@ impl ScalarFunctionDef for DayFunction {
         Ok(result?)
     }
 }
+
+#[derive(Debug)]
+pub struct DateTruncFunction;
+
+impl ScalarFunctionDef for DateTruncFunction {
+    fn name(&self) -> &str {
+        "date_trunc"
+    }
+
+    fn signature(&self) -> Signature {
+        Signature::one_of(
+            vec![
+                TypeSignature::Exact(vec![DataType::Utf8, DataType::Date32]),
+                TypeSignature::Exact(vec![
+                    DataType::Utf8,
+                    DataType::Timestamp(TimeUnit::Nanosecond, None),
+                ]),
+                TypeSignature::Exact(vec![
+                    DataType::Utf8,
+                    DataType::Time64(TimeUnit::Nanosecond),
+                ]),
+            ],
+            Volatility::Immutable,
+        )
+    }
+    fn return_type(&self) -> ReturnTypeFunction {
+        Arc::new(move |args| Ok(Arc::new(args[1].clone())))
+    }
+
+    fn execute(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
+        assert_eq!(args.len(), 2);
+
+        // Extract arguments
+        let unit = args[0].as_any().downcast_ref::<StringArray>().unwrap();
+        let timestamps = &args[1];
+        let result = match timestamps.data_type() {
+            DataType::Date32 => {
+                let date_array = args[1]
+                    .as_any()
+                    .downcast_ref::<Date32Array>()
+                    .expect("Expected a Date32 array");
+                let mut result = Vec::new();
+
+                for i in 0..date_array.len() {
+                    if date_array.is_null(i) {
+                        result.push(None);
+                        continue;
+                    }
+
+                    let date_value = date_array.value(i);
+                    let naive_date =
+                        NaiveDate::from_num_days_from_ce_opt(date_value + 719163)
+                            .unwrap(); // converting to NaiveDate
+
+                    let trunc = match unit.value(i).to_string().as_str() {
+                        "day" => NaiveDate::from_ymd_opt(
+                            naive_date.year(),
+                            naive_date.month(),
+                            naive_date.day(),
+                        )
+                        .unwrap(),
+                        "month" => NaiveDate::from_ymd_opt(
+                            naive_date.year(),
+                            naive_date.month(),
+                            1,
+                        )
+                        .unwrap(),
+                        "year" => {
+                            NaiveDate::from_ymd_opt(naive_date.year(), 1, 1).unwrap()
+                        }
+                        "week" => {
+                            let weekday =
+                                naive_date.weekday().num_days_from_monday() as i64;
+
+                            naive_date - Duration::days(weekday)
+                        }
+                        "quarter" => {
+                            let month = ((naive_date.month() - 1) / 3) * 3 + 1;
+                            NaiveDate::from_ymd_opt(naive_date.year(), month, 1).unwrap()
+                        }
+                        _ => naive_date,
+                    };
+                    let days_since_epoch = trunc.num_days_from_ce() - 719163;
+                    result.push(Some(days_since_epoch as i32));
+                }
+                Ok(Arc::new(Date32Array::from(result)) as ArrayRef)
+            }
+            DataType::Timestamp(TimeUnit::Nanosecond, None) => {
+                let timestamps_nanos = args[1]
+                    .as_any()
+                    .downcast_ref::<TimestampNanosecondArray>()
+                    .expect("Expected a NanosecondTimeStamp array");
+                let timestamp_millis = timestamps_nanos
+                    .iter()
+                    .map(|t: Option<i64>| t.map(|t| t / 1_000_000))
+                    .collect::<TimestampMillisecondArray>();
+
+                let mut result = Vec::new();
+                for i in 0..timestamp_millis.len() {
+                    if timestamp_millis.is_null(i) {
+                        result.push(None);
+                        continue;
+                    }
+
+                    let timestamp_value = timestamp_millis.value(i);
+                    let naive_date_time =
+                        NaiveDateTime::from_timestamp_millis(timestamp_value).unwrap();
+
+                    let trunc = match unit.value(i).to_string().as_str() {
+                        "second" => naive_date_time
+                            .date()
+                            .and_hms_opt(
+                                naive_date_time.hour(),
+                                naive_date_time.minute(),
+                                naive_date_time.second(),
+                            )
+                            .unwrap(),
+                        "minute" => naive_date_time
+                            .date()
+                            .and_hms_opt(
+                                naive_date_time.hour(),
+                                naive_date_time.minute(),
+                                0,
+                            )
+                            .unwrap(),
+                        "hour" => naive_date_time
+                            .date()
+                            .and_hms_opt(naive_date_time.hour(), 0, 0)
+                            .unwrap(),
+                        "day" => naive_date_time.date().and_hms_opt(0, 0, 0).unwrap(),
+                        "month" => NaiveDate::from_ymd_opt(
+                            naive_date_time.year(),
+                            naive_date_time.month(),
+                            1,
+                        )
+                        .unwrap()
+                        .and_hms_opt(0, 0, 0)
+                        .unwrap(),
+                        "year" => NaiveDate::from_ymd_opt(naive_date_time.year(), 1, 1)
+                            .unwrap()
+                            .and_hms_opt(0, 0, 0)
+                            .unwrap(),
+                        "week" => {
+                            let weekday =
+                                naive_date_time.weekday().num_days_from_monday() as i64;
+                            (naive_date_time - Duration::days(weekday))
+                                .date()
+                                .and_hms_opt(0, 0, 0)
+                                .unwrap()
+                        }
+                        "quarter" => {
+                            let month = (((naive_date_time.month() - 1) / 3) * 3) + 1;
+                            NaiveDate::from_ymd_opt(naive_date_time.year(), month, 1)
+                                .unwrap()
+                                .and_hms_opt(0, 0, 0)
+                                .unwrap()
+                        }
+                        _ => naive_date_time,
+                    };
+
+                    let truncated_timestamp = trunc.timestamp_millis();
+                    result.push(Some(truncated_timestamp));
+                }
+
+                Ok(Arc::new(TimestampMillisecondArray::from(result)) as Arc<dyn Array>)
+            }
+            DataType::Time64(TimeUnit::Nanosecond) => {
+                let times = args[1]
+                    .as_any()
+                    .downcast_ref::<Time64NanosecondArray>()
+                    .expect("Expected a NanosecondTime array");
+
+                let mut result = Vec::new();
+                for i in 0..times.len() {
+                    if times.is_null(i) {
+                        result.push(None);
+                        continue;
+                    }
+
+                    let time_value = times.value(i); // nanoseconds since midnight
+                    let seconds = time_value / 1_000_000_000;
+                    let nanoseconds = (time_value % 1_000_000_000) as u32;
+
+                    let naive_time = NaiveTime::from_num_seconds_from_midnight_opt(
+                        seconds as u32,
+                        nanoseconds,
+                    )
+                    .unwrap();
+
+                    let trunc = match unit.value(i).to_string().as_str() {
+                        "second" => NaiveTime::from_hms_milli_opt(
+                            naive_time.hour(),
+                            naive_time.minute(),
+                            naive_time.second(),
+                            0,
+                        )
+                        .unwrap(),
+                        "minute" => NaiveTime::from_hms_milli_opt(
+                            naive_time.hour(),
+                            naive_time.minute(),
+                            0,
+                            0,
+                        )
+                        .unwrap(),
+                        "hour" => {
+                            NaiveTime::from_hms_milli_opt(naive_time.hour(), 0, 0, 0)
+                                .unwrap()
+                        }
+                        _ => naive_time,
+                    };
+
+                    let truncated_nanos = trunc.num_seconds_from_midnight() as i64
+                        * 1_000_000_000
+                        + trunc.nanosecond() as i64;
+                    result.push(Some(truncated_nanos));
+                }
+
+                Ok(Arc::new(Time64NanosecondArray::from(result)) as ArrayRef)
+            }
+            // timestamp with timezone todo
+            _ => Err(ArrowError::InvalidArgumentError(
+                "Invalid input type".to_string(),
+            ))
+            .map_err(|err| DataFusionError::Execution(format!("Cast error: {}", err))),
+        };
+        result
+    }
+}
+
 // Function package declaration
 pub struct FunctionPackage;
 
@@ -680,6 +909,7 @@ impl ScalarFunctionPackage for FunctionPackage {
             Box::new(FromUnixtimeFunction),
             Box::new(FromUnixtimeNanosFunction),
             Box::new(DayFunction),
+            Box::new(DateTruncFunction),
         ]
     }
 }
@@ -853,6 +1083,53 @@ mod test {
         //test_expression!("day(Interval '-20' DAY)", "-20");
         test_expression!("day(timestamp '2001-04-13T02:00:00')", "13");
         test_expression!("day(timestamp '2020-06-10 15:55:23.383345')", "10");
+        Ok(())
+    }
+    #[tokio::test]
+    async fn date_trunc() -> Result<()> {
+        // // Date
+        test_expression!("date_trunc('day',DATE '2001-08-22')", "2001-08-22");
+        test_expression!("date_trunc('week',DATE '2001-08-22')", "2001-08-20");
+        test_expression!("date_trunc('quarter',DATE '2001-08-22')", "2001-07-01");
+        test_expression!("date_trunc('month',DATE '2023-02-15')", "2023-02-01");
+        test_expression!("date_trunc('year',DATE '2023-02-15')", "2023-01-01");
+        // Timestamp
+        test_expression!(
+            "date_trunc( 'second',TIMESTAMP '2023-02-15T08:30:01')",
+            "2023-02-15T08:30:01"
+        );
+        test_expression!(
+            "date_trunc( 'minute',TIMESTAMP '2023-02-15T08:30:01')",
+            "2023-02-15T08:30:00"
+        );
+        test_expression!(
+            "date_trunc( 'hour',TIMESTAMP '2023-02-15T08:30:01')",
+            "2023-02-15T08:00:00"
+        );
+        test_expression!(
+            "date_trunc( 'day',TIMESTAMP '2023-02-15T08:30:01')",
+            "2023-02-15T00:00:00"
+        );
+        test_expression!(
+            "date_trunc( 'week',TIMESTAMP '2023-02-15T08:30:01')",
+            "2023-02-13T00:00:00"
+        );
+        test_expression!(
+            "date_trunc( 'month',TIMESTAMP '2023-02-15T08:30:01')",
+            "2023-02-01T00:00:00"
+        );
+        test_expression!(
+            "date_trunc( 'quarter',TIMESTAMP '2023-02-15T08:30:01')",
+            "2023-01-01T00:00:00"
+        );
+        test_expression!(
+            "date_trunc( 'year',TIMESTAMP '2023-02-15T08:30:01')",
+            "2023-01-01T00:00:00"
+        );
+        // Time
+        test_expression!("date_trunc('hour',TIME '08:09:10.123')", "08:00:00");
+        test_expression!("date_trunc('minute',TIME '08:09:10.123')", "08:09:00");
+        test_expression!("date_trunc('second',TIME '08:09:10.123')", "08:09:10");
         Ok(())
     }
 }
