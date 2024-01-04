@@ -972,10 +972,10 @@ impl ScalarFunctionDef for DateDiffFunction {
                             (years * 12 + months) / 3
                         }
                         "year" => (dt2.year() - dt1.year()) as i64,
-                        _ => 0, // 处理未知单位
+                        _ => 0,
                     }
                 } else {
-                    0 // 处理空值或错误
+                    0
                 }
             })
             .collect();
@@ -1024,7 +1024,7 @@ impl ScalarFunctionDef for ParseDurationFunction {
                                 "m" => value * 60_000_000_000.0,
                                 "h" => value * 3_600_000_000_000.0,
                                 "d" => value * 86_400_000_000_000.0,
-                                _ => 0.0, // 未知单位处理
+                                _ => 0.0,
                             } as i64;
 
                             let millis_total =
