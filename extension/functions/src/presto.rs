@@ -46,8 +46,8 @@ use arrow::{
 };
 
 use chrono::{
-    Datelike, Duration, Local, NaiveDate, Months, NaiveDateTime, NaiveTime, Offset, TimeZone,
-    Timelike, Utc,
+    Datelike, Duration, Local, Months, NaiveDate, NaiveDateTime, NaiveTime, Offset,
+    TimeZone, Timelike, Utc,
 };
 use datafusion::error::Result;
 use datafusion_common::DataFusionError;
