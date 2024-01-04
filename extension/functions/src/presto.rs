@@ -44,7 +44,7 @@ use arrow::{
     },
     datatypes::{DataType, IntervalUnit, TimeUnit},
 };
-use chrono::{Datelike, NaiveDateTime, NaiveTime, Timelike};
+use chrono::{Datelike, Months, NaiveDateTime, NaiveTime, Timelike};
 use datafusion::error::Result;
 use datafusion_common::DataFusionError;
 use datafusion_expr::{
@@ -704,7 +704,7 @@ impl ScalarFunctionDef for DateTruncFunction {
                         continue;
                     }
 
-                    let date_value = date_array.value(i); 
+                    let date_value = date_array.value(i);
                     let naive_date =
                         NaiveDate::from_num_days_from_ce_opt(date_value + 719163)
                             .unwrap(); // converting to NaiveDate
@@ -835,8 +835,8 @@ impl ScalarFunctionDef for DateTruncFunction {
                     }
 
                     let time_value = times.value(i); // nanoseconds since midnight
-                    let seconds = time_value / 1_000_000_000; 
-                    let nanoseconds = (time_value % 1_000_000_000) as u32; 
+                    let seconds = time_value / 1_000_000_000;
+                    let nanoseconds = (time_value % 1_000_000_000) as u32;
 
                     let naive_time = NaiveTime::from_num_seconds_from_midnight_opt(
                         seconds as u32,
@@ -863,7 +863,7 @@ impl ScalarFunctionDef for DateTruncFunction {
                             NaiveTime::from_hms_milli_opt(naive_time.hour(), 0, 0, 0)
                                 .unwrap()
                         }
-                        _ => naive_time, 
+                        _ => naive_time,
                     };
 
                     let truncated_nanos = trunc.num_seconds_from_midnight() as i64
@@ -881,6 +881,209 @@ impl ScalarFunctionDef for DateTruncFunction {
             .map_err(|err| DataFusionError::Execution(format!("Cast error: {}", err))),
         };
         result
+    }
+}
+#[derive(Debug)]
+pub struct DateAddFunction;
+
+impl ScalarFunctionDef for DateAddFunction {
+    fn name(&self) -> &str {
+        "date_add"
+    }
+
+    fn signature(&self) -> Signature {
+        Signature::one_of(
+            vec![
+                TypeSignature::Exact(vec![
+                    DataType::Utf8,
+                    DataType::Int64,
+                    DataType::Date32,
+                ]),
+                TypeSignature::Exact(vec![
+                    DataType::Utf8,
+                    DataType::Int64,
+                    DataType::Time64(TimeUnit::Nanosecond),
+                ]),
+                TypeSignature::Exact(vec![
+                    DataType::Utf8,
+                    DataType::Int64,
+                    DataType::Timestamp(TimeUnit::Nanosecond, None),
+                ]),
+            ],
+            Volatility::Immutable,
+        )
+    }
+
+    fn return_type(&self) -> ReturnTypeFunction {
+        Arc::new(move |args| Ok(Arc::new(args[2].clone())))
+    }
+
+    fn execute(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
+        // Ensuring the correct number of arguments
+        assert_eq!(args.len(), 3);
+
+        // Extract and validate inputs
+        let unit_array = args[0].as_any().downcast_ref::<StringArray>().unwrap();
+        let value_array = args[1].as_any().downcast_ref::<Int64Array>().unwrap();
+
+        // // Determine duration to add based on the unit
+        let unit = unit_array.value(0);
+        let value = value_array.value(0);
+        // let duration = parse_duration(unit, value)?;
+        match args[2].data_type() {
+            DataType::Date32 => {
+                let date_array = args[2].as_any().downcast_ref::<Date32Array>().unwrap();
+                let mut builder = Date32Array::builder(date_array.len());
+
+                for i in 0..date_array.len() {
+                    let date_value = date_array.value(i);
+                    // Convert Date32 to NaiveDate
+                    let naive_date = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()
+                        + chrono::Duration::days(date_value as i64);
+                    let time = chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap(); // Assuming time is 00:00:00 for Date32
+                    if let Ok(new_date) = parse_duration(naive_date, time, unit, value) {
+                        // Convert back from NaiveDate to Date32
+                        let duration_since_epoch = new_date.signed_duration_since(
+                            chrono::NaiveDate::from_ymd_opt(1970, 1, 1)
+                                .unwrap()
+                                .and_hms_opt(0, 0, 0)
+                                .unwrap(),
+                        );
+                        builder.append_value(duration_since_epoch.num_days() as i32);
+                    } else {
+                        builder.append_null();
+                    }
+                }
+                Ok(Arc::new(builder.finish()) as ArrayRef)
+            }
+            DataType::Time64(TimeUnit::Nanosecond) => {
+                let time_array = args[2]
+                    .as_any()
+                    .downcast_ref::<Time64NanosecondArray>()
+                    .unwrap();
+                let mut builder = Time64NanosecondArray::builder(time_array.len());
+
+                for i in 0..time_array.len() {
+                    let time_value = time_array.value(i);
+                    let seconds = (time_value / 1_000_000_000) as u32; // Get seconds part
+                    let nanosecond = (time_value % 1_000_000_000) as u32; // Get nanoseconds part
+                    let time = chrono::NaiveTime::from_num_seconds_from_midnight_opt(
+                        seconds, nanosecond,
+                    )
+                    .unwrap();
+
+                    let date = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap(); // Assuming date part is the epoch start for Time32
+                    if let Ok(new_time) = parse_duration(date, time, unit, value as i64) {
+                        // Convert back from NaiveTime to Time64Nanosecond
+                        let duration_since_midnight =
+                            (new_time.num_seconds_from_midnight() as i64 * 1_000_000_000)
+                                + new_time.nanosecond() as i64;
+                        builder.append_value(duration_since_midnight);
+                    } else {
+                        builder.append_null();
+                    }
+                }
+                Ok(Arc::new(builder.finish()) as ArrayRef)
+            }
+            DataType::Timestamp(TimeUnit::Nanosecond, _) => {
+                let timestamp_array = args[2]
+                    .as_any()
+                    .downcast_ref::<TimestampNanosecondArray>()
+                    .unwrap();
+                let timestamp_milli_arr = timestamp_array
+                    .iter()
+                    .map(|timestamp| timestamp.map(|timestamp| timestamp / 1_000_000))
+                    .collect::<TimestampMillisecondArray>();
+
+                let mut builder =
+                    TimestampMillisecondArray::builder(timestamp_milli_arr.len());
+
+                for i in 0..timestamp_milli_arr.len() {
+                    let timestamp_value = timestamp_milli_arr.value(i);
+                    // Convert Timestamp to NaiveDateTime
+                    let datetime =
+                        chrono::NaiveDateTime::from_timestamp_millis(timestamp_value)
+                            .unwrap();
+                    if let Ok(new_datetime) =
+                        parse_duration(datetime.date(), datetime.time(), unit, value)
+                    {
+                        // Convert back from NaiveDateTime to Timestamp
+                        builder.append_value(new_datetime.timestamp_millis());
+                    } else {
+                        builder.append_null();
+                    }
+                }
+                Ok(Arc::new(builder.finish()) as ArrayRef)
+            }
+
+            _ => Err(ArrowError::InvalidArgumentError(
+                "Invalid input type".to_string(),
+            ))
+            .map_err(|err| DataFusionError::Execution(format!("Cast error: {}", err))),
+        }
+    }
+}
+fn parse_duration(
+    date: chrono::NaiveDate,
+    time: chrono::NaiveTime,
+    unit: &str,
+    value: i64,
+) -> Result<chrono::NaiveDateTime, DataFusionError> {
+    match unit {
+        "millisecond" => Ok(chrono::NaiveDateTime::new(date, time)
+            + chrono::Duration::milliseconds(value as i64)),
+        "second" => Ok(chrono::NaiveDateTime::new(date, time)
+            + chrono::Duration::seconds((value) as i64)),
+        "minute" => Ok(chrono::NaiveDateTime::new(date, time)
+            + chrono::Duration::minutes(value as i64)),
+        "hour" => Ok(chrono::NaiveDateTime::new(date, time)
+            + chrono::Duration::hours(value as i64)),
+        "day" => {
+            Ok(chrono::NaiveDateTime::new(date, time)
+                + chrono::Duration::days(value as i64))
+        }
+        "week" => Ok(chrono::NaiveDateTime::new(date, time)
+            + chrono::Duration::weeks(value as i64)),
+        "month" => {
+            let new_date = if value >= 0 {
+                date.checked_add_months(Months::new(value as u32))
+            } else {
+                date.checked_sub_months(Months::new(value.abs() as u32))
+            };
+            new_date
+                .map(|d| chrono::NaiveDateTime::new(d, time))
+                .ok_or_else(|| {
+                    DataFusionError::Execution(format!("Error adding months: {}", value))
+                })
+        }
+        "quarter" => {
+            let new_date = if value >= 0 {
+                date.checked_add_months(Months::new((value * 3) as u32))
+            } else {
+                date.checked_sub_months(Months::new((value * 3).abs() as u32))
+            };
+            new_date
+                .map(|d| chrono::NaiveDateTime::new(d, time))
+                .ok_or_else(|| {
+                    DataFusionError::Execution(format!("Error adding months: {}", value))
+                })
+        }
+        "year" => {
+            let new_date = if value >= 0 {
+                date.checked_add_months(Months::new((value * 12) as u32))
+            } else {
+                date.checked_sub_months(Months::new((value * 12).abs() as u32))
+            };
+            new_date
+                .map(|d| chrono::NaiveDateTime::new(d, time))
+                .ok_or_else(|| {
+                    DataFusionError::Execution(format!("Error adding months: {}", value))
+                })
+        }
+        _ => Err(DataFusionError::Execution(format!(
+            "Invalid unit for duration: {}",
+            unit
+        ))),
     }
 }
 
@@ -902,6 +1105,7 @@ impl ScalarFunctionPackage for FunctionPackage {
             Box::new(FromUnixtimeNanosFunction),
             Box::new(LastDayOfMonthFunction),
             Box::new(DateTruncFunction),
+            Box::new(DateAddFunction),
         ]
     }
 }
@@ -1107,6 +1311,48 @@ mod test {
         test_expression!("date_trunc('hour',TIME '08:09:10.123')", "08:00:00");
         test_expression!("date_trunc('minute',TIME '08:09:10.123')", "08:09:00");
         test_expression!("date_trunc('second',TIME '08:09:10.123')", "08:09:10");
+        Ok(())
+    }
+    #[tokio::test]
+    async fn test_date_add() -> Result<()> {
+        // date
+        test_expression!("date_add('day', -1, DATE '2020-03-01')", "2020-02-29");
+        test_expression!("date_add('week', 2, DATE '2020-03-01')", "2020-03-15");
+        test_expression!("date_add('month', 3, DATE '2020-03-01')", "2020-06-01");
+        test_expression!("date_add('quarter', -2, DATE '2020-03-01')", "2019-09-01");
+        test_expression!("date_add('year', 4, DATE '2020-03-01')", "2024-03-01");
+        // time
+
+        test_expression!(
+            "date_add('millisecond', 86, TIME '00:00:00.000')",
+            "00:00:00.086"
+        );
+        test_expression!(
+            "date_add('second', 86, TIME '00:00:00.006')",
+            "00:01:26.006"
+        );
+        test_expression!(
+            "date_add('minute', -9, TIME '00:09:00.006')",
+            "00:00:00.006"
+        );
+        test_expression!("date_add('hour', 9, TIME '00:00:00.006')", "09:00:00.006");
+        // timestamp
+        test_expression!(
+            "date_add('millisecond', 100000, TIMESTAMP '2020-03-01T00:00:00.000')",
+            "2020-03-01T00:01:40"
+        );
+        test_expression!(
+            "date_add('second', -86, TIMESTAMP '2020-03-01T00:01:27.003')",
+            "2020-03-01T00:00:01.003"
+        );
+        test_expression!(
+            "date_add('month', -5, TIMESTAMP '2020-03-01T00:00:00.000')",
+            "2019-10-01T00:00:00"
+        );
+        test_expression!(
+            "date_add('quarter', -2, TIMESTAMP '2020-03-01T00:00:00.100')",
+            "2019-09-01T00:00:00.100"
+        );
         Ok(())
     }
 }
