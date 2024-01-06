@@ -55,6 +55,7 @@ use datafusion_expr::{
 use arrow::array::*;
 use arrow::error::ArrowError;
 
+use chrono::prelude::*;
 use chrono::{Duration, NaiveDate, TimeZone, Utc};
 
 #[derive(Debug)]
@@ -1087,6 +1088,129 @@ fn parse_duration(
     }
 }
 
+#[derive(Debug)]
+pub struct DateFormatFunction;
+
+impl ScalarFunctionDef for DateFormatFunction {
+    fn name(&self) -> &str {
+        "date_format"
+    }
+
+    fn signature(&self) -> Signature {
+        Signature::exact(
+            vec![
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
+                DataType::Utf8,
+            ],
+            Volatility::Immutable,
+        )
+    }
+
+    fn return_type(&self) -> ReturnTypeFunction {
+        Arc::new(move |_| Ok(Arc::new(DataType::Utf8)))
+    }
+
+    fn execute(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
+        // Validate input arguments
+        assert_eq!(args.len(), 2, "date_format requires exactly two arguments");
+    
+        let timestamp_array = args[0]
+            .as_any()
+            .downcast_ref::<TimestampNanosecondArray>()
+            .expect("Expected Timestamp nanosecond array for argument 1");
+        let timestamp_milli_arr = timestamp_array
+            .iter()
+            .map(|timestamp| timestamp.map(|timestamp| timestamp / 1_000_000))
+            .collect::<TimestampMillisecondArray>();
+        let format_array = args[1]
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("Expected String array for argument 2");
+    
+        let mut formatted_dates = Vec::new();
+    
+        for i in 0..timestamp_milli_arr.len() {
+            if timestamp_milli_arr.is_null(i) || format_array.is_null(i) {
+                formatted_dates.push(None);
+                continue;
+            }
+    
+            let timestamp_millis = timestamp_milli_arr.value(i);
+            let format_string = format_array.value(i);
+            let naive_datetime = NaiveDateTime::from_timestamp_millis(timestamp_millis)
+                .expect("Failed to convert timestamp to NaiveDateTime");
+            let datetime: DateTime<Utc> = DateTime::from_naive_utc_and_offset(naive_datetime, Utc);
+    
+            let mut formatted_date = String::new();
+            let mut chars = format_string.chars().peekable();
+    
+            while let Some(c) = chars.next() {
+                if c == '%' {
+                    if let Some(format_char) = chars.next() {
+                        
+                        formatted_date += &match format_char {
+                            
+                            'a' => datetime.format("%a").to_string(),
+                            'b' => datetime.format("%b").to_string(),   
+                            'c' => datetime.month().to_string(),
+                            'd' => datetime.format("%d").to_string(),
+                            'e' => datetime.format("%e").to_string(),
+                            'f' => {
+                                let milliseconds = datetime.timestamp_subsec_millis();
+                                format!("{:03}000", milliseconds)
+                            },
+                            'H' => datetime.format("%H").to_string(),
+                            'h' => {
+                                let hour = datetime.hour12().1;
+                                format!("{:02}", hour)
+                            },
+                            'I' =>datetime.format("%I").to_string(),
+                            'i' => {
+                                let minutes = datetime.minute();
+                                format!("{:02}", minutes)
+                            },
+                            'j' => datetime.format("%j").to_string(),
+                            'k' => datetime.format("%k").to_string(),
+                            'l'=> datetime.format("%l").to_string(),
+                            'M' => datetime.format("%B").to_string(),
+                            'm' => datetime.format("%m").to_string(),
+                            'p' => datetime.format("%p").to_string(),
+                            'r' => datetime.format("%r").to_string(),
+                            'S' => datetime.format("%S").to_string(),
+                            's' => datetime.format("%S").to_string(),
+                            'T' => datetime.format("%T").to_string(),
+                            'v' => datetime.format("%V").to_string(),
+                            'W' => datetime.format("%A").to_string(),
+                            'x' => {
+                                let iso_week = datetime.iso_week();
+                                format!("{}", iso_week.year())
+                            },
+                            'Y' => datetime.format("%Y").to_string(),
+                            'y' => datetime.format("%y").to_string(),
+                            'D' | 'U' | 'u' | 'V' | 'w' | 'X' => {
+                                format!(
+                                        "%{} is not currently supported in the date format string in Trino (Presto).",
+                                        format_char
+                                    )
+                                // return Err(DataFusionError::Execution(format!(
+                                //     "%{} is not currently supported in the date format string in Trino (Presto).",
+                                //     format_char
+                                // )));
+                            },
+                            _ => format_char.to_string(), // Handle other format specifiers
+                        };
+                    }
+                } else {
+                    formatted_date.push(c); // Directly add non-format specifiers
+                }
+            }
+            formatted_dates.push(Some(formatted_date));
+        }
+    
+        Ok(Arc::new(StringArray::from(formatted_dates)) as ArrayRef)
+    }
+}
+
 // Function package declaration
 pub struct FunctionPackage;
 
@@ -1106,6 +1230,7 @@ impl ScalarFunctionPackage for FunctionPackage {
             Box::new(LastDayOfMonthFunction),
             Box::new(DateTruncFunction),
             Box::new(DateAddFunction),
+            Box::new(DateFormatFunction),
         ]
     }
 }
@@ -1353,6 +1478,168 @@ mod test {
             "date_add('quarter', -2, TIMESTAMP '2020-03-01T00:00:00.100')",
             "2019-09-01T00:00:00.100"
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_date_format() -> Result<()> {
+        test_expression!(
+            "date_format(Timestamp '2022-10-20 05:10:00', '%m-%d-%Y %H')",
+            "10-20-2022 05"
+        );
+
+        // timestamp
+        test_expression!(
+            "date_format(TIMESTAMP '2001-01-09 13:04:05.321', '%a')",
+            "Tue"
+        );
+        test_expression!(
+            "date_format(TIMESTAMP '2001-01-09 13:04:05.321', '%b')",
+            "Jan"
+        );
+        test_expression!(
+            "date_format(TIMESTAMP '2001-01-09 13:04:05.321', '%c')",
+            "1"
+        );
+        test_expression!(
+            "date_format(TIMESTAMP '2001-01-09 13:04:05.321', '%d')",
+            "09"
+        );
+        test_expression!(
+            "date_format(TIMESTAMP '2001-01-09 13:04:05.321', '%e')",
+            " 9"
+        );
+        test_expression!(
+            "date_format(TIMESTAMP '2001-01-09 13:04:05.321', '%f')",
+            "321000"
+        );
+        test_expression!(
+            "date_format(TIMESTAMP '2001-01-09 13:04:05.321', '%H')",
+            "13"
+        );
+        test_expression!(
+            "date_format(TIMESTAMP '2001-01-09 13:04:05.321', '%h')",
+            "01"
+        );
+        test_expression!(
+            "date_format(TIMESTAMP '2001-01-09 13:04:05.321', '%I')",
+            "01"
+        );
+        test_expression!(
+            "date_format(TIMESTAMP '2001-01-09 13:04:05.321', '%i')",
+            "04"
+        );
+        test_expression!(
+            "date_format(TIMESTAMP '2001-01-09 13:04:05.321', '%j')",
+            "009"
+        );
+        test_expression!(
+            "date_format(TIMESTAMP '2001-01-09 13:04:05.321', '%k')",
+            "13"
+        );
+        test_expression!(
+            "date_format(TIMESTAMP '2001-01-09 13:04:05.321', '%l')",
+            " 1"
+        );
+        test_expression!(
+            "date_format(TIMESTAMP '2001-01-09 13:04:05.321', '%M')",
+            "January"
+        );
+        test_expression!(
+            "date_format(TIMESTAMP '2001-01-09 13:04:05.321', '%m')",
+            "01"
+        );
+        test_expression!(
+            "date_format(TIMESTAMP '2001-01-09 13:04:05.321', '%p')",
+            "PM"
+        );
+        test_expression!(
+            "date_format(TIMESTAMP '2001-01-09 13:04:05.321', '%r')",
+            "01:04:05 PM"
+        );
+        test_expression!(
+            "date_format(TIMESTAMP '2001-01-09 13:04:05.321', '%S')",
+            "05"
+        );
+        test_expression!(
+            "date_format(TIMESTAMP '2001-01-09 13:04:05.321', '%s')",
+            "05"
+        );
+        test_expression!(
+            "date_format(TIMESTAMP '2001-01-09 13:04:05.321', '%T')",
+            "13:04:05"
+        );
+        test_expression!(
+            "date_format(TIMESTAMP '2001-01-09 13:04:05.321', '%v')",
+            "02"
+        );
+        test_expression!(
+            "date_format(TIMESTAMP '2001-01-09 13:04:05.321', '%W')",
+            "Tuesday"
+        );
+        test_expression!(
+            "date_format(TIMESTAMP '2018-12-31 13:04:05.321', '%x')",
+            "2019"
+        );
+        test_expression!(
+            "date_format(TIMESTAMP '2001-01-09 13:04:05.321', '%Y')",
+            "2001"
+        );
+        test_expression!(
+            "date_format(TIMESTAMP '2001-01-09 13:04:05.321', '%y')",
+            "01"
+        );
+        test_expression!(
+            "date_format(TIMESTAMP '2001-01-09 13:04:05.321', '%%')",
+            "%"
+        );
+        test_expression!(
+            "date_format(TIMESTAMP '2001-01-09 13:04:05.321', 'foo')",
+            "foo"
+        );
+        test_expression!(
+            "date_format(TIMESTAMP '2001-01-09 13:04:05.321', '%g')",
+            "g"
+        );
+        test_expression!(
+            "date_format(TIMESTAMP '2001-01-09 13:04:05.321', '%4')",
+            "4"
+        );
+        test_expression!(
+            "date_format(TIMESTAMP '2018-12-31 13:04:05.321', '%v %x %f')",
+            "01 2019 321000"
+        );
+        test_expression!(
+            "date_format(TIMESTAMP '2001-01-09 13:04:05.321', '%Y年%m月%d日')",
+            "2001年01月09日"
+        );
+
+        //no support
+        test_expression!(
+            "date_format(DATE '2001-01-09', '%D')",
+            "Error: %D not supported in date format string"
+        );
+        // test_expression!(
+        //     "date_format(DATE '2001-01-09', '%U')",
+        //     "Error: %U not supported in date format string"
+        // );
+        // test_expression!(
+        //     "date_format(DATE '2001-01-09', '%u')",
+        //     "Error: %u not supported in date format string"
+        // );
+        // test_expression!(
+        //     "date_format(DATE '2001-01-09', '%V')",
+        //     "Error: %V not supported in date format string"
+        // );
+        // test_expression!(
+        //     "date_format(DATE '2001-01-09', '%w')",
+        //     "Error: %w not supported in date format string"
+        // );
+        // test_expression!(
+        //     "date_format(DATE '2001-01-09', '%X')",
+        //     "Error: %X not supported in date format string"
+        // );
+
         Ok(())
     }
 }
