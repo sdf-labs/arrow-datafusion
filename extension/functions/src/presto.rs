@@ -1465,6 +1465,851 @@ impl ScalarFunctionDef for LastDayOfMonthFunction {
     }
 }
 
+#[derive(Debug)]
+pub struct DayOfWeekFunction;
+
+impl ScalarFunctionDef for DayOfWeekFunction {
+    fn name(&self) -> &str {
+        "day_of_week"
+    }
+
+    fn signature(&self) -> Signature {
+        // Function accepts Date, Interval Day to Second, or Timestamp
+        Signature::one_of(
+            vec![
+                TypeSignature::Exact(vec![DataType::Date32]),
+                TypeSignature::Exact(vec![DataType::Interval(IntervalUnit::DayTime)]),
+                TypeSignature::Exact(vec![DataType::Timestamp(
+                    TimeUnit::Nanosecond,
+                    None,
+                )]),
+            ],
+            Volatility::Immutable,
+        )
+    }
+
+    fn return_type(&self) -> ReturnTypeFunction {
+        let return_type = Arc::new(DataType::Int64); // Returning as bigint
+        Arc::new(move |_| Ok(return_type.clone()))
+    }
+
+    fn execute(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
+        assert_eq!(args.len(), 1);
+
+        let input = &args[0];
+        let result = match input.data_type() {
+            DataType::Date32 => {
+                let date_array = input
+                    .as_any()
+                    .downcast_ref::<Date32Array>()
+                    .expect("Expected a date array");
+
+                let weekdays: Vec<i64> = date_array
+                    .iter()
+                    .map(|date_opt| {
+                        date_opt
+                            .map(|date| {
+                                let naive_date = Date32Type::to_naive_date(date);
+                                // Convert to ISO weekday
+                                naive_date.weekday().number_from_monday() as i64
+                            })
+                            .unwrap_or(0)
+                    })
+                    .collect();
+
+                Ok(Arc::new(Int64Array::from(weekdays)) as ArrayRef)
+            }
+            DataType::Timestamp(TimeUnit::Nanosecond, _) => {
+                let timestamp_array = input
+                    .as_any()
+                    .downcast_ref::<TimestampNanosecondArray>()
+                    .expect("Expected a nanosecond timestamp array");
+
+                let weekdays: Vec<i64> = timestamp_array
+                    .iter()
+                    .map(|timestamp_opt| {
+                        timestamp_opt
+                            .map(|timestamp| {
+                                let datetime = NaiveDateTime::from_timestamp_opt(
+                                    timestamp / 1_000_000_000,
+                                    (timestamp % 1_000_000_000) as u32,
+                                );
+                                datetime
+                                    .map(|dt| dt.weekday().number_from_monday() as i64)
+                                    .unwrap_or(0)
+                            })
+                            .unwrap_or(0)
+                    })
+                    .collect();
+
+                Ok(Arc::new(Int64Array::from(weekdays)) as ArrayRef)
+            }
+            _ => Err(ArrowError::InvalidArgumentError(
+                "Invalid input type".to_string(),
+            )),
+        };
+        Ok(result?)
+    }
+}
+
+#[derive(Debug)]
+pub struct DayOfYearFunction;
+
+impl ScalarFunctionDef for DayOfYearFunction {
+    fn name(&self) -> &str {
+        "day_of_year"
+    }
+
+    fn signature(&self) -> Signature {
+        // Function accepts Date, Interval Day to Second, or Timestamp
+        Signature::one_of(
+            vec![
+                TypeSignature::Exact(vec![DataType::Date32]),
+                TypeSignature::Exact(vec![DataType::Interval(IntervalUnit::DayTime)]),
+                TypeSignature::Exact(vec![DataType::Timestamp(
+                    TimeUnit::Nanosecond,
+                    None,
+                )]),
+            ],
+            Volatility::Immutable,
+        )
+    }
+
+    fn return_type(&self) -> ReturnTypeFunction {
+        let return_type = Arc::new(DataType::Int64); // Returning as bigint
+        Arc::new(move |_| Ok(return_type.clone()))
+    }
+
+    fn execute(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
+        assert_eq!(args.len(), 1);
+
+        let input = &args[0];
+        let result = match input.data_type() {
+            DataType::Date32 => {
+                let date_array = input
+                    .as_any()
+                    .downcast_ref::<Date32Array>()
+                    .expect("Expected a date array");
+
+                let day_of_years: Vec<i64> = date_array
+                    .iter()
+                    .map(|date_opt| {
+                        date_opt
+                            .map(|date| {
+                                let naive_date = Date32Type::to_naive_date(date);
+                                naive_date.ordinal() as i64 // Gets the day of the year
+                            })
+                            .unwrap_or(0)
+                    })
+                    .collect();
+
+                Ok(Arc::new(Int64Array::from(day_of_years)) as ArrayRef)
+            }
+            DataType::Timestamp(TimeUnit::Nanosecond, _) => {
+                let timestamp_array = input
+                    .as_any()
+                    .downcast_ref::<TimestampNanosecondArray>()
+                    .expect("Expected a nanosecond timestamp array");
+
+                let day_of_years: Vec<i64> = timestamp_array
+                    .iter()
+                    .map(|timestamp_opt| {
+                        timestamp_opt
+                            .map(|timestamp| {
+                                let datetime = NaiveDateTime::from_timestamp_opt(
+                                    timestamp / 1_000_000_000,
+                                    (timestamp % 1_000_000_000) as u32,
+                                );
+                                datetime.map(|dt| dt.ordinal() as i64).unwrap_or(0)
+                                // day of the year
+                            })
+                            .unwrap_or(0)
+                    })
+                    .collect();
+
+                Ok(Arc::new(Int64Array::from(day_of_years)) as ArrayRef)
+            }
+            _ => Err(ArrowError::InvalidArgumentError(
+                "Invalid input type".to_string(),
+            )),
+        };
+        Ok(result?)
+    }
+}
+#[derive(Debug)]
+pub struct HourFunction;
+
+impl ScalarFunctionDef for HourFunction {
+    fn name(&self) -> &str {
+        "hour"
+    }
+
+    fn signature(&self) -> Signature {
+        // Function accepts Date32 or Timestamp
+        Signature::one_of(
+            vec![
+                TypeSignature::Exact(vec![DataType::Date32]),
+                TypeSignature::Exact(vec![DataType::Timestamp(
+                    TimeUnit::Nanosecond,
+                    None,
+                )]),
+            ],
+            Volatility::Immutable,
+        )
+    }
+
+    fn return_type(&self) -> ReturnTypeFunction {
+        let return_type = Arc::new(DataType::Int64); // Returning as bigint
+        Arc::new(move |_| Ok(return_type.clone()))
+    }
+
+    fn execute(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
+        assert_eq!(args.len(), 1);
+
+        let input = &args[0];
+        let result = match input.data_type() {
+            DataType::Date32 => {
+                let date_array = input
+                    .as_any()
+                    .downcast_ref::<Date32Array>()
+                    .expect("Expected a date array");
+
+                // Date32 doesn't inherently contain hour information, defaulting all to 0
+                let hours: Vec<i64> = date_array
+                    .iter()
+                    .map(|_| 0) // Every date defaults to hour 0
+                    .collect();
+
+                Ok(Arc::new(Int64Array::from(hours)) as ArrayRef)
+            }
+            DataType::Timestamp(TimeUnit::Nanosecond, _) => {
+                let timestamp_array = input
+                    .as_any()
+                    .downcast_ref::<TimestampNanosecondArray>()
+                    .expect("Expected a nanosecond timestamp array");
+
+                let hours: Vec<i64> = timestamp_array
+                    .iter()
+                    .map(|timestamp_opt| {
+                        timestamp_opt
+                            .map(|timestamp| {
+                                let datetime = NaiveDateTime::from_timestamp_opt(
+                                    timestamp / 1_000_000_000,
+                                    (timestamp % 1_000_000_000) as u32,
+                                );
+                                datetime.map(|dt| dt.hour() as i64).unwrap_or(0)
+                            })
+                            .unwrap_or(0)
+                    })
+                    .collect();
+
+                Ok(Arc::new(Int64Array::from(hours)) as ArrayRef)
+            }
+            _ => Err(ArrowError::InvalidArgumentError(
+                "Invalid input type".to_string(),
+            )),
+        };
+        Ok(result?)
+    }
+}
+
+#[derive(Debug)]
+pub struct MillisecondFunction;
+
+impl ScalarFunctionDef for MillisecondFunction {
+    fn name(&self) -> &str {
+        "millisecond"
+    }
+
+    fn signature(&self) -> Signature {
+        // Function accepts Timestamp
+        Signature::one_of(
+            vec![TypeSignature::Exact(vec![DataType::Timestamp(
+                TimeUnit::Nanosecond,
+                None,
+            )])],
+            Volatility::Immutable,
+        )
+    }
+
+    fn return_type(&self) -> ReturnTypeFunction {
+        let return_type = Arc::new(DataType::Int64); // Returning as bigint
+        Arc::new(move |_| Ok(return_type.clone()))
+    }
+
+    fn execute(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
+        assert_eq!(args.len(), 1);
+
+        let input = &args[0];
+        let result = match input.data_type() {
+            DataType::Timestamp(TimeUnit::Nanosecond, _) => {
+                let timestamp_array = input
+                    .as_any()
+                    .downcast_ref::<TimestampNanosecondArray>()
+                    .expect("Expected a nanosecond timestamp array");
+
+                let milliseconds: Vec<i64> = timestamp_array
+                    .iter()
+                    .map(|timestamp_opt| {
+                        timestamp_opt
+                            .map(|timestamp| (timestamp % 1_000_000_000) / 1_000_000) // extract milliseconds from nanoseconds
+                            .unwrap_or(0)
+                    })
+                    .collect();
+
+                Ok(Arc::new(Int64Array::from(milliseconds)) as ArrayRef)
+            }
+            _ => Err(ArrowError::InvalidArgumentError(
+                "Invalid input type".to_string(),
+            )),
+        };
+        Ok(result?)
+    }
+}
+
+#[derive(Debug)]
+pub struct MinuteFunction;
+
+impl ScalarFunctionDef for MinuteFunction {
+    fn name(&self) -> &str {
+        "minute"
+    }
+
+    fn signature(&self) -> Signature {
+        // Function accepts Timestamp
+        Signature::one_of(
+            vec![TypeSignature::Exact(vec![DataType::Timestamp(
+                TimeUnit::Nanosecond,
+                None,
+            )])],
+            Volatility::Immutable,
+        )
+    }
+
+    fn return_type(&self) -> ReturnTypeFunction {
+        let return_type = Arc::new(DataType::Int64); // Returning as bigint
+        Arc::new(move |_| Ok(return_type.clone()))
+    }
+
+    fn execute(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
+        assert_eq!(args.len(), 1);
+
+        let input = &args[0];
+        let result = match input.data_type() {
+            DataType::Timestamp(TimeUnit::Nanosecond, _) => {
+                let timestamp_array = input
+                    .as_any()
+                    .downcast_ref::<TimestampNanosecondArray>()
+                    .expect("Expected a nanosecond timestamp array");
+
+                let minutes: Vec<i64> = timestamp_array
+                    .iter()
+                    .map(|timestamp_opt| {
+                        timestamp_opt
+                            .map(|timestamp| {
+                                let datetime = NaiveDateTime::from_timestamp_opt(
+                                    timestamp / 1_000_000_000,
+                                    (timestamp % 1_000_000_000) as u32,
+                                );
+                                datetime.map(|dt| dt.minute() as i64).unwrap_or(0)
+                            })
+                            .unwrap_or(0)
+                    })
+                    .collect();
+
+                Ok(Arc::new(Int64Array::from(minutes)) as ArrayRef)
+            }
+            _ => Err(ArrowError::InvalidArgumentError(
+                "Invalid input type".to_string(),
+            )),
+        };
+        Ok(result?)
+    }
+}
+
+#[derive(Debug)]
+pub struct MonthFunction;
+
+impl ScalarFunctionDef for MonthFunction {
+    fn name(&self) -> &str {
+        "month"
+    }
+
+    fn signature(&self) -> Signature {
+        // Function accepts Date32 and Timestamp
+        Signature::one_of(
+            vec![
+                TypeSignature::Exact(vec![DataType::Date32]),
+                TypeSignature::Exact(vec![DataType::Timestamp(
+                    TimeUnit::Nanosecond,
+                    None,
+                )]),
+            ],
+            Volatility::Immutable,
+        )
+    }
+
+    fn return_type(&self) -> ReturnTypeFunction {
+        let return_type = Arc::new(DataType::Int64); // Returning as bigint
+        Arc::new(move |_| Ok(return_type.clone()))
+    }
+
+    fn execute(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
+        assert_eq!(args.len(), 1);
+
+        let input = &args[0];
+        let result = match input.data_type() {
+            DataType::Date32 => {
+                let date_array = input
+                    .as_any()
+                    .downcast_ref::<Date32Array>()
+                    .expect("Expected a date array");
+
+                let months: Vec<i64> = date_array
+                    .iter()
+                    .map(|date_opt| {
+                        date_opt
+                            .map(|date| {
+                                let naive_date = Date32Type::to_naive_date(date);
+                                naive_date.month() as i64
+                            })
+                            .unwrap_or(0)
+                    })
+                    .collect();
+
+                Ok(Arc::new(Int64Array::from(months)) as ArrayRef)
+            }
+            DataType::Timestamp(TimeUnit::Nanosecond, _) => {
+                let timestamp_array = input
+                    .as_any()
+                    .downcast_ref::<TimestampNanosecondArray>()
+                    .expect("Expected a nanosecond timestamp array");
+
+                let months: Vec<i64> = timestamp_array
+                    .iter()
+                    .map(|timestamp_opt| {
+                        timestamp_opt
+                            .map(|timestamp| {
+                                let datetime = NaiveDateTime::from_timestamp_opt(
+                                    timestamp / 1_000_000_000,
+                                    (timestamp % 1_000_000_000) as u32,
+                                );
+                                datetime.map(|dt| dt.month() as i64).unwrap_or(0)
+                            })
+                            .unwrap_or(0)
+                    })
+                    .collect();
+
+                Ok(Arc::new(Int64Array::from(months)) as ArrayRef)
+            }
+            _ => Err(ArrowError::InvalidArgumentError(
+                "Invalid input type".to_string(),
+            )),
+        };
+        Ok(result?)
+    }
+}
+
+#[derive(Debug)]
+pub struct QuarterFunction;
+
+impl ScalarFunctionDef for QuarterFunction {
+    fn name(&self) -> &str {
+        "quarter"
+    }
+
+    fn signature(&self) -> Signature {
+        // Function accepts Date32 and Timestamp
+        Signature::one_of(
+            vec![
+                TypeSignature::Exact(vec![DataType::Date32]),
+                TypeSignature::Exact(vec![DataType::Timestamp(
+                    TimeUnit::Nanosecond,
+                    None,
+                )]),
+            ],
+            Volatility::Immutable,
+        )
+    }
+
+    fn return_type(&self) -> ReturnTypeFunction {
+        let return_type = Arc::new(DataType::Int64); // Returning as bigint
+        Arc::new(move |_| Ok(return_type.clone()))
+    }
+
+    fn execute(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
+        assert_eq!(args.len(), 1);
+
+        let input = &args[0];
+        let result = match input.data_type() {
+            DataType::Date32 => {
+                let date_array = input
+                    .as_any()
+                    .downcast_ref::<Date32Array>()
+                    .expect("Expected a date array");
+
+                let quarters: Vec<i64> = date_array
+                    .iter()
+                    .map(|date_opt| {
+                        date_opt
+                            .map(|date| {
+                                let naive_date = Date32Type::to_naive_date(date);
+                                ((naive_date.month() - 1) / 3 + 1) as i64
+                            })
+                            .unwrap_or(0)
+                    })
+                    .collect();
+
+                Ok(Arc::new(Int64Array::from(quarters)) as ArrayRef)
+            }
+            DataType::Timestamp(TimeUnit::Nanosecond, _) => {
+                let timestamp_array = input
+                    .as_any()
+                    .downcast_ref::<TimestampNanosecondArray>()
+                    .expect("Expected a nanosecond timestamp array");
+
+                let quarters: Vec<i64> = timestamp_array
+                    .iter()
+                    .map(|timestamp_opt| {
+                        timestamp_opt
+                            .map(|timestamp| {
+                                let datetime = NaiveDateTime::from_timestamp_opt(
+                                    timestamp / 1_000_000_000,
+                                    (timestamp % 1_000_000_000) as u32,
+                                );
+                                datetime
+                                    .map(|dt| ((dt.month() - 1) / 3 + 1) as i64) // calculate quarter
+                                    .unwrap_or(0)
+                            })
+                            .unwrap_or(0)
+                    })
+                    .collect();
+
+                Ok(Arc::new(Int64Array::from(quarters)) as ArrayRef)
+            }
+            _ => Err(ArrowError::InvalidArgumentError(
+                "Invalid input type".to_string(),
+            )),
+        };
+        Ok(result?)
+    }
+}
+
+#[derive(Debug)]
+pub struct SecondFunction;
+
+impl ScalarFunctionDef for SecondFunction {
+    fn name(&self) -> &str {
+        "second"
+    }
+
+    fn signature(&self) -> Signature {
+        // Function accepts Date32 and Timestamp
+        Signature::one_of(
+            vec![
+                TypeSignature::Exact(vec![DataType::Date32]),
+                TypeSignature::Exact(vec![DataType::Timestamp(
+                    TimeUnit::Nanosecond,
+                    None,
+                )]),
+            ],
+            Volatility::Immutable,
+        )
+    }
+
+    fn return_type(&self) -> ReturnTypeFunction {
+        let return_type = Arc::new(DataType::Int64); // Returning as bigint
+        Arc::new(move |_| Ok(return_type.clone()))
+    }
+
+    fn execute(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
+        assert_eq!(args.len(), 1);
+
+        let input = &args[0];
+        let result = match input.data_type() {
+            DataType::Date32 => {
+                // For Date32, return 0 for all entries as there is no specific second information
+                let date_array = input
+                    .as_any()
+                    .downcast_ref::<Date32Array>()
+                    .expect("Expected a date array");
+                let seconds: Vec<i64> = date_array.iter().map(|_| 0).collect();
+                Ok(Arc::new(Int64Array::from(seconds)) as ArrayRef)
+            }
+            DataType::Timestamp(TimeUnit::Nanosecond, _) => {
+                let timestamp_array = input
+                    .as_any()
+                    .downcast_ref::<TimestampNanosecondArray>()
+                    .expect("Expected a nanosecond timestamp array");
+
+                let seconds: Vec<i64> = timestamp_array
+                    .iter()
+                    .map(|timestamp_opt| {
+                        timestamp_opt
+                            .map(|timestamp| {
+                                let datetime = NaiveDateTime::from_timestamp_opt(
+                                    timestamp / 1_000_000_000,
+                                    (timestamp % 1_000_000_000) as u32,
+                                );
+                                datetime.map(|dt| dt.second() as i64).unwrap_or(0)
+                            })
+                            .unwrap_or(0)
+                    })
+                    .collect();
+
+                Ok(Arc::new(Int64Array::from(seconds)) as ArrayRef)
+            }
+            _ => Err(ArrowError::InvalidArgumentError(
+                "Invalid input type".to_string(),
+            )),
+        };
+        Ok(result?)
+    }
+}
+
+#[derive(Debug)]
+pub struct WeekFunction;
+
+impl ScalarFunctionDef for WeekFunction {
+    fn name(&self) -> &str {
+        "week"
+    }
+
+    fn signature(&self) -> Signature {
+        // Function accepts Date32 and Timestamp
+        Signature::one_of(
+            vec![
+                TypeSignature::Exact(vec![DataType::Date32]),
+                TypeSignature::Exact(vec![DataType::Timestamp(
+                    TimeUnit::Nanosecond,
+                    None,
+                )]),
+            ],
+            Volatility::Immutable,
+        )
+    }
+
+    fn return_type(&self) -> ReturnTypeFunction {
+        let return_type = Arc::new(DataType::Int64); // Returning as bigint
+        Arc::new(move |_| Ok(return_type.clone()))
+    }
+
+    fn execute(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
+        assert_eq!(args.len(), 1);
+
+        let input = &args[0];
+        let result =
+            match input.data_type() {
+                DataType::Date32 | DataType::Timestamp(TimeUnit::Nanosecond, _) => {
+                    let date_iter: Box<dyn Iterator<Item = Option<NaiveDate>>> =
+                        match input.data_type() {
+                            DataType::Date32 => {
+                                let date_array = input
+                                    .as_any()
+                                    .downcast_ref::<Date32Array>()
+                                    .expect("Expected a date array");
+                                Box::new(date_array.iter().map(|date_opt| {
+                                    date_opt.map(Date32Type::to_naive_date)
+                                }))
+                            }
+                            DataType::Timestamp(TimeUnit::Nanosecond, _) => {
+                                let timestamp_array = input
+                                    .as_any()
+                                    .downcast_ref::<TimestampNanosecondArray>()
+                                    .expect("Expected a nanosecond timestamp array");
+                                Box::new(timestamp_array.iter().map(|timestamp_opt| {
+                                    timestamp_opt
+                                        .map(|timestamp| {
+                                            let seconds = timestamp / 1_000_000_000;
+                                            let ns = (timestamp % 1_000_000_000) as u32;
+                                            NaiveDateTime::from_timestamp_opt(seconds, ns)
+                                                .map(|dt| dt.date())
+                                        })
+                                        .flatten()
+                                }))
+                            }
+                            _ => unreachable!(),
+                        };
+
+                    let weeks: Vec<i64> = date_iter
+                        .map(|date_opt| {
+                            date_opt
+                                .map(|date| date.iso_week().week() as i64)
+                                .unwrap_or(0)
+                        })
+                        .collect();
+
+                    Ok(Arc::new(Int64Array::from(weeks)) as ArrayRef)
+                }
+                _ => Err(ArrowError::InvalidArgumentError(
+                    "Invalid input type".to_string(),
+                )),
+            };
+        Ok(result?)
+    }
+}
+
+#[derive(Debug)]
+pub struct YearFunction;
+
+impl ScalarFunctionDef for YearFunction {
+    fn name(&self) -> &str {
+        "year"
+    }
+
+    fn signature(&self) -> Signature {
+        // Function accepts Date32 and Timestamp
+        Signature::one_of(
+            vec![
+                TypeSignature::Exact(vec![DataType::Date32]),
+                TypeSignature::Exact(vec![DataType::Timestamp(
+                    TimeUnit::Nanosecond,
+                    None,
+                )]),
+            ],
+            Volatility::Immutable,
+        )
+    }
+
+    fn return_type(&self) -> ReturnTypeFunction {
+        let return_type = Arc::new(DataType::Int64); // Returning as bigint
+        Arc::new(move |_| Ok(return_type.clone()))
+    }
+
+    fn execute(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
+        assert_eq!(args.len(), 1);
+
+        let input = &args[0];
+        let result = match input.data_type() {
+            DataType::Date32 | DataType::Timestamp(TimeUnit::Nanosecond, _) => {
+                let date_iter: Box<dyn Iterator<Item = Option<NaiveDate>>> =
+                    match input.data_type() {
+                        DataType::Date32 => {
+                            let date_array = input
+                                .as_any()
+                                .downcast_ref::<Date32Array>()
+                                .expect("Expected a date array");
+                            Box::new(
+                                date_array.iter().map(|date_opt| {
+                                    date_opt.map(Date32Type::to_naive_date)
+                                }),
+                            )
+                        }
+                        DataType::Timestamp(TimeUnit::Nanosecond, _) => {
+                            let timestamp_array = input
+                                .as_any()
+                                .downcast_ref::<TimestampNanosecondArray>()
+                                .expect("Expected a nanosecond timestamp array");
+                            Box::new(timestamp_array.iter().map(|timestamp_opt| {
+                                timestamp_opt
+                                    .map(|timestamp| {
+                                        let seconds = timestamp / 1_000_000_000;
+                                        let ns = (timestamp % 1_000_000_000) as u32;
+                                        NaiveDateTime::from_timestamp_opt(seconds, ns)
+                                            .map(|dt| dt.date())
+                                    })
+                                    .flatten()
+                            }))
+                        }
+                        _ => unreachable!(),
+                    };
+
+                let years: Vec<i64> = date_iter
+                    .map(|date_opt| date_opt.map(|date| date.year() as i64).unwrap_or(0))
+                    .collect();
+
+                Ok(Arc::new(Int64Array::from(years)) as ArrayRef)
+            }
+            _ => Err(ArrowError::InvalidArgumentError(
+                "Invalid input type".to_string(),
+            )),
+        };
+        Ok(result?)
+    }
+}
+
+#[derive(Debug)]
+pub struct YearOfWeekFunction;
+
+impl ScalarFunctionDef for YearOfWeekFunction {
+    fn name(&self) -> &str {
+        "year_of_week"
+    }
+
+    fn signature(&self) -> Signature {
+        // Function accepts Date32 and Timestamp
+        Signature::one_of(
+            vec![
+                TypeSignature::Exact(vec![DataType::Date32]),
+                TypeSignature::Exact(vec![DataType::Timestamp(
+                    TimeUnit::Nanosecond,
+                    None,
+                )]),
+            ],
+            Volatility::Immutable,
+        )
+    }
+
+    fn return_type(&self) -> ReturnTypeFunction {
+        let return_type = Arc::new(DataType::Int64); // Returning as bigint
+        Arc::new(move |_| Ok(return_type.clone()))
+    }
+
+    fn execute(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
+        assert_eq!(args.len(), 1);
+
+        let input = &args[0];
+        let result =
+            match input.data_type() {
+                DataType::Date32 | DataType::Timestamp(TimeUnit::Nanosecond, _) => {
+                    let date_iter: Box<dyn Iterator<Item = Option<NaiveDate>>> =
+                        match input.data_type() {
+                            DataType::Date32 => {
+                                let date_array = input
+                                    .as_any()
+                                    .downcast_ref::<Date32Array>()
+                                    .expect("Expected a date array");
+                                Box::new(date_array.iter().map(|date_opt| {
+                                    date_opt.map(Date32Type::to_naive_date)
+                                }))
+                            }
+                            DataType::Timestamp(TimeUnit::Nanosecond, _) => {
+                                let timestamp_array = input
+                                    .as_any()
+                                    .downcast_ref::<TimestampNanosecondArray>()
+                                    .expect("Expected a nanosecond timestamp array");
+                                Box::new(timestamp_array.iter().map(|timestamp_opt| {
+                                    timestamp_opt
+                                        .map(|timestamp| {
+                                            let seconds = timestamp / 1_000_000_000;
+                                            let ns = (timestamp % 1_000_000_000) as u32;
+                                            NaiveDateTime::from_timestamp_opt(seconds, ns)
+                                                .map(|dt| dt.date())
+                                        })
+                                        .flatten()
+                                }))
+                            }
+                            _ => unreachable!(),
+                        };
+
+                    let year_of_weeks: Vec<i64> = date_iter
+                        .map(|date_opt| {
+                            date_opt
+                                .map(|date| date.iso_week().year() as i64) // Retrieve year of the ISO week
+                                .unwrap_or(0)
+                        })
+                        .collect();
+
+                    Ok(Arc::new(Int64Array::from(year_of_weeks)) as ArrayRef)
+                }
+                _ => Err(ArrowError::InvalidArgumentError(
+                    "Invalid input type".to_string(),
+                )),
+            };
+        Ok(result?)
+    }
+}
+
 fn cal_last_day_of_month(date: NaiveDate) -> NaiveDate {
     let year = date.year();
     let month = date.month();
@@ -1504,6 +2349,18 @@ impl ScalarFunctionPackage for FunctionPackage {
             Box::new(ParseDurationFunction),
             Box::new(DateAddFunction),
             Box::new(LastDayOfMonthFunction),
+            Box::new(YearOfWeekFunction),
+            Box::new(DayOfYearFunction),
+            Box::new(DayOfWeekFunction),
+            Box::new(HourFunction),
+            Box::new(MillisecondFunction),
+            Box::new(MinuteFunction),
+            Box::new(SecondFunction),
+            Box::new(WeekFunction),
+            Box::new(YearFunction),
+            Box::new(MonthFunction),
+            Box::new(YearFunction),
+            Box::new(QuarterFunction),
         ]
     }
 }
@@ -1837,6 +2694,74 @@ mod test {
             "last_day_of_month( TIMESTAMP '2023-02-15T08:30:00')",
             "2023-02-28"
         );
+        Ok(())
+    }
+    #[tokio::test]
+    async fn test_day_of_year() -> Result<()> {
+        test_expression!("day_of_year(Date '2023-03-15')", "74");
+        test_expression!("day_of_year(timestamp '2020-06-10 15:55:23.383345')", "162");
+        Ok(())
+    }
+    #[tokio::test]
+    async fn test_day_of_week() -> Result<()> {
+        test_expression!("day_of_week(Date '2023-03-15')", "3");
+        test_expression!("day_of_week(timestamp '2020-06-10 15:55:23.383345')", "3");
+        Ok(())
+    }
+    #[tokio::test]
+    async fn test_hour() -> Result<()> {
+        test_expression!("hour(Date '2023-03-15')", "0"); // Date type does not have hour info, defaulting to 0
+        test_expression!("hour(timestamp '2020-06-10 15:55:23.383345')", "15");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_millisecond() -> Result<()> {
+        test_expression!("millisecond(Date '2023-03-15')", "0"); // Date type does not have millisecond info, defaulting to 0
+        test_expression!("millisecond(timestamp '2020-06-10 15:55:23.383345')", "383");
+        Ok(())
+    }
+    #[tokio::test]
+    async fn test_minute() -> Result<()> {
+        test_expression!("minute(Date '2023-03-15')", "0"); // Date type does not have minute info, defaulting to 0
+        test_expression!("minute(timestamp '2020-06-10 15:55:23.383345')", "55");
+        Ok(())
+    }
+    #[tokio::test]
+    async fn test_month() -> Result<()> {
+        test_expression!("month(Date '2023-03-15')", "3");
+        test_expression!("month(timestamp '2020-06-10 15:55:23.383345')", "6");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_quarter() -> Result<()> {
+        test_expression!("quarter(Date '2023-03-15')", "1");
+        test_expression!("quarter(timestamp '2020-06-10 15:55:23.383345')", "2");
+        Ok(())
+    }
+    #[tokio::test]
+    async fn test_second() -> Result<()> {
+        test_expression!("second(Date '2023-03-15')", "0"); // Date type does not have second info, defaulting to 0
+        test_expression!("second(timestamp '2020-06-10 15:55:23.383345')", "23");
+        Ok(())
+    }
+    #[tokio::test]
+    async fn test_week() -> Result<()> {
+        test_expression!("week(Date '2023-01-04')", "1");
+        test_expression!("week(timestamp '2020-12-31 23:59:59.999999')", "53");
+        Ok(())
+    }
+    #[tokio::test]
+    async fn test_year() -> Result<()> {
+        test_expression!("year(Date '2023-03-15')", "2023");
+        test_expression!("year(timestamp '2020-06-10 15:55:23.383345')", "2020");
+        Ok(())
+    }
+    #[tokio::test]
+    async fn test_year_of_week() -> Result<()> {
+        test_expression!("year_of_week(Date '2023-01-04')", "2023");
+        test_expression!("year_of_week(timestamp '2020-12-31 23:59:59')", "2020");
         Ok(())
     }
 }
