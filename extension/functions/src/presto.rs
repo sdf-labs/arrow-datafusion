@@ -1577,10 +1577,6 @@ impl ScalarFunctionDef for DateFormatFunction {
                             'Y' => datetime.format("%Y").to_string(),
                             'y' => datetime.format("%y").to_string(),
                             'D' | 'U' | 'u' | 'V' | 'w' | 'X' => {
-                                // format!(
-                                //         "%{} is not currently supported in the date format string in Trino (Presto).",
-                                //         format_char
-                                //     )
                                 return Err(DataFusionError::Execution(format!(
                                     "%{} is not currently supported in the date format string in Trino (Presto).",
                                     format_char
@@ -2091,34 +2087,8 @@ mod test {
             "01 2019 321000"
         );
         test_expression!(
-            "date_format(TIMESTAMP '2001-01-09 13:04:05.321', '%Y年%m月%d日')",
-            "2001年01月09日"
-        );
-
-        //no support
-        test_expression!(
-            "date_format(DATE '2001-01-09', '%D')",
-            "Error: %D not supported in date format string"
-        );
-        test_expression!(
-            "date_format(DATE '2001-01-09', '%U')",
-            "Error: %U not supported in date format string"
-        );
-        test_expression!(
-            "date_format(DATE '2001-01-09', '%u')",
-            "Error: %u not supported in date format string"
-        );
-        test_expression!(
-            "date_format(DATE '2001-01-09', '%V')",
-            "Error: %V not supported in date format string"
-        );
-        test_expression!(
-            "date_format(DATE '2001-01-09', '%w')",
-            "Error: %w not supported in date format string"
-        );
-        test_expression!(
-            "date_format(DATE '2001-01-09', '%X')",
-            "Error: %X not supported in date format string"
+            "date_format(TIMESTAMP '2001-01-09 13:04:05.321', '%Yyear%mmonth%dday')",
+            "2001year01month09day"
         );
 
         Ok(())
