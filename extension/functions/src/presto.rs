@@ -2415,7 +2415,7 @@ impl ScalarFunctionDef for DateFormatFunction {
                             'T' => datetime.format("%T").to_string(),
                             'v' => datetime.format("%V").to_string(),
                             'W' => datetime.format("%A").to_string(),
-                            'x' =>datetime.format("%G").to_string(),
+                            'x' => datetime.format("%G").to_string(),
                             'Y' => datetime.format("%Y").to_string(),
                             'y' => datetime.format("%y").to_string(),
                             'D' | 'U' | 'u' | 'V' | 'w' | 'X' => {
@@ -2563,7 +2563,7 @@ impl ScalarFunctionDef for FormatDatetimeFunction {
                         }
                     }
                     '\'' => "'".to_string(), // Handle literal text delimiter
-                    _ =>  c.to_string().repeat(count),
+                    _ => c.to_string().repeat(count),
                 };
 
                 formatted_date += &formatted_component;
