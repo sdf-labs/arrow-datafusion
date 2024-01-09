@@ -2415,10 +2415,7 @@ impl ScalarFunctionDef for DateFormatFunction {
                             'T' => datetime.format("%T").to_string(),
                             'v' => datetime.format("%V").to_string(),
                             'W' => datetime.format("%A").to_string(),
-                            'x' => {
-                                let iso_week = datetime.iso_week();
-                                format!("{}", iso_week.year())
-                            }
+                            'x' =>datetime.format("%G").to_string(),
                             'Y' => datetime.format("%Y").to_string(),
                             'y' => datetime.format("%y").to_string(),
                             'D' | 'U' | 'u' | 'V' | 'w' | 'X' => {
@@ -2433,6 +2430,143 @@ impl ScalarFunctionDef for DateFormatFunction {
                 } else {
                     formatted_date.push(c);
                 }
+            }
+            formatted_dates.push(Some(formatted_date));
+        }
+
+        Ok(Arc::new(StringArray::from(formatted_dates)) as ArrayRef)
+    }
+}
+#[derive(Debug)]
+pub struct FormatDatetimeFunction;
+
+impl ScalarFunctionDef for FormatDatetimeFunction {
+    fn name(&self) -> &str {
+        "format_datetime"
+    }
+
+    fn signature(&self) -> Signature {
+        Signature::exact(
+            vec![
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
+                DataType::Utf8,
+            ],
+            Volatility::Immutable,
+        )
+    }
+
+    fn return_type(&self) -> ReturnTypeFunction {
+        Arc::new(move |_| Ok(Arc::new(DataType::Utf8)))
+    }
+
+    fn execute(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
+        // Validate input arguments
+        assert_eq!(args.len(), 2, "date_format requires exactly two arguments");
+
+        let timestamp_array = args[0]
+            .as_any()
+            .downcast_ref::<TimestampNanosecondArray>()
+            .expect("Expected Timestamp nanosecond array for argument 1");
+        let timestamp_milli_arr = timestamp_array
+            .iter()
+            .map(|timestamp| timestamp.map(|timestamp| timestamp / 1_000_000))
+            .collect::<TimestampMillisecondArray>();
+        let format_array = args[1]
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("Expected String array for argument 2");
+
+        let mut formatted_dates = Vec::new();
+
+        for i in 0..timestamp_milli_arr.len() {
+            if timestamp_milli_arr.is_null(i) || format_array.is_null(i) {
+                formatted_dates.push(None);
+                continue;
+            }
+
+            let timestamp_millis = timestamp_milli_arr.value(i);
+            let format_string = format_array.value(i).to_string();
+            let naive_datetime = NaiveDateTime::from_timestamp_millis(timestamp_millis)
+                .expect("Failed to convert timestamp to NaiveDateTime");
+            let datetime: DateTime<Utc> =
+                DateTime::from_naive_utc_and_offset(naive_datetime, Utc);
+
+            let mut formatted_date = String::new();
+            let mut chars = format_string.chars().peekable();
+            let mut escape_mode = false;
+
+            while let Some(c) = chars.next() {
+                if c == '\'' && chars.peek() != Some(&'\'') {
+                    escape_mode = !escape_mode;
+                    continue;
+                }
+
+                if escape_mode {
+                    formatted_date.push(c);
+                    continue;
+                }
+
+                // Repeating character logic: count consecutive characters
+                let mut count = 1;
+                while chars.peek() == Some(&c) {
+                    count += 1;
+                    chars.next(); // consume the character
+                }
+
+                let formatted_component = match c {
+                    'G' => {
+                        if datetime.year() < 1 {
+                            "BC".to_string()
+                        } else {
+                            "AD".to_string()
+                        }
+                    }
+                    'C' => format!("{:0>width$}", datetime.year() / 100, width = count),
+                    'Y' => {
+                        if count == 2 {
+                            format!("{:02}", datetime.year() % 100)
+                        } else {
+                            format!("{:0>width$}", datetime.format("%Y"), width = count)
+                        }
+                    }
+                    'x' => format!("{:0>width$}", datetime.format("%G"), width = count),
+                    'w' => format!("{:0>width$}", datetime.format("%V"), width = count),
+                    'e' => format!("{:0>width$}", datetime.format("%u"), width = count),
+                    'E' => format!("{:0>width$}", datetime.format("%a"), width = count),
+                    'y' => format!("{:0>width$}", datetime.format("%Y"), width = count),
+                    'D' => format!("{:0>width$}", datetime.format("%j"), width = count),
+                    'M' => format!("{:0>width$}", datetime.format("%m"), width = count),
+                    'd' => format!("{:0>width$}", datetime.format("%d"), width = count),
+                    'a' => format!("{:0>width$}", datetime.format("%p"), width = count),
+                    'K' => {
+                        let hour_of_halfday_k = datetime.hour() % 12;
+                        format!("{:0>width$}", hour_of_halfday_k, width = count)
+                    }
+                    'h' => format!("{:0>width$}", datetime.format("%I"), width = count),
+                    'H' => format!("{:0>width$}", datetime.format("%H"), width = count),
+                    'k' => {
+                        let k24_midnight = if datetime.hour() == 0 {
+                            24
+                        } else {
+                            datetime.hour()
+                        }; // Midnight
+                        format!("{:0>width$}", k24_midnight, width = count)
+                    }
+                    'm' => format!("{:0>width$}", datetime.format("%M"), width = count),
+                    's' => format!("{:0>width$}", datetime.format("%S"), width = count),
+                    'S' => {
+                        let milliseconds = datetime.timestamp_subsec_millis();
+                        match count {
+                            1 => format!("{}", milliseconds / 100),
+                            2 => format!("{}", milliseconds / 10),
+                            _ => format!("{:0<width$}", milliseconds, width = count),
+                        }
+                    }
+                    '\'' => "'".to_string(), // Handle literal text delimiter
+                    _ =>  c.to_string().repeat(count),
+                };
+
+                formatted_date += &formatted_component;
             }
             formatted_dates.push(Some(formatted_date));
         }
@@ -2480,6 +2614,7 @@ impl ScalarFunctionPackage for FunctionPackage {
             Box::new(YearFunction),
             Box::new(QuarterFunction),
             Box::new(DateFormatFunction),
+            Box::new(FormatDatetimeFunction),
         ]
     }
 }
@@ -3014,6 +3149,150 @@ mod test {
         test_expression!(
             "date_format(TIMESTAMP '2001-01-09 13:04:05.321', '%Yyear%mmonth%dday')",
             "2001year01month09day"
+        );
+        Ok(())
+    }
+    #[tokio::test]
+    async fn test_format_datetime() -> Result<()> {
+        // timestamp
+        // Arrow DataFusion does not currently support dates before the Common Era.
+        test_expression!(
+            "format_datetime(TIMESTAMP '2001-12-31 13:04:05.321', 'G')",
+            "AD"
+        );
+        test_expression!(
+            "format_datetime(TIMESTAMP '2001-01-09 13:04:05.321', 'C')",
+            "20"
+        );
+        test_expression!(
+            "format_datetime(TIMESTAMP '2018-12-31 13:04:05.321', 'Y')",
+            "2018"
+        );
+        test_expression!(
+            "format_datetime(TIMESTAMP '2018-12-31 13:04:05.321', 'x')",
+            "2019"
+        );
+        test_expression!(
+            "format_datetime(TIMESTAMP '2001-01-09 13:04:05.321', 'w')",
+            "02"
+        );
+        test_expression!(
+            "format_datetime(TIMESTAMP '2001-01-09 13:04:05.321', 'e')",
+            "2"
+        );
+        test_expression!(
+            "format_datetime(TIMESTAMP '2001-01-09 13:04:05.321', 'E')",
+            "Tue"
+        );
+        test_expression!(
+            "format_datetime(TIMESTAMP '2001-01-09 13:04:05.321', 'y')",
+            "2001"
+        );
+        test_expression!(
+            "format_datetime(TIMESTAMP '2001-02-09 13:04:05.321', 'D')",
+            "040"
+        );
+        test_expression!(
+            "format_datetime(TIMESTAMP '2001-01-09 13:04:05.321', 'M')",
+            "01"
+        );
+        test_expression!(
+            "format_datetime(TIMESTAMP '2001-01-09 13:04:05.321', 'd')",
+            "09"
+        );
+        test_expression!(
+            "format_datetime(TIMESTAMP '2001-01-09 13:04:05.321', 'a')",
+            "PM"
+        );
+        test_expression!(
+            "format_datetime(TIMESTAMP '2001-01-09 13:04:05.321', 'K')",
+            "1"
+        );
+        test_expression!(
+            "format_datetime(TIMESTAMP '2001-01-09 12:04:05.321', 'K')",
+            "0"
+        );
+        test_expression!(
+            "format_datetime(TIMESTAMP '2001-01-09 00:04:05.321', 'h')",
+            "12"
+        );
+        test_expression!(
+            "format_datetime(TIMESTAMP '2001-01-09 13:04:05.321', 'H')",
+            "13"
+        );
+        test_expression!(
+            "format_datetime(TIMESTAMP '2001-01-09 13:04:05.321', 'k')",
+            "13"
+        );
+        test_expression!(
+            "format_datetime(TIMESTAMP '2001-01-09 00:04:05.321', 'k')",
+            "24"
+        );
+        test_expression!(
+            "format_datetime(TIMESTAMP '2001-01-09 00:04:05.321', 'm')",
+            "04"
+        );
+        test_expression!(
+            "format_datetime(TIMESTAMP '2001-01-09 13:04:05.321', 's')",
+            "05"
+        );
+        test_expression!(
+            "format_datetime(TIMESTAMP '2001-01-09 13:04:05.321', 'S')",
+            "3"
+        );
+        test_expression!(
+            "format_datetime(TIMESTAMP '2001-01-09 13:04:05.30', 'SS')",
+            "30"
+        );
+        test_expression!(
+            "format_datetime(TIMESTAMP '2001-01-09 13:04:05.321', 'SSSSSS')",
+            "321000"
+        );
+
+        test_expression!(
+            "format_datetime(TIMESTAMP '2001-01-09 13:04:05.321', 'AAA')",
+            "AAA"
+        );
+        test_expression!(
+            "format_datetime(TIMESTAMP '2001-01-09 13:04:05.321', '''')",
+            ""
+        );
+        test_expression!(
+            "format_datetime(TIMESTAMP '2023-01-09 13:04:05.321', '''''')",
+            "'"
+        );
+        test_expression!(
+            "format_datetime(TIMESTAMP '2023-01-09 13:04:05.321', '''Y''')",
+            "Y"
+        );
+        test_expression!(
+            "format_datetime(TIMESTAMP '2023-01-09 13:04:05.321', 'Y ''Year''')",
+            "2023 Year"
+        );
+
+        test_expression!(
+            "format_datetime(TIMESTAMP '2001-01-09 13:04:05.321', 'YY')",
+            "01"
+        );
+        test_expression!(
+            "format_datetime(TIMESTAMP '2023-01-09 13:04:05.321', 'Y Y')",
+            "2023 2023"
+        );
+        test_expression!(
+            "format_datetime(TIMESTAMP '2023-01-09 13:04:05.321', 'YYYYY')",
+            "02023"
+        );
+        test_expression!(
+            "format_datetime(TIMESTAMP '2023-01-09 13:04:05.321', '''yyyy-MM-dd HH:mm:ss''')",
+            "yyyy-MM-dd HH:mm:ss"
+        );
+        test_expression!(
+            "format_datetime(TIMESTAMP '2023-01-09 13:04:05.321', 'yyyy-MM-dd HH:mm:ss')",
+            "2023-01-09 13:04:05"
+        );
+        test_expression!(
+            "format_datetime(TIMESTAMP '2023-01-09 13:04:05.321', 'YYYY/MM/dd HH:mm')",
+            "2023/01/09 13:04"
         );
         Ok(())
     }
