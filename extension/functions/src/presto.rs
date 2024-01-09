@@ -33,6 +33,7 @@
 // under the License.
 
 use std::{
+    collections::HashMap,
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -47,7 +48,7 @@ use arrow::{
 
 use chrono::{
     Datelike, Duration, Local, Months, NaiveDate, NaiveDateTime, NaiveTime, Offset,
-    TimeZone, Timelike, Utc,
+    TimeZone, Timelike, Utc, Weekday,
 };
 use datafusion::error::Result;
 use datafusion_common::DataFusionError;
@@ -1477,6 +1478,605 @@ fn cal_last_day_of_month(date: NaiveDate) -> NaiveDate {
                 - 1,
         )
 }
+enum DateFormatStatus {
+    Default,
+    PostPercent,
+}
+#[derive(Debug)]
+pub struct DateParseFunction;
+
+impl ScalarFunctionDef for DateParseFunction {
+    fn name(&self) -> &str {
+        "date_parse"
+    }
+
+    fn signature(&self) -> Signature {
+        Signature::exact(vec![DataType::Utf8, DataType::Utf8], Volatility::Immutable)
+    }
+
+    fn return_type(&self) -> ReturnTypeFunction {
+        Arc::new(move |_| Ok(Arc::new(DataType::Timestamp(TimeUnit::Nanosecond, None))))
+    }
+    fn execute(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
+        let string_array = args[0].as_any().downcast_ref::<StringArray>().unwrap();
+        let format_array = args[1].as_any().downcast_ref::<StringArray>().unwrap();
+
+        let mut timestamps = Vec::new();
+
+        let mut year = 1970;
+        let mut month = 1;
+        let mut day = 1;
+        let mut hour = 0;
+        let mut minute = 0;
+        let mut second = 0;
+        let mut millis = 0;
+
+        let month_map: HashMap<&str, u32> = [
+            // Abbreviated month names
+            ("jan", 1),
+            ("feb", 2),
+            ("mar", 3),
+            ("apr", 4),
+            ("may", 5),
+            ("jun", 6),
+            ("jul", 7),
+            ("aug", 8),
+            ("sep", 9),
+            ("oct", 10),
+            ("nov", 11),
+            ("dec", 12),
+            // Full month names
+            ("january", 1),
+            ("february", 2),
+            ("march", 3),
+            ("april", 4),
+            ("may", 5),
+            ("june", 6),
+            ("july", 7),
+            ("august", 8),
+            ("september", 9),
+            ("october", 10),
+            ("november", 11),
+            ("december", 12),
+        ]
+        .iter()
+        .copied()
+        .collect();
+
+        let weekday_map: HashMap<&str, chrono::Weekday> = [
+            // Abbreviated weekday names
+            ("sun", chrono::Weekday::Sun),
+            ("mon", chrono::Weekday::Mon),
+            ("tue", chrono::Weekday::Tue),
+            ("wed", chrono::Weekday::Wed),
+            ("thu", chrono::Weekday::Thu),
+            ("fri", chrono::Weekday::Fri),
+            ("sat", chrono::Weekday::Sat),
+            // Full weekday names
+            ("sunday", chrono::Weekday::Sun),
+            ("monday", chrono::Weekday::Mon),
+            ("tuesday", chrono::Weekday::Tue),
+            ("wednesday", chrono::Weekday::Wed),
+            ("thursday", chrono::Weekday::Thu),
+            ("friday", chrono::Weekday::Fri),
+            ("saturday", chrono::Weekday::Sat),
+        ]
+        .iter()
+        .cloned()
+        .collect();
+
+        for i in 0..string_array.len() {
+            let date_str = string_array.value(i);
+            let format_str = format_array.value(i);
+            let mut status = DateFormatStatus::Default;
+            let mut index = 0;
+            for c in format_str.chars() {
+                match status {
+                    DateFormatStatus::Default => match c {
+                        '%' => status = DateFormatStatus::PostPercent,
+                        c => {
+                            if date_str.as_bytes()[index] as char == c {
+                                index += 1;
+                            } else {
+                                todo!()
+                            }
+                        }
+                    },
+                    DateFormatStatus::PostPercent => match c {
+                        'Y' => match date_str[index..index + 4].parse::<i32>() {
+                            Ok(value) => {
+                                year = value;
+                                index = index + 4;
+                                status = DateFormatStatus::Default;
+                            }
+                            Err(e) => {
+                                return Err(DataFusionError::Execution(format!(
+                                    "Unable to parse year: {}",
+                                    e
+                                )))
+                            }
+                        },
+                        'y' => match date_str[index..index + 2].parse::<i32>() {
+                            Ok(value) => {
+                                year = if value >= 70 {
+                                    1900 + value
+                                } else {
+                                    2000 + value
+                                };
+                                index += 2;
+                                status = DateFormatStatus::Default;
+                            }
+                            Err(e) => {
+                                return Err(DataFusionError::Execution(format!(
+                                    "Unable to parse year: {}",
+                                    e
+                                )));
+                            }
+                        },
+                        'c' | 'm' => match parse_next_number(&date_str, index) {
+                            Ok((parsed_day, end_index)) => {
+                                if parsed_day >= 1 && parsed_day <= 12 {
+                                    month = parsed_day;
+                                    index = end_index;
+                                    status = DateFormatStatus::Default;
+                                } else {
+                                    return Err(DataFusionError::Execution(
+                                        "Invalid month".into(),
+                                    ));
+                                }
+                            }
+                            Err(e) => return Err(e),
+                        },
+                        'd' | 'e' => match parse_next_number(&date_str, index) {
+                            Ok((value, end_index)) => {
+                                if value >= 1 && value <= 31 {
+                                    day = value;
+                                    index = end_index;
+                                    status = DateFormatStatus::Default;
+                                } else {
+                                    return Err(DataFusionError::Execution(
+                                        "Invalid day".into(),
+                                    ));
+                                }
+                            }
+                            Err(e) => {
+                                return Err(DataFusionError::Execution(format!(
+                                    "Unable to parse day: {}",
+                                    e
+                                )))
+                            }
+                        },
+                        'H' | 'k' => match parse_next_number(&date_str, index) {
+                            Ok((value, end_index)) => {
+                                if value < 24 {
+                                    hour = value;
+                                    index = end_index;
+                                    status = DateFormatStatus::Default;
+                                } else {
+                                    return Err(DataFusionError::Execution(
+                                        "Invalid 24-hour".into(),
+                                    ));
+                                }
+                            }
+                            Err(e) => {
+                                return Err(DataFusionError::Execution(format!(
+                                    "Unable to parse 24-hour: {}",
+                                    e
+                                )))
+                            }
+                        },
+                        'h' | 'I' | 'l' => match parse_next_number(&date_str, index) {
+                            Ok((value, end_index)) => {
+                                if value == 12 {
+                                    hour = 0;
+                                    index = end_index;
+                                    status = DateFormatStatus::Default;
+                                } else if value < 12 {
+                                    hour = value;
+                                    index = end_index;
+                                    status = DateFormatStatus::Default;
+                                } else {
+                                    return Err(DataFusionError::Execution(
+                                        "Invalid 12-hour".into(),
+                                    ));
+                                }
+                            }
+                            Err(e) => {
+                                return Err(DataFusionError::Execution(format!(
+                                    "Unable to parse 12-hour: {}",
+                                    e
+                                )))
+                            }
+                        },
+                        'p' => match date_str[index..index + 2].to_uppercase().as_str() {
+                            "AM" => {
+                                if hour == 12 {
+                                    hour = 0;
+                                }
+                                index += 2;
+                                status = DateFormatStatus::Default;
+                            }
+                            "PM" => {
+                                if hour != 12 {
+                                    hour += 12;
+                                }
+                                index += 2;
+                                status = DateFormatStatus::Default;
+                            }
+                            _ => {
+                                return Err(DataFusionError::Execution(
+                                    "Invalid AM/PM specifier".into(),
+                                ));
+                            }
+                        },
+                        'i' => match date_str[index..index + 2].parse::<u32>() {
+                            Ok(value) => {
+                                if value < 60 {
+                                    minute = value;
+                                    index += 2;
+                                    status = DateFormatStatus::Default;
+                                }
+                            }
+                            Err(e) => {
+                                return Err(DataFusionError::Execution(format!(
+                                    "Unable to parse minute: {}",
+                                    e
+                                )))
+                            }
+                        },
+                        'S' | 's' => match date_str[index..index + 2].parse::<u32>() {
+                            Ok(value) => {
+                                if value < 60 {
+                                    second = value;
+                                    index += 2;
+                                    status = DateFormatStatus::Default;
+                                }
+                            }
+                            Err(e) => {
+                                return Err(DataFusionError::Execution(format!(
+                                    "Unable to parse seconds: {}",
+                                    e
+                                )))
+                            }
+                        },
+                        'x' => match date_str[index..index + 4].parse::<i32>() {
+                            Ok(value) => {
+                                year = value;
+                                index += 4;
+                                status = DateFormatStatus::Default;
+                            }
+                            Err(e) => {
+                                return Err(DataFusionError::Execution(format!(
+                                    "Unable to parse year: {}",
+                                    e
+                                )));
+                            }
+                        },
+                        'v' => match date_str[index..index + 2].parse::<u32>() {
+                            Ok(value) => {
+                                if value >= 1 && value <= 53 {
+                                    let iso_first_day =
+                                        NaiveDate::from_isoywd_opt(year, 1, Weekday::Mon)
+                                            .unwrap();
+                                    let days_to_add = (value - 1) * 7;
+                                    let final_date = iso_first_day
+                                        + chrono::Duration::days(days_to_add as i64);
+
+                                    year = final_date.year();
+                                    month = final_date.month();
+                                    day = final_date.day();
+
+                                    index += 2;
+                                    status = DateFormatStatus::Default;
+                                } else {
+                                    return Err(DataFusionError::Execution(
+                                        "Invalid week number".into(),
+                                    ));
+                                }
+                            }
+                            Err(e) => {
+                                return Err(DataFusionError::Execution(format!(
+                                    "Unable to parse week number: {}",
+                                    e
+                                )));
+                            }
+                        },
+                        'f' => {
+                            let mut fraction_str = String::new();
+                            let mut length = 0;
+
+                            while index + length < date_str.len()
+                                && date_str.as_bytes()[index + length].is_ascii_digit()
+                            {
+                                fraction_str
+                                    .push(date_str.as_bytes()[index + length] as char);
+                                length += 1;
+
+                                if length > 9 {
+                                    return Err(DataFusionError::Execution(
+                                        "Fractional second precision not supported"
+                                            .into(),
+                                    ));
+                                }
+                            }
+
+                            match fraction_str.parse::<String>() {
+                                Ok(value) => {
+                                    if length >= 3 {
+                                        millis = value[..3].parse().unwrap_or(0);
+                                        index += length;
+                                        status = DateFormatStatus::Default;
+                                    } else {
+                                        match length {
+                                            1 => {
+                                                millis =
+                                                    value.parse::<u32>().unwrap() * 100
+                                            }
+                                            2 => {
+                                                millis =
+                                                    value.parse::<u32>().unwrap() * 10
+                                            }
+                                            _ => (),
+                                        }
+                                    };
+                                }
+                                Err(e) => {
+                                    return Err(DataFusionError::Execution(format!(
+                                        "Unable to parse millis: {}",
+                                        e
+                                    )))
+                                }
+                            }
+                        }
+                        'M' | 'b' => {
+                            let mut end_index = index;
+                            while end_index < date_str.len()
+                                && date_str.as_bytes()[end_index].is_ascii_alphabetic()
+                            {
+                                end_index += 1;
+                            }
+
+                            let month_num = &date_str[index..end_index];
+
+                            match month_map.get(month_num.to_lowercase().as_str()) {
+                                Some(&num) => {
+                                    month = num;
+                                    index = end_index;
+                                    status = DateFormatStatus::Default;
+                                }
+                                None => {
+                                    return Err(DataFusionError::Execution(format!(
+                                        "Invalid full month name: {}",
+                                        month_num
+                                    )));
+                                }
+                            }
+                        }
+                        'W' | 'a' => {
+                            let mut end_index = index;
+                            while end_index < date_str.len()
+                                && date_str.as_bytes()[end_index].is_ascii_alphabetic()
+                            {
+                                end_index += 1;
+                            }
+                            let full_weekday = &date_str[index..end_index];
+                            match weekday_map.get(full_weekday.to_lowercase().as_str()) {
+                                Some(&weekday) => {
+                                    let parsed_date =
+                                        NaiveDate::from_ymd_opt(year, month, day)
+                                            .unwrap();
+                                    let adjusted_date =
+                                        adjust_to_weekday(parsed_date, weekday);
+                                    year = adjusted_date.year();
+                                    month = adjusted_date.month();
+                                    day = adjusted_date.day();
+                                    index = end_index;
+                                    status = DateFormatStatus::Default;
+                                }
+                                None => {
+                                    return Err(DataFusionError::Execution(format!(
+                                        "Invalid full weekday name: {}",
+                                        full_weekday
+                                    )))
+                                }
+                            }
+                        }
+                        'j' => match parse_next_number(&date_str, index) {
+                            Ok((value, end_index)) => {
+                                if value >= 1 && value <= 366 {
+                                    let first_day_of_year =
+                                        NaiveDate::from_ymd_opt(year, 1, 1).unwrap();
+                                    let date = first_day_of_year
+                                        .checked_add_signed(chrono::Duration::days(
+                                            value as i64 - 1,
+                                        ))
+                                        .ok_or_else(|| {
+                                            DataFusionError::Execution(
+                                                "Invalid day of year".into(),
+                                            )
+                                        })?;
+
+                                    year = date.year();
+                                    month = date.month();
+                                    day = date.day();
+                                    index = end_index;
+                                    status = DateFormatStatus::Default;
+                                } else {
+                                    return Err(DataFusionError::Execution(
+                                        "Invalid day of year".into(),
+                                    ));
+                                }
+                            }
+                            Err(e) => {
+                                return Err(DataFusionError::Execution(format!(
+                                    "Unable to parse day of year: {}",
+                                    e
+                                )))
+                            }
+                        },
+                        'r' => {
+                            let mut end_index = index;
+                            while end_index < date_str.len()
+                                && date_str.as_bytes()[end_index] != b' '
+                            {
+                                end_index += 1;
+                            }
+
+                            end_index += 1;
+
+                            while end_index < date_str.len()
+                                && date_str.as_bytes()[end_index].is_ascii_alphabetic()
+                            {
+                                end_index += 1;
+                            }
+                            let time_str = &date_str[index..end_index];
+                            let time_parts: Vec<&str> =
+                                time_str.split_whitespace().collect();
+
+                            if time_parts.len() == 2 {
+                                let time_components: Vec<&str> =
+                                    time_parts[0].split(':').collect();
+                                if time_components.len() == 3 {
+                                    match (
+                                        time_components[0].parse::<u32>(),
+                                        time_components[1].parse::<u32>(),
+                                        time_components[2].parse::<u32>(),
+                                        time_parts[1].to_uppercase().as_str(),
+                                    ) {
+                                        (Ok(h), Ok(m), Ok(s), "AM" | "PM") => {
+                                            hour = if h == 12 && time_parts[1] == "AM" {
+                                                0
+                                            } else if h != 12 && time_parts[1] == "PM" {
+                                                h + 12
+                                            } else {
+                                                h
+                                            };
+                                            minute = m;
+                                            second = s;
+                                            index = end_index;
+                                            status = DateFormatStatus::Default;
+                                        }
+                                        _ => {
+                                            return Err(DataFusionError::Execution(
+                                                "Invalid time format for %r".into(),
+                                            ))
+                                        }
+                                    }
+                                } else {
+                                    return Err(DataFusionError::Execution(
+                                        "Invalid time format for %r".into(),
+                                    ));
+                                }
+                            } else {
+                                return Err(DataFusionError::Execution(
+                                    "Invalid time format for %r".into(),
+                                ));
+                            }
+                        }
+                        'T' => {
+                            let mut end_index = index;
+                            while end_index < date_str.len()
+                                && date_str.as_bytes()[end_index] != b' '
+                                && date_str.as_bytes()[end_index] != b'%'
+                            {
+                                end_index += 1;
+                            }
+                            let time_str = &date_str[index..end_index];
+                            let time_components: Vec<&str> =
+                                time_str.split(':').collect();
+
+                            if time_components.len() == 3 {
+                                match (
+                                    time_components[0].parse::<u32>(),
+                                    time_components[1].parse::<u32>(),
+                                    time_components[2].parse::<u32>(),
+                                ) {
+                                    (Ok(h), Ok(m), Ok(s)) => {
+                                        if h < 24 && m < 60 && s < 60 {
+                                            hour = h;
+                                            minute = m;
+                                            second = s;
+                                            index = end_index;
+                                            status = DateFormatStatus::Default;
+                                        } else {
+                                            return Err(DataFusionError::Execution(
+                                                "Invalid time format for %T".into(),
+                                            ));
+                                        }
+                                    }
+                                    _ => {
+                                        return Err(DataFusionError::Execution(
+                                            "Invalid time format for %T".into(),
+                                        ))
+                                    }
+                                }
+                            } else {
+                                return Err(DataFusionError::Execution(
+                                    "Invalid time format for %T".into(),
+                                ));
+                            }
+                        }
+                        'D' | 'U' | 'u' | 'V' | 'w' | 'X' => {
+                            return Err(DataFusionError::Execution(format!(
+                                "Specifier '{}' not supported",
+                                c
+                            )));
+                        }
+                        _ => {
+                            return Err(DataFusionError::Execution(format!(
+                                "invalid specifier'{}'",
+                                c
+                            )));
+                        }
+                    },
+                }
+            }
+        }
+
+        let date = NaiveDate::from_ymd_opt(year, month, day).ok_or_else(|| {
+            ArrowError::ParseError(format!("Invalid date: {}-{}-{}", year, month, day))
+        })?;
+        let time = NaiveTime::from_hms_milli_opt(hour, minute, second, millis)
+            .ok_or_else(|| {
+                ArrowError::ParseError(format!(
+                    "Invalid time: {}:{}:{}.{}",
+                    hour, minute, second, millis
+                ))
+            })?;
+        let datetime = NaiveDateTime::new(date, time);
+
+        timestamps.push(datetime.timestamp_millis());
+
+        Ok(Arc::new(TimestampMillisecondArray::from(timestamps)) as ArrayRef)
+    }
+}
+
+fn adjust_to_weekday(current_date: NaiveDate, target_weekday: Weekday) -> NaiveDate {
+    let current_weekday = current_date.weekday();
+    let days_until_target = (target_weekday.num_days_from_sunday() as i64
+        - current_weekday.num_days_from_sunday() as i64
+        + 7)
+        % 7;
+    current_date + Duration::days(days_until_target)
+}
+
+fn parse_next_number(
+    date_str: &str,
+    start_index: usize,
+) -> Result<(u32, usize), DataFusionError> {
+    let mut end_index = start_index;
+    while end_index < date_str.len() && date_str.as_bytes()[end_index].is_ascii_digit() {
+        end_index += 1;
+    }
+    let number_str = &date_str[start_index..end_index];
+    match number_str.parse::<u32>() {
+        Ok(number) => Ok((number, end_index)),
+        Err(e) => Err(DataFusionError::Execution(format!(
+            "Unable to parse number: {}",
+            e
+        ))),
+    }
+}
 
 // Function package declaration
 pub struct FunctionPackage;
@@ -1504,6 +2104,7 @@ impl ScalarFunctionPackage for FunctionPackage {
             Box::new(ParseDurationFunction),
             Box::new(DateAddFunction),
             Box::new(LastDayOfMonthFunction),
+            Box::new(DateParseFunction),
         ]
     }
 }
@@ -1836,6 +2437,102 @@ mod test {
         test_expression!(
             "last_day_of_month( TIMESTAMP '2023-02-15T08:30:00')",
             "2023-02-28"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_date_parse() -> Result<()> {
+        test_expression!("date_parse('2013', '%Y')", "2013-01-01T00:00:00");
+        test_expression!("date_parse('2013-05', '%Y-%m')", "2013-05-01T00:00:00");
+        test_expression!("date_parse('2013-5', '%Y-%c')", "2013-05-01T00:00:00");
+        test_expression!(
+            "date_parse('2013-05-07', '%Y-%m-%d')",
+            "2013-05-07T00:00:00"
+        );
+        test_expression!("date_parse('2013-05-1', '%Y-%m-%e')", "2013-05-01T00:00:00");
+        test_expression!(
+            "date_parse('2013-05-17 12:35:10', '%Y-%m-%d %h:%i:%s')",
+            "2013-05-17T00:35:10"
+        );
+        test_expression!(
+            "date_parse('2013-05-17 12:35:10 PM', '%Y-%m-%d %h:%i:%s %p')",
+            "2013-05-17T12:35:10"
+        );
+        test_expression!(
+            "date_parse('2013-05-17 12:35:10 AM', '%Y-%m-%d %h:%i:%s %p')",
+            "2013-05-17T00:35:10"
+        );
+        test_expression!(
+            "date_parse('2013-05-17 00:35:10', '%Y-%m-%d %H:%i:%s')",
+            "2013-05-17T00:35:10"
+        );
+        test_expression!(
+            "date_parse('2013-05-17 23:35:10', '%Y-%m-%d %H:%i:%s')",
+            "2013-05-17T23:35:10"
+        );
+        test_expression!(
+            "date_parse('abc 2013-05-17 fff 23:35:10 xyz','abc %Y-%m-%d fff %H:%i:%s xyz')",
+            "2013-05-17T23:35:10"
+        );
+        test_expression!("date_parse('2023 24','%Y %y')", "2024-01-01T00:00:00");
+        test_expression!("date_parse('2023 52','%x %v')", "2023-12-25T00:00:00");
+        test_expression!("date_parse('2024 02','%x %v')", "2024-01-08T00:00:00");
+        test_expression!("date_parse('01.1','%s.%f')", "1970-01-01T00:00:01.100");
+        test_expression!("date_parse('01.01','%s.%f')", "1970-01-01T00:00:01.010");
+        test_expression!("date_parse('01.2006','%s.%f')", "1970-01-01T00:00:01.200");
+        test_expression!(
+            "date_parse('59.123456789','%s.%f')",
+            "1970-01-01T00:00:59.123"
+        );
+        test_expression!("date_parse('0','%k')", "1970-01-01T00:00:00");
+        test_expression!(
+            "date_parse('28-JAN-16 11.45.46.421000 PM','%d-%b-%y %l.%i.%s.%f %p')",
+            "2016-01-28T23:45:46.421"
+        );
+        test_expression!(
+            "date_parse('11-DEC-70 11.12.13.456000 AM','%d-%b-%y %l.%i.%s.%f %p')",
+            "1970-12-11T11:12:13.456"
+        );
+        test_expression!(
+            "date_parse('31-MAY-69 04.59.59.999000 AM','%d-%b-%y %l.%i.%s.%f %p')",
+            "2069-05-31T04:59:59.999"
+        );
+        test_expression!(
+            "date_parse('28-February-16 11.45.46.421000 PM','%d-%M-%y %l.%i.%s.%f %p')",
+            "2016-02-28T23:45:46.421"
+        );
+        test_expression!("date_parse('1970-01-01','')", "1970-01-01T00:00:00");
+        test_expression!(
+            "date_parse('2024-01/Sunday','%Y-%m/%W')",
+            "2024-01-07T00:00:00"
+        );
+        test_expression!(
+            "date_parse('2024-01-13/Sunday','%Y-%m-%d/%W')",
+            "2024-01-14T00:00:00"
+        );
+        test_expression!(
+            "date_parse('2024-01-17/Saturday','%Y-%m-%d/%W')",
+            "2024-01-20T00:00:00"
+        );
+        test_expression!(
+            "date_parse('2024-01-17/Sunday','%Y-%m-%d/%W')",
+            "2024-01-21T00:00:00"
+        );
+        test_expression!(
+            "date_parse('2024-01-17/Sat','%Y-%m-%d/%a')",
+            "2024-01-20T00:00:00"
+        );
+        test_expression!("date_parse('2024-61', '%Y-%j')", "2024-03-01T00:00:00");
+        test_expression!("date_parse('12:20:34 AM', '%r')", "1970-01-01T00:20:34");
+        test_expression!("date_parse('12:20:34 PM', '%r')", "1970-01-01T12:20:34");
+        test_expression!(
+            "date_parse('2024 10:20:34 AM', '%Y %r')",
+            "2024-01-01T10:20:34"
+        );
+        test_expression!(
+            "date_parse('2024 10:20:34', '%Y %T')",
+            "2024-01-01T10:20:34"
         );
         Ok(())
     }
