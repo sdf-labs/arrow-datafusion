@@ -2423,7 +2423,12 @@ impl ScalarFunctionDef for DateParseFunction {
                             if date_str.as_bytes()[index] as char == c {
                                 index += 1;
                             } else {
-                                todo!()
+                                return Err(DataFusionError::Execution(format!(
+                                    "Mismatch in format and date string at position {}: expected '{}', found '{}'",
+                                    index,
+                                    c,
+                                    date_str.as_bytes()[index] as char
+                                )));
                             }
                         }
                     },
