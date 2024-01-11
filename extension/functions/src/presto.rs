@@ -187,6 +187,9 @@ impl ScalarFunctionDef for CurrentTimestampFunction {
     fn name(&self) -> &str {
         "current_timestamp"
     }
+    fn aliases(&self) -> Vec<&str> {
+        vec!["now"]
+    }
     fn signature(&self) -> Signature {
         Signature::exact(vec![], Volatility::Immutable)
     }
@@ -686,6 +689,9 @@ pub struct DayFunction;
 impl ScalarFunctionDef for DayFunction {
     fn name(&self) -> &str {
         "day"
+    }
+    fn aliases(&self) -> Vec<&str> {
+        vec!["day_of_month"]
     }
 
     fn signature(&self) -> Signature {
@@ -1473,6 +1479,9 @@ impl ScalarFunctionDef for DayOfWeekFunction {
     fn name(&self) -> &str {
         "day_of_week"
     }
+    fn aliases(&self) -> Vec<&str> {
+        vec!["dow"]
+    }
 
     fn signature(&self) -> Signature {
         // Function accepts Date, Interval Day to Second, or Timestamp
@@ -1563,6 +1572,10 @@ pub struct DayOfYearFunction;
 impl ScalarFunctionDef for DayOfYearFunction {
     fn name(&self) -> &str {
         "day_of_year"
+    }
+
+    fn aliases(&self) -> Vec<&str> {
+        vec!["doy"]
     }
 
     fn signature(&self) -> Signature {
@@ -2117,7 +2130,9 @@ impl ScalarFunctionDef for WeekFunction {
     fn name(&self) -> &str {
         "week"
     }
-
+    fn aliases(&self) -> Vec<&str> {
+        vec!["week_of_year"]
+    }
     fn signature(&self) -> Signature {
         // Function accepts Date32 and Timestamp
         Signature::one_of(
@@ -2282,6 +2297,9 @@ pub struct YearOfWeekFunction;
 impl ScalarFunctionDef for YearOfWeekFunction {
     fn name(&self) -> &str {
         "year_of_week"
+    }
+    fn aliases(&self) -> Vec<&str> {
+        vec!["yow"]
     }
 
     fn signature(&self) -> Signature {
@@ -3703,6 +3721,8 @@ mod test {
     async fn test_day_of_year() -> Result<()> {
         test_expression!("day_of_year(Date '2023-03-15')", "74");
         test_expression!("day_of_year(timestamp '2020-06-10 15:55:23.383345')", "162");
+        test_expression!("doy(Date '2023-03-15')", "74");
+        test_expression!("doy(timestamp '2020-06-10 15:55:23.383345')", "162");
         Ok(())
     }
     #[tokio::test]

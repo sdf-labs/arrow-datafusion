@@ -811,10 +811,22 @@ impl SessionContext {
         }
 
         for func in func_pkg.functions() {
-            self.state
-                .write()
-                .scalar_functions
-                .insert(func.name().to_string(), Arc::new(to_scalar_function(func)));
+            // Aliases support
+            let mut names = func
+                .aliases()
+                .iter()
+                .map(|&s| s.to_string())
+                .collect::<Vec<_>>();
+            names.push(func.name().to_string());
+
+            let func_ref = Arc::new(to_scalar_function(func));
+
+            for name in names {
+                self.state
+                    .write()
+                    .scalar_functions
+                    .insert(name, func_ref.clone());
+            }
         }
     }
 

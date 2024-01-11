@@ -26,8 +26,10 @@ use std::fmt::Formatter;
 use std::sync::Arc;
 
 pub trait ScalarFunctionDef: Sync + Send + std::fmt::Debug {
-    // TODO: support alias
     fn name(&self) -> &str;
+    fn aliases(&self) -> Vec<&str> {
+        Vec::new() // Default return a null Vec
+    }
 
     fn signature(&self) -> Signature;
 
