@@ -3387,7 +3387,8 @@ mod test {
     };
 
     use arrow::array::{
-        Array, ArrayRef, Int64Array, TimestampMillisecondArray, TimestampNanosecondArray, StringArray, Date32Array, Time64NanosecondArray,
+        Array, ArrayRef, Date32Array, Int64Array, StringArray, Time64NanosecondArray,
+        TimestampMillisecondArray, TimestampNanosecondArray,
     };
     use chrono::{Local, Offset, Utc};
     use datafusion::error::Result;
@@ -3397,8 +3398,8 @@ mod test {
 
     use crate::{
         presto::{
-            CurrentTimestampFunction, CurrentTimestampPFunction, LocaltimestampFunction,
-            LocaltimestampPFunction, ExtractFunction,
+            CurrentTimestampFunction, CurrentTimestampPFunction, ExtractFunction,
+            LocaltimestampFunction, LocaltimestampPFunction,
         },
         utils::{execute, test_expression},
     };
