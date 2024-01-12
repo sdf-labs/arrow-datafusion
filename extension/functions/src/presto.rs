@@ -3179,6 +3179,160 @@ impl ScalarFunctionDef for FormatDatetimeFunction {
         Ok(Arc::new(StringArray::from(formatted_dates)) as ArrayRef)
     }
 }
+#[derive(Debug)]
+pub struct ExtractFunction;
+
+impl ScalarFunctionDef for ExtractFunction {
+    fn name(&self) -> &str {
+        "extract"
+    }
+
+    fn signature(&self) -> Signature {
+        Signature::one_of(
+            vec![
+                TypeSignature::Exact(vec![DataType::Utf8, DataType::Date32]),
+                TypeSignature::Exact(vec![
+                    DataType::Utf8,
+                    DataType::Time64(TimeUnit::Nanosecond),
+                ]),
+                TypeSignature::Exact(vec![
+                    DataType::Utf8,
+                    DataType::Timestamp(TimeUnit::Nanosecond, None),
+                ]),
+            ],
+            Volatility::Immutable,
+        )
+    }
+
+    fn return_type(&self) -> ReturnTypeFunction {
+        Arc::new(move |_| Ok(Arc::new(DataType::Int64)))
+    }
+
+    fn execute(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
+        assert_eq!(args.len(), 2);
+
+        let unit_array = args[0]
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("unit should be string");
+        let unit_array_lower = unit_array
+            .iter()
+            .map(|unit| {
+                unit.map(|unit| {
+                    let unit = unit.to_lowercase();
+                    unit
+                })
+            })
+            .collect::<StringArray>();
+        let input = &args[1];
+
+        let result = match input.data_type() {
+            DataType::Date32 => {
+                let date_array = input
+                    .as_any()
+                    .downcast_ref::<Date32Array>()
+                    .expect("Expected a date array");
+                let date = unit_array_lower
+                    .iter()
+                    .zip(date_array.iter())
+                    .map(|(unit_opt, date_opt)| {
+                        let unit = unit_opt.unwrap();
+                        let date = date_opt.unwrap();
+                        let naive_date: NaiveDate = Date32Type::to_naive_date(date);
+
+                        match unit {
+                            "year" => naive_date.year() as i64,
+                            "quarter" => ((naive_date.month() - 1) / 3 + 1) as i64,
+                            "month" => naive_date.month() as i64,
+                            "week" => naive_date.iso_week().week() as i64,
+                            "day" | "day_of_month" => naive_date.day() as i64,
+                            "day_of_week" | "dow" => {
+                                naive_date.weekday().num_days_from_monday() as i64 + 1
+                            }
+                            "day_of_year" | "doy" => naive_date.ordinal() as i64,
+                            "year_of_week" | "yow" => naive_date.iso_week().year() as i64,
+                            _ => unreachable!(),
+                        }
+                    })
+                    .collect::<Vec<i64>>();
+
+                Ok(Arc::new(Int64Array::from(date)) as ArrayRef)
+            }
+            DataType::Time64(TimeUnit::Nanosecond) => {
+                let time_array = input
+                    .as_any()
+                    .downcast_ref::<Time64NanosecondArray>()
+                    .expect("Expected a time array");
+                let time = unit_array_lower
+                    .iter()
+                    .zip(time_array.iter())
+                    .map(|(unit_opt, time_opt)| {
+                        let unit = unit_opt.unwrap();
+                        let time = time_opt.unwrap();
+                        let seconds = time / 1_000_000_000;
+                        let nanoseconds = (time % 1_000_000_000) as u32;
+
+                        let naive_time = NaiveTime::from_num_seconds_from_midnight_opt(
+                            seconds as u32,
+                            nanoseconds,
+                        )
+                        .unwrap();
+                        match unit {
+                            "hour" => naive_time.hour() as i64,
+                            "minute" => naive_time.minute() as i64,
+                            "second" => naive_time.second() as i64,
+                            _ => unreachable!(),
+                        }
+                    })
+                    .collect::<Vec<i64>>();
+                Ok(Arc::new(Int64Array::from(time)) as ArrayRef)
+            }
+            DataType::Timestamp(TimeUnit::Nanosecond, None) => {
+                let timestamp_array = input
+                    .as_any()
+                    .downcast_ref::<TimestampNanosecondArray>()
+                    .expect("timestamp1 should be a TimestampNanosecondArray");
+                let timestamp_millis_arr = timestamp_array
+                    .iter()
+                    .map(|t: Option<i64>| t.map(|t| t / 1_000_000))
+                    .collect::<TimestampMillisecondArray>();
+
+                let timestamp = unit_array_lower
+                    .iter()
+                    .zip(timestamp_millis_arr.iter())
+                    .map(|(unit_opt, timestamp_opt)| {
+                        let unit = unit_opt.unwrap();
+                        let timestamp = timestamp_opt.unwrap();
+                        let datetime =
+                            NaiveDateTime::from_timestamp_millis(timestamp).unwrap();
+                        match unit {
+                            "year" => datetime.year() as i64,
+                            "quarter" => ((datetime.month() - 1) / 3 + 1) as i64,
+                            "month" => datetime.month() as i64,
+                            "week" => datetime.iso_week().week() as i64,
+                            "day" | "day_of_month" => datetime.day() as i64,
+                            "day_of_week" | "dow" => {
+                                datetime.weekday().num_days_from_monday() as i64 + 1
+                            }
+                            "day_of_year" | "doy" => datetime.ordinal() as i64,
+                            "year_of_week" | "yow" => datetime.iso_week().year() as i64,
+                            "hour" => datetime.hour() as i64,
+                            "minute" => datetime.minute() as i64,
+                            "second" => datetime.second() as i64,
+                            _ => unreachable!(),
+                        }
+                    })
+                    .collect::<Vec<i64>>();
+                Ok(Arc::new(Int64Array::from(timestamp)) as ArrayRef)
+            }
+            _ => Err(ArrowError::InvalidArgumentError(
+                "Invalid  datetype".to_string(),
+            ))
+            .map_err(|err| DataFusionError::Execution(format!("Cast error: {}", err))),
+        };
+        result
+    }
+}
 
 // Function package declaration
 pub struct FunctionPackage;
@@ -3215,12 +3369,12 @@ impl ScalarFunctionPackage for FunctionPackage {
             Box::new(MinuteFunction),
             Box::new(SecondFunction),
             Box::new(WeekFunction),
-            Box::new(YearFunction),
             Box::new(MonthFunction),
             Box::new(YearFunction),
             Box::new(QuarterFunction),
             Box::new(DateFormatFunction),
             Box::new(FormatDatetimeFunction),
+            Box::new(ExtractFunction),
         ]
     }
 }
@@ -3233,7 +3387,8 @@ mod test {
     };
 
     use arrow::array::{
-        Array, ArrayRef, Int64Array, TimestampMillisecondArray, TimestampNanosecondArray,
+        Array, ArrayRef, Date32Array, Int64Array, StringArray, Time64NanosecondArray,
+        TimestampMillisecondArray, TimestampNanosecondArray,
     };
     use chrono::{Local, Offset, Utc};
     use datafusion::error::Result;
@@ -3243,8 +3398,8 @@ mod test {
 
     use crate::{
         presto::{
-            CurrentTimestampFunction, CurrentTimestampPFunction, LocaltimestampFunction,
-            LocaltimestampPFunction,
+            CurrentTimestampFunction, CurrentTimestampPFunction, ExtractFunction,
+            LocaltimestampFunction, LocaltimestampPFunction,
         },
         utils::{execute, test_expression},
     };
@@ -3995,6 +4150,102 @@ mod test {
         test_expression!(
             "format_datetime(TIMESTAMP '2023-01-09 13:04:05.321', 'YYYY/MM/dd HH:mm')",
             "2023/01/09 13:04"
+        );
+        Ok(())
+    }
+    #[tokio::test]
+    async fn test_extract1() -> Result<()> {
+        // DATE '2018-12-31'
+        let date_unit_arr = StringArray::from(vec![
+            "year",
+            "quarter",
+            "month",
+            "week",
+            "day",
+            "day_of_month",
+            "day_of_week",
+            "dow",
+            "day_of_year",
+            "doy",
+            "year_of_week",
+            "yow",
+        ]);
+        let date_arr = Date32Array::from(vec![
+            17896, 17896, 17896, 17896, 17896, 17896, 17896, 17896, 17896, 17896, 17896,
+            17896,
+        ]);
+        let args_1 = vec![
+            Arc::new(date_unit_arr) as ArrayRef,
+            Arc::new(date_arr) as ArrayRef,
+        ];
+        let result_1 = ExtractFunction {}.execute(&args_1).unwrap();
+        let result_1_array = result_1.as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(
+            *result_1_array,
+            Int64Array::from(vec![2018, 4, 12, 1, 31, 31, 1, 1, 365, 365, 2019, 2019,])
+        );
+
+        // TIME '08:09:10.123'
+        let time_unit_arr = StringArray::from(vec!["hour", "minute", "second"]);
+        let time_arr = Time64NanosecondArray::from(vec![
+            29350123000000,
+            29350123000000,
+            29350123000000,
+        ]);
+        let args_2 = vec![
+            Arc::new(time_unit_arr) as ArrayRef,
+            Arc::new(time_arr) as ArrayRef,
+        ];
+        let result_2 = ExtractFunction {}.execute(&args_2).unwrap();
+        let result_2_array = result_2.as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(*result_2_array, Int64Array::from(vec![8, 9, 10]));
+
+        // TIMESTAMP '2018-12-31 13:04:05.321'
+        let timestamp_unit_arr = StringArray::from(vec![
+            "year",
+            "quarter",
+            "month",
+            "week",
+            "day",
+            "day_of_month",
+            "day_of_week",
+            "dow",
+            "day_of_year",
+            "doy",
+            "year_of_week",
+            "yow",
+            "hour",
+            "minute",
+            "second",
+        ]);
+        let timestamp_arr = TimestampNanosecondArray::from(vec![
+            1546261445321000000,
+            1546261445321000000,
+            1546261445321000000,
+            1546261445321000000,
+            1546261445321000000,
+            1546261445321000000,
+            1546261445321000000,
+            1546261445321000000,
+            1546261445321000000,
+            1546261445321000000,
+            1546261445321000000,
+            1546261445321000000,
+            1546261445321000000,
+            1546261445321000000,
+            1546261445321000000,
+        ]);
+        let args_3 = vec![
+            Arc::new(timestamp_unit_arr) as ArrayRef,
+            Arc::new(timestamp_arr) as ArrayRef,
+        ];
+        let result_3 = ExtractFunction {}.execute(&args_3).unwrap();
+        let result_3_array = result_3.as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(
+            *result_3_array,
+            Int64Array::from(vec![
+                2018, 4, 12, 1, 31, 31, 1, 1, 365, 365, 2019, 2019, 13, 4, 5,
+            ])
         );
         Ok(())
     }
