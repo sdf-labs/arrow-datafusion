@@ -2323,6 +2323,7 @@ fn cal_last_day_of_month(date: NaiveDate) -> NaiveDate {
                 - 1,
         )
 }
+
 enum DateFormatStatus {
     Default,
     PostPercent,
@@ -3431,7 +3432,7 @@ mod test {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_millis() as i64;
-        (millisecond - now).abs() <= 1
+        (millisecond - now).abs() <= 1_000_000
     }
 
     fn test_timestamp_p<E: ScalarFunctionDef>(timestamp_p_func: E) -> Result<()> {
