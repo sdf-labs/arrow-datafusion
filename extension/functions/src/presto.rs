@@ -187,6 +187,9 @@ impl ScalarFunctionDef for CurrentTimestampFunction {
     fn name(&self) -> &str {
         "current_timestamp"
     }
+    fn aliases(&self) -> Vec<&str> {
+        vec!["now"]
+    }
     fn signature(&self) -> Signature {
         Signature::exact(vec![], Volatility::Immutable)
     }
@@ -686,6 +689,9 @@ pub struct DayFunction;
 impl ScalarFunctionDef for DayFunction {
     fn name(&self) -> &str {
         "day"
+    }
+    fn aliases(&self) -> Vec<&str> {
+        vec!["day_of_month"]
     }
 
     fn signature(&self) -> Signature {
@@ -1473,6 +1479,9 @@ impl ScalarFunctionDef for DayOfWeekFunction {
     fn name(&self) -> &str {
         "day_of_week"
     }
+    fn aliases(&self) -> Vec<&str> {
+        vec!["dow"]
+    }
 
     fn signature(&self) -> Signature {
         // Function accepts Date, Interval Day to Second, or Timestamp
@@ -1545,6 +1554,10 @@ impl ScalarFunctionDef for DayOfWeekFunction {
 
                 Ok(Arc::new(Int64Array::from(weekdays)) as ArrayRef)
             }
+            DataType::Interval(IntervalUnit::DayTime) => {
+                // The front-end needs to parse the data type to IntervalUnit::DayTime, instead of MonthDayNano
+                todo!()
+            }
             _ => Err(ArrowError::InvalidArgumentError(
                 "Invalid input type".to_string(),
             )),
@@ -1559,6 +1572,10 @@ pub struct DayOfYearFunction;
 impl ScalarFunctionDef for DayOfYearFunction {
     fn name(&self) -> &str {
         "day_of_year"
+    }
+
+    fn aliases(&self) -> Vec<&str> {
+        vec!["doy"]
     }
 
     fn signature(&self) -> Signature {
@@ -1630,6 +1647,10 @@ impl ScalarFunctionDef for DayOfYearFunction {
 
                 Ok(Arc::new(Int64Array::from(day_of_years)) as ArrayRef)
             }
+            DataType::Interval(IntervalUnit::DayTime) => {
+                // The front-end needs to parse the data type to IntervalUnit::DayTime, instead of MonthDayNano
+                todo!()
+            }
             _ => Err(ArrowError::InvalidArgumentError(
                 "Invalid input type".to_string(),
             )),
@@ -1650,6 +1671,7 @@ impl ScalarFunctionDef for HourFunction {
         Signature::one_of(
             vec![
                 TypeSignature::Exact(vec![DataType::Date32]),
+                TypeSignature::Exact(vec![DataType::Interval(IntervalUnit::DayTime)]),
                 TypeSignature::Exact(vec![DataType::Timestamp(
                     TimeUnit::Nanosecond,
                     None,
@@ -1706,6 +1728,10 @@ impl ScalarFunctionDef for HourFunction {
 
                 Ok(Arc::new(Int64Array::from(hours)) as ArrayRef)
             }
+            DataType::Interval(IntervalUnit::DayTime) => {
+                // The front-end needs to parse the data type to IntervalUnit::DayTime, instead of MonthDayNano
+                todo!()
+            }
             _ => Err(ArrowError::InvalidArgumentError(
                 "Invalid input type".to_string(),
             )),
@@ -1725,10 +1751,13 @@ impl ScalarFunctionDef for MillisecondFunction {
     fn signature(&self) -> Signature {
         // Function accepts Timestamp
         Signature::one_of(
-            vec![TypeSignature::Exact(vec![DataType::Timestamp(
-                TimeUnit::Nanosecond,
-                None,
-            )])],
+            vec![
+                TypeSignature::Exact(vec![DataType::Timestamp(
+                    TimeUnit::Nanosecond,
+                    None,
+                )]),
+                TypeSignature::Exact(vec![DataType::Interval(IntervalUnit::DayTime)]),
+            ],
             Volatility::Immutable,
         )
     }
@@ -1760,6 +1789,10 @@ impl ScalarFunctionDef for MillisecondFunction {
 
                 Ok(Arc::new(Int64Array::from(milliseconds)) as ArrayRef)
             }
+            DataType::Interval(IntervalUnit::DayTime) => {
+                // The front-end needs to parse the data type to IntervalUnit::DayTime, instead of MonthDayNano
+                todo!()
+            }
             _ => Err(ArrowError::InvalidArgumentError(
                 "Invalid input type".to_string(),
             )),
@@ -1779,10 +1812,13 @@ impl ScalarFunctionDef for MinuteFunction {
     fn signature(&self) -> Signature {
         // Function accepts Timestamp
         Signature::one_of(
-            vec![TypeSignature::Exact(vec![DataType::Timestamp(
-                TimeUnit::Nanosecond,
-                None,
-            )])],
+            vec![
+                TypeSignature::Exact(vec![DataType::Timestamp(
+                    TimeUnit::Nanosecond,
+                    None,
+                )]),
+                TypeSignature::Exact(vec![DataType::Interval(IntervalUnit::DayTime)]),
+            ],
             Volatility::Immutable,
         )
     }
@@ -1820,6 +1856,10 @@ impl ScalarFunctionDef for MinuteFunction {
 
                 Ok(Arc::new(Int64Array::from(minutes)) as ArrayRef)
             }
+            DataType::Interval(IntervalUnit::DayTime) => {
+                // The front-end needs to parse the data type to IntervalUnit::DayTime, instead of MonthDayNano
+                todo!()
+            }
             _ => Err(ArrowError::InvalidArgumentError(
                 "Invalid input type".to_string(),
             )),
@@ -1845,6 +1885,7 @@ impl ScalarFunctionDef for MonthFunction {
                     TimeUnit::Nanosecond,
                     None,
                 )]),
+                TypeSignature::Exact(vec![DataType::Interval(IntervalUnit::DayTime)]),
             ],
             Volatility::Immutable,
         )
@@ -1903,6 +1944,10 @@ impl ScalarFunctionDef for MonthFunction {
 
                 Ok(Arc::new(Int64Array::from(months)) as ArrayRef)
             }
+            DataType::Interval(IntervalUnit::DayTime) => {
+                // The front-end needs to parse the data type to IntervalUnit::DayTime, instead of MonthDayNano
+                todo!()
+            }
             _ => Err(ArrowError::InvalidArgumentError(
                 "Invalid input type".to_string(),
             )),
@@ -1928,6 +1973,7 @@ impl ScalarFunctionDef for QuarterFunction {
                     TimeUnit::Nanosecond,
                     None,
                 )]),
+                TypeSignature::Exact(vec![DataType::Interval(IntervalUnit::DayTime)]),
             ],
             Volatility::Immutable,
         )
@@ -1988,6 +2034,10 @@ impl ScalarFunctionDef for QuarterFunction {
 
                 Ok(Arc::new(Int64Array::from(quarters)) as ArrayRef)
             }
+            DataType::Interval(IntervalUnit::DayTime) => {
+                // The front-end needs to parse the data type to IntervalUnit::DayTime, instead of MonthDayNano
+                todo!()
+            }
             _ => Err(ArrowError::InvalidArgumentError(
                 "Invalid input type".to_string(),
             )),
@@ -2009,6 +2059,7 @@ impl ScalarFunctionDef for SecondFunction {
         Signature::one_of(
             vec![
                 TypeSignature::Exact(vec![DataType::Date32]),
+                TypeSignature::Exact(vec![DataType::Interval(IntervalUnit::DayTime)]),
                 TypeSignature::Exact(vec![DataType::Timestamp(
                     TimeUnit::Nanosecond,
                     None,
@@ -2060,6 +2111,10 @@ impl ScalarFunctionDef for SecondFunction {
 
                 Ok(Arc::new(Int64Array::from(seconds)) as ArrayRef)
             }
+            DataType::Interval(IntervalUnit::DayTime) => {
+                // The front-end needs to parse the data type to IntervalUnit::DayTime, instead of MonthDayNano
+                todo!()
+            }
             _ => Err(ArrowError::InvalidArgumentError(
                 "Invalid input type".to_string(),
             )),
@@ -2075,12 +2130,15 @@ impl ScalarFunctionDef for WeekFunction {
     fn name(&self) -> &str {
         "week"
     }
-
+    fn aliases(&self) -> Vec<&str> {
+        vec!["week_of_year"]
+    }
     fn signature(&self) -> Signature {
         // Function accepts Date32 and Timestamp
         Signature::one_of(
             vec![
                 TypeSignature::Exact(vec![DataType::Date32]),
+                TypeSignature::Exact(vec![DataType::Interval(IntervalUnit::DayTime)]),
                 TypeSignature::Exact(vec![DataType::Timestamp(
                     TimeUnit::Nanosecond,
                     None,
@@ -2141,6 +2199,10 @@ impl ScalarFunctionDef for WeekFunction {
                         .collect();
 
                     Ok(Arc::new(Int64Array::from(weeks)) as ArrayRef)
+                }
+                DataType::Interval(IntervalUnit::DayTime) => {
+                    // The front-end needs to parse the data type to IntervalUnit::DayTime, instead of MonthDayNano
+                    todo!()
                 }
                 _ => Err(ArrowError::InvalidArgumentError(
                     "Invalid input type".to_string(),
@@ -2235,6 +2297,9 @@ pub struct YearOfWeekFunction;
 impl ScalarFunctionDef for YearOfWeekFunction {
     fn name(&self) -> &str {
         "year_of_week"
+    }
+    fn aliases(&self) -> Vec<&str> {
+        vec!["yow"]
     }
 
     fn signature(&self) -> Signature {
@@ -3812,6 +3877,8 @@ mod test {
     async fn test_day_of_year() -> Result<()> {
         test_expression!("day_of_year(Date '2023-03-15')", "74");
         test_expression!("day_of_year(timestamp '2020-06-10 15:55:23.383345')", "162");
+        test_expression!("doy(Date '2023-03-15')", "74");
+        test_expression!("doy(timestamp '2020-06-10 15:55:23.383345')", "162");
         Ok(())
     }
     #[tokio::test]
