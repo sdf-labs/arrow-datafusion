@@ -604,6 +604,16 @@ pub enum WindowFunctionDefinition {
 }
 
 impl WindowFunctionDefinition {
+    /// Function's name for display
+    pub fn name(&self) -> &str {
+        match self {
+            WindowFunctionDefinition::AggregateFunction(fun) => fun.name(),
+            WindowFunctionDefinition::BuiltInWindowFunction(fun) => fun.name(),
+            WindowFunctionDefinition::AggregateUDF(fun) => fun.name(),
+            WindowFunctionDefinition::WindowUDF(fun) => fun.name(),
+        }
+    }
+
     /// Returns the datatype of the window function
     pub fn return_type(&self, input_expr_types: &[DataType]) -> Result<DataType> {
         match self {
