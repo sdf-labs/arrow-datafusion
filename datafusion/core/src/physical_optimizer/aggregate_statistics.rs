@@ -196,7 +196,8 @@ fn take_optimizable_column_and_table_count(
                 if lit_expr.value() == &COUNT_STAR_EXPANSION {
                     return Some((
                         ScalarValue::Int64(Some(num_rows as i64)),
-                        casted_expr.name().to_owned(),
+                        // casted_expr.name().to_owned(),
+                        agg_expr.name().to_string(),
                     ));
                 }
             }
