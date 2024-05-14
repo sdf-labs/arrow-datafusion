@@ -38,13 +38,12 @@ use datafusion::{
     datasource::{provider_as_source, source_as_provider},
     prelude::SessionContext,
 };
-use datafusion_common::not_impl_err;
 use datafusion_common::{
     context, internal_err, parsers::CompressionTypeVariant, DataFusionError,
     OwnedTableReference, Result,
 };
+use datafusion_common::{not_impl_err, Constraints};
 use datafusion_expr::logical_plan::DdlStatement;
-use datafusion_expr::DropView;
 use datafusion_expr::{
     logical_plan::{
         builder::project, Aggregate, CreateCatalog, CreateCatalogSchema,
@@ -54,6 +53,7 @@ use datafusion_expr::{
     },
     Expr, LogicalPlan, LogicalPlanBuilder,
 };
+use datafusion_expr::{CreateMemoryTable, DropView};
 use prost::bytes::BufMut;
 use prost::Message;
 use std::fmt::Debug;
@@ -779,6 +779,26 @@ impl AsLogicalPlan for LogicalPlanNode {
                     schema: Arc::new(convert_required!(dropview.schema)?),
                 }),
             )),
+            LogicalPlanType::CreateMemoryTable(create_memory_table) => {
+                let plan = create_memory_table
+                    .input.clone().ok_or_else(|| DataFusionError::Internal(String::from(
+                    "Protobuf deserialization error, CreateMemoryTableNode has invalid LogicalPlan input.",
+                )))?
+                    .try_into_logical_plan(ctx, extension_codec)?;
+                Ok(LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(
+                    CreateMemoryTable {
+                        name: from_owned_table_reference(
+                            create_memory_table.name.as_ref(),
+                            "CreateMemoryTable",
+                        )?,
+                        // TODO: Constraints cannot be constructed from protobuf due to private fields
+                        constraints: Constraints::empty(),
+                        input: Arc::new(plan),
+                        if_not_exists: create_memory_table.if_not_exists,
+                        or_replace: create_memory_table.or_replace,
+                    },
+                )))
+            }
         }
     }
 
@@ -1395,9 +1415,27 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlan::Unnest(_) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for Unnest",
             )),
-            LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(_)) => Err(proto_error(
-                "LogicalPlan serde is not yet implemented for CreateMemoryTable",
-            )),
+            LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(CreateMemoryTable {
+                name,
+                input,
+                if_not_exists,
+                or_replace,
+                ..
+            })) => Ok(protobuf::LogicalPlanNode {
+                logical_plan_type: Some(LogicalPlanType::CreateMemoryTable(Box::new(
+                    protobuf::CreateMemoryTableNode {
+                        name: Some(name.clone().into()),
+                        // TODO: Constraints cannot be constructed from protobuf due to private fields
+                        constraints: None,
+                        input: Some(Box::new(LogicalPlanNode::try_from_logical_plan(
+                            input,
+                            extension_codec,
+                        )?)),
+                        if_not_exists: *if_not_exists,
+                        or_replace: *or_replace,
+                    },
+                ))),
+            }),
             LogicalPlan::Ddl(DdlStatement::DropTable(_)) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for DropTable",
             )),

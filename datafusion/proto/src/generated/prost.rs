@@ -38,7 +38,7 @@ pub struct DfSchema {
 pub struct LogicalPlanNode {
     #[prost(
         oneof = "logical_plan_node::LogicalPlanType",
-        tags = "1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27"
+        tags = "1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28"
     )]
     pub logical_plan_type: ::core::option::Option<logical_plan_node::LogicalPlanType>,
 }
@@ -99,6 +99,8 @@ pub mod logical_plan_node {
         Prepare(::prost::alloc::boxed::Box<super::PrepareNode>),
         #[prost(message, tag = "27")]
         DropView(super::DropViewNode),
+        #[prost(message, tag = "28")]
+        CreateMemoryTable(::prost::alloc::boxed::Box<super::CreateMemoryTableNode>),
     }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -321,6 +323,20 @@ pub struct CreateExternalTableNode {
         ::prost::alloc::string::String,
         ::prost::alloc::string::String,
     >,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CreateMemoryTableNode {
+    #[prost(message, optional, tag = "1")]
+    pub name: ::core::option::Option<OwnedTableReference>,
+    #[prost(message, optional, tag = "2")]
+    pub constraints: ::core::option::Option<Constraints>,
+    #[prost(message, optional, boxed, tag = "3")]
+    pub input: ::core::option::Option<::prost::alloc::boxed::Box<LogicalPlanNode>>,
+    #[prost(bool, tag = "4")]
+    pub if_not_exists: bool,
+    #[prost(bool, tag = "5")]
+    pub or_replace: bool,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1445,6 +1461,41 @@ pub mod owned_table_reference {
         #[prost(message, tag = "3")]
         Full(super::FullTableReference),
     }
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Constraints {
+    #[prost(message, repeated, tag = "1")]
+    pub inner: ::prost::alloc::vec::Vec<Constraint>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Constraint {
+    #[prost(oneof = "constraint::ConstraintType", tags = "1, 2")]
+    pub constraint_type: ::core::option::Option<constraint::ConstraintType>,
+}
+/// Nested message and enum types in `Constraint`.
+pub mod constraint {
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum ConstraintType {
+        #[prost(message, tag = "1")]
+        PrimaryKey(super::PrimaryKey),
+        #[prost(message, tag = "2")]
+        Unique(super::Unique),
+    }
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PrimaryKey {
+    #[prost(uint32, repeated, tag = "1")]
+    pub indices: ::prost::alloc::vec::Vec<u32>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Unique {
+    #[prost(uint32, repeated, tag = "1")]
+    pub indices: ::prost::alloc::vec::Vec<u32>,
 }
 /// PhysicalPlanNode is a nested type
 #[allow(clippy::derive_partial_eq_without_eq)]
