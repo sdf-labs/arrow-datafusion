@@ -63,16 +63,17 @@ impl ScalarUDFImpl for GetFieldFunc {
                     .iter()
                     .find_map(|field| {
                         if field.name() == "values" {
-                            Some((field.data_type(), field.is_nullable()))
+                            Some(field.data_type())
                         } else {
                             None
                         }
                     })
                     .expect("map type without value is not supported");
-                return Ok(value_dt.0.clone());
+                return Ok(value_dt.clone());
             }
+            return exec_err!("Malformed DataType::Map -- does not wrap over a DataType::Struct, got {}", &args[0]);
         }
-        todo!("get_field function is not implemented for this type");
+        todo!("get_field function is not implemented for this type: {}", &args[0]);
     }
 
     fn return_type_from_exprs(
