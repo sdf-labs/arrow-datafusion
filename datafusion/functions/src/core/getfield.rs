@@ -56,8 +56,23 @@ impl ScalarUDFImpl for GetFieldFunc {
         &self.signature
     }
 
-    fn return_type(&self, _: &[DataType]) -> Result<DataType> {
-        todo!()
+    fn return_type(&self, args: &[DataType]) -> Result<DataType> {
+        if let DataType::Map(entries, _) = &args[0] {
+            if let DataType::Struct(fields) = entries.data_type() {
+                let value_dt = fields
+                    .iter()
+                    .find_map(|field| {
+                        if field.name() == "values" {
+                            Some((field.data_type(), field.is_nullable()))
+                        } else {
+                            None
+                        }
+                    })
+                    .expect("map type without value is not supported");
+                return Ok(value_dt.0.clone());
+            }
+        }
+        todo!("get_field function is not implemented for this type");
     }
 
     fn return_type_from_exprs(
