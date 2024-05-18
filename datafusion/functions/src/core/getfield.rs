@@ -73,7 +73,10 @@ impl ScalarUDFImpl for GetFieldFunc {
             }
             return exec_err!("Malformed DataType::Map -- does not wrap over a DataType::Struct, got {}", &args[0]);
         }
-        todo!("get_field function is not implemented for this type: {}", &args[0]);
+        todo!(
+            "get_field function is not implemented for this type: {}",
+            &args[0]
+        );
     }
 
     fn return_type_from_exprs(
