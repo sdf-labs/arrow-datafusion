@@ -606,7 +606,7 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
       - name: Install cargo-msrv
-        run: cargo install cargo-msrv
+        run: cargo install cargo-msrv@0.18.1
       - name: Check datafusion
         working-directory: datafusion/core
         run: |
