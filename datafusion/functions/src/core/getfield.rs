@@ -107,12 +107,9 @@ impl ScalarUDFImpl for GetFieldFunc {
         }
 
         let name = match &args[1] {
-            Expr::Literal(name) => name,
-            _ => {
-                return exec_err!(
-                    "get_field function requires the argument field_name to be a string"
-                );
-            }
+            Expr::Literal(name) => name.to_string(),
+            #[allow(deprecated)] // display_name
+            other => other.display_name()?,
         };
 
         Ok(format!("{}[{}]", args[0], name))
