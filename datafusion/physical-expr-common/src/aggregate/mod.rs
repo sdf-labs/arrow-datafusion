@@ -300,7 +300,8 @@ impl AggregateExpr for AggregateFunctionExpr {
     }
 
     fn field(&self) -> Result<Field> {
-        Ok(Field::new(&self.name, self.data_type.clone(), true))
+        let nullable = self.fun.name() != "count";
+        Ok(Field::new(&self.name, self.data_type.clone(), nullable))
     }
 
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
