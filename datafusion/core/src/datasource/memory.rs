@@ -77,7 +77,6 @@ impl MemTable {
                     "mem table schema does not contain batches schema. \
                         Target_schema: {schema:?}. Batches Schema: {batches_schema:?}"
                 );
-                dbg!(schema, batches_schema);
                 return plan_err!("Mismatch between schema and batches");
             }
         }
