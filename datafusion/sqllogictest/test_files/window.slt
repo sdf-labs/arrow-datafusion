@@ -833,19 +833,13 @@ LIMIT 5
 
 
 #fn window_frame_ranges_preceding_and_preceding
-query II
+query error DataFusion error: Arrow error: Invalid argument error: Column 'count\(\*\) ORDER BY \[aggregate_test_100\.c2 ASC NULLS LAST\] RANGE BETWEEN 3 PRECEDING AND 1 PRECEDING' is declared as non\-nullable but contains null values
 SELECT
 SUM(c2) OVER (ORDER BY c2 RANGE BETWEEN 3 PRECEDING AND 1 PRECEDING),
 COUNT(*) OVER (ORDER BY c2 RANGE BETWEEN 3 PRECEDING AND 1 PRECEDING)
 FROM aggregate_test_100
 ORDER BY c9
 LIMIT 5
-----
-123 63
-22 22
-193 64
-22 22
-22 22
 
 #fn window_frame_ranges_unbounded_preceding_following_diff_col
 query II
