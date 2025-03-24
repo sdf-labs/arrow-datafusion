@@ -278,7 +278,7 @@ jobs:
   linux-wasm-pack:
     name: build with wasm-pack
     runs-on: ubuntu-latest
-    if: "fslee"
+    if: "false"
     container:
       image: amd64/rust
     steps:
