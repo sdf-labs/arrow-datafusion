@@ -56,7 +56,13 @@ default = [
     "unicode_expressions",
     "compression",
     "parquet",
-    "recursive_protection",
+    # The recursive_protection depends on recursive which depends on stacker.
+    # Stacker makes dynamical stack size modification calls that are not allowed
+    # by default in a Kubernetes environment [1]. So we decided to disable this
+    # feature and any stack overflow problem in prod will be dealt with by us
+    # change the ulimit settings manually.
+    # [1] https://dbt-labs.slack.com/archives/C089D42USM7/p1743532071628859
+    # "recursive_protection",
 ]
 encoding_expressions = ["datafusion-functions/encoding_expressions"]
 # Used for testing ONLY: causes all values to hash to the same value (test for collisions)

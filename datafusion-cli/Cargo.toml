@@ -43,7 +43,8 @@ datafusion = { path = "../datafusion/core", version = "45.0.0", features = [
     "datetime_expressions",
     "encoding_expressions",
     "parquet",
-    "recursive_protection",
+    # See comment about recursive_protection in datafusion/core/Cargo.toml
+    # "recursive_protection",
     "regex_expressions",
     "unicode_expressions",
     "compression",
