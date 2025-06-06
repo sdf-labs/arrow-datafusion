@@ -96,18 +96,20 @@ impl PhysicalExpr for TryCastExpr {
             safe: true,
             format_options: DEFAULT_FORMAT_OPTIONS,
         };
-        match value {
+        let _res = match value {
             ColumnarValue::Array(array) => {
                 let cast = cast_with_options(&array, &self.cast_type, &options)?;
-                Ok(ColumnarValue::Array(cast))
+                ColumnarValue::Array(cast)
             }
             ColumnarValue::Scalar(scalar) => {
                 let array = scalar.to_array()?;
                 let cast_array = cast_with_options(&array, &self.cast_type, &options)?;
                 let cast_scalar = ScalarValue::try_from_array(&cast_array, 0)?;
-                Ok(ColumnarValue::Scalar(cast_scalar))
+                ColumnarValue::Scalar(cast_scalar)
             }
-        }
+        };
+        unimplemented!()
+        // Ok(res)
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {

@@ -83,14 +83,16 @@ impl PhysicalExpr for IsNullExpr {
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         let arg = self.arg.evaluate(batch)?;
-        match arg {
-            ColumnarValue::Array(array) => Ok(ColumnarValue::Array(Arc::new(
-                arrow::compute::is_null(&array)?,
-            ))),
-            ColumnarValue::Scalar(scalar) => Ok(ColumnarValue::Scalar(
-                ScalarValue::Boolean(Some(scalar.is_null())),
-            )),
-        }
+        let _res = match arg {
+            ColumnarValue::Array(array) => {
+                ColumnarValue::Array(Arc::new(arrow::compute::is_null(&array)?))
+            }
+            ColumnarValue::Scalar(scalar) => {
+                ColumnarValue::Scalar(ScalarValue::Boolean(Some(scalar.is_null())))
+            }
+        };
+        unimplemented!()
+        // Ok(res)
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {

@@ -17,7 +17,7 @@
 
 //! [`ColumnarValue`] represents the result of evaluating an expression.
 
-use arrow::array::{Array, ArrayRef, NullArray};
+use arrow::array::{make_colref_symbolic_expr_array, Array, ArrayRef, NullArray};
 use arrow::compute::{kernels, CastOptions};
 use arrow::datatypes::DataType;
 use arrow::util::pretty::pretty_format_columns;
@@ -128,6 +128,47 @@ impl ColumnarValue {
         Ok(match self {
             ColumnarValue::Array(array) => array,
             ColumnarValue::Scalar(scalar) => scalar.to_array_of_size(num_rows)?,
+        })
+    }
+
+    /// Convert a columnar value into an Arrow [`ArrayRef`] with the specified
+    /// number of rows. [`Self::Scalar`] is converted by repeating the same
+    /// scalar multiple times which is not as efficient as handling the scalar
+    /// directly.
+    ///
+    /// See [`Self::values_to_arrays`] to convert multiple columnar values into
+    /// arrays of the same length.
+    ///
+    /// # Errors
+    ///
+    /// Errors if `self` is a Scalar that fails to be converted into an array of size
+    pub fn into_maybe_symbolic_array(
+        self,
+        num_rows: usize,
+        table_name: Option<String>,
+        column_position: usize,
+    ) -> Result<ArrayRef> {
+        Ok(match self {
+            ColumnarValue::Array(array) => table_name
+                .map(|tbl| {
+                    let symbolic_data =
+                        make_colref_symbolic_expr_array(tbl, column_position, num_rows);
+                    array.with_symbolic_data(&symbolic_data)
+                })
+                .unwrap_or(array),
+            ColumnarValue::Scalar(scalar) => {
+                let arr = scalar.to_array_of_size(num_rows)?;
+                table_name
+                    .map(|tbl| {
+                        let symbolic_data = make_colref_symbolic_expr_array(
+                            tbl,
+                            column_position,
+                            num_rows,
+                        );
+                        arr.with_symbolic_data(&symbolic_data)
+                    })
+                    .unwrap_or(arr)
+            }
         })
     }
 

@@ -122,12 +122,13 @@ impl PhysicalExpr for LikeExpr {
         use arrow::compute::*;
         let lhs = self.expr.evaluate(batch)?;
         let rhs = self.pattern.evaluate(batch)?;
-        match (self.negated, self.case_insensitive) {
+        let _res = match (self.negated, self.case_insensitive) {
             (false, false) => apply_cmp(&lhs, &rhs, like),
             (false, true) => apply_cmp(&lhs, &rhs, ilike),
             (true, false) => apply_cmp(&lhs, &rhs, nlike),
             (true, true) => apply_cmp(&lhs, &rhs, nilike),
-        }
+        };
+        unimplemented!()
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {

@@ -218,7 +218,28 @@ impl ExecutionPlan for ProjectionExec {
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         trace!("Start ProjectionExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
+
+        // check if upstream is a ProjectionExec with the special column __slt__table_name__
+        let table_name = if let Some(projection) =
+            self.input.as_any().downcast_ref::<ProjectionExec>()
+        {
+            projection.expr.iter().find_map(|(expr, alias)| {
+                if alias.to_lowercase() == "__slt__table_name__" {
+                    if let Some(x) = expr.as_any().downcast_ref::<Literal>() {
+                        Some(x.to_string())
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+        } else {
+            None
+        };
+
         Ok(Box::pin(ProjectionStream {
+            table_name,
             schema: Arc::clone(&self.schema),
             expr: self.expr.iter().map(|x| Arc::clone(&x.0)).collect(),
             input: self.input.execute(partition, context)?,
@@ -319,9 +340,15 @@ impl ProjectionStream {
         let arrays = self
             .expr
             .iter()
-            .map(|expr| {
-                expr.evaluate(batch)
-                    .and_then(|v| v.into_array(batch.num_rows()))
+            .enumerate()
+            .map(|(idx, expr)| {
+                expr.evaluate(batch).and_then(|v| {
+                    v.into_maybe_symbolic_array(
+                        batch.num_rows(),
+                        self.table_name.clone(),
+                        idx,
+                    )
+                })
             })
             .collect::<Result<Vec<_>>>()?;
 
@@ -338,6 +365,7 @@ impl ProjectionStream {
 
 /// Projection iterator
 struct ProjectionStream {
+    table_name: Option<String>,
     schema: SchemaRef,
     expr: Vec<Arc<dyn PhysicalExpr>>,
     input: SendableRecordBatchStream,

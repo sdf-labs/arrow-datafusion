@@ -507,6 +507,7 @@ pub fn batch_filter(
     filter_and_project(batch, predicate, None, &batch.schema())
 }
 
+#[inline(never)]
 fn filter_and_project(
     batch: &RecordBatch,
     predicate: &Arc<dyn PhysicalExpr>,

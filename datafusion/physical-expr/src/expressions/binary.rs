@@ -357,8 +357,10 @@ impl PhysicalExpr for BinaryExpr {
             lhs.into_array(batch.num_rows())?,
             rhs.into_array(batch.num_rows())?,
         );
-        self.evaluate_with_resolved_args(left, &left_data_type, right, &right_data_type)
-            .map(ColumnarValue::Array)
+        let _res = self
+            .evaluate_with_resolved_args(left, &left_data_type, right, &right_data_type)
+            .map(ColumnarValue::Array);
+        unimplemented!()
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {

@@ -1023,11 +1023,17 @@ fn lookup_join_hashmap(
 ) -> Result<(UInt64Array, UInt32Array)> {
     let keys_values = probe_on
         .iter()
-        .map(|c| c.evaluate(probe_batch)?.into_array(probe_batch.num_rows()))
+        .map(|c| {
+            c.evaluate(probe_batch)?
+                .into_array(probe_batch.num_rows())
+        })
         .collect::<Result<Vec<_>>>()?;
     let build_join_values = build_on
         .iter()
-        .map(|c| c.evaluate(build_batch)?.into_array(build_batch.num_rows()))
+        .map(|c| {
+            c.evaluate(build_batch)?
+                .into_array(build_batch.num_rows())
+        })
         .collect::<Result<Vec<_>>>()?;
 
     hashes_buffer.clear();

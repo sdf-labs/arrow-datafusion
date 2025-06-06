@@ -494,7 +494,7 @@ impl PhysicalExpr for CaseExpr {
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
-        match self.eval_method {
+        let _res = match self.eval_method {
             EvalMethod::WithExpression => {
                 // this use case evaluates "expr" and then compares the values with the "when"
                 // values
@@ -511,7 +511,8 @@ impl PhysicalExpr for CaseExpr {
             }
             EvalMethod::ScalarOrScalar => self.scalar_or_scalar(batch),
             EvalMethod::ExpressionOrExpression => self.expr_or_expr(batch),
-        }
+        };
+        unimplemented!()
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {

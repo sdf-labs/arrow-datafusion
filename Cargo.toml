@@ -188,3 +188,35 @@ large_futures = "warn"
 [workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(tarpaulin)"] }
 unused_qualifications = "deny"
+
+[patch.crates-io]
+# All arrow dependencies (run `cargo tree --prefix none | grep ^arrow | cut -d ' ' -f1 | sort -u` to get this list)
+# arrow = { git = "https://github.com/sdf-labs/arrow-rs", rev = "00824409af2607cd6dbea571f70304e2ecc6c55d" } # @ sdf/54.2.1
+# arrow-arith = { git = "https://github.com/sdf-labs/arrow-rs", rev = "00824409af2607cd6dbea571f70304e2ecc6c55d" } # @ sdf/54.2.1
+# arrow-array = { git = "https://github.com/sdf-labs/arrow-rs", rev = "00824409af2607cd6dbea571f70304e2ecc6c55d" } # @ sdf/54.2.1
+# arrow-buffer = { git = "https://github.com/sdf-labs/arrow-rs", rev = "00824409af2607cd6dbea571f70304e2ecc6c55d" } # @ sdf/54.2.1
+# arrow-cast = { git = "https://github.com/sdf-labs/arrow-rs", rev = "00824409af2607cd6dbea571f70304e2ecc6c55d" } # @ sdf/54.2.1
+# arrow-csv = { git = "https://github.com/sdf-labs/arrow-rs", rev = "00824409af2607cd6dbea571f70304e2ecc6c55d" } # @ sdf/54.2.1
+# arrow-data = { git = "https://github.com/sdf-labs/arrow-rs", rev = "00824409af2607cd6dbea571f70304e2ecc6c55d" } # @ sdf/54.2.1
+# arrow-ipc = { git = "https://github.com/sdf-labs/arrow-rs", rev = "00824409af2607cd6dbea571f70304e2ecc6c55d" } # @ sdf/54.2.1
+# arrow-json = { git = "https://github.com/sdf-labs/arrow-rs", rev = "00824409af2607cd6dbea571f70304e2ecc6c55d" } # @ sdf/54.2.1
+# arrow-ord = { git = "https://github.com/sdf-labs/arrow-rs", rev = "00824409af2607cd6dbea571f70304e2ecc6c55d" } # @ sdf/54.2.1
+# arrow-row = { git = "https://github.com/sdf-labs/arrow-rs", rev = "00824409af2607cd6dbea571f70304e2ecc6c55d" } # @ sdf/54.2.1
+# arrow-schema = { git = "https://github.com/sdf-labs/arrow-rs", rev = "00824409af2607cd6dbea571f70304e2ecc6c55d" } # @ sdf/54.2.1
+# arrow-select = { git = "https://github.com/sdf-labs/arrow-rs", rev = "00824409af2607cd6dbea571f70304e2ecc6c55d" } # @ sdf/54.2.1
+# arrow-string = { git = "https://github.com/sdf-labs/arrow-rs", rev = "00824409af2607cd6dbea571f70304e2ecc6c55d" } # @ sdf/54.2.1
+# OR, when working locally
+arrow = { path = "../arrow-rs/arrow" }
+arrow-arith = { path = "../arrow-rs/arrow-arith" }
+arrow-array = { path = "../arrow-rs/arrow-array" }
+arrow-buffer = { path = "../arrow-rs/arrow-buffer" }
+arrow-cast = { path = "../arrow-rs/arrow-cast" }
+arrow-csv = { path = "../arrow-rs/arrow-csv" }
+arrow-data = { path = "../arrow-rs/arrow-data" }
+arrow-ipc = { path = "../arrow-rs/arrow-ipc" }
+arrow-json = { path = "../arrow-rs/arrow-json" }
+arrow-ord = { path = "../arrow-rs/arrow-ord" }
+arrow-row = { path = "../arrow-rs/arrow-row" }
+arrow-schema = { path = "../arrow-rs/arrow-schema" }
+arrow-select = { path = "../arrow-rs/arrow-select" }
+arrow-string = { path = "../arrow-rs/arrow-string" }

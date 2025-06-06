@@ -37,7 +37,8 @@ pub fn apply(
 ) -> Result<ColumnarValue> {
     match (&lhs, &rhs) {
         (ColumnarValue::Array(left), ColumnarValue::Array(right)) => {
-            Ok(ColumnarValue::Array(f(&left.as_ref(), &right.as_ref())?))
+            let arr = f(&left.as_ref(), &right.as_ref())?;
+            Ok(ColumnarValue::Array(arr))
         }
         (ColumnarValue::Scalar(left), ColumnarValue::Array(right)) => Ok(
             ColumnarValue::Array(f(&left.to_scalar()?, &right.as_ref())?),

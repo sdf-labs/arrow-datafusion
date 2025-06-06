@@ -90,15 +90,17 @@ impl PhysicalExpr for NegativeExpr {
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         let arg = self.arg.evaluate(batch)?;
-        match arg {
+        let _res = match arg {
             ColumnarValue::Array(array) => {
                 let result = neg_wrapping(array.as_ref())?;
-                Ok(ColumnarValue::Array(result))
+                ColumnarValue::Array(result)
             }
             ColumnarValue::Scalar(scalar) => {
-                Ok(ColumnarValue::Scalar((scalar.arithmetic_negate())?))
+                ColumnarValue::Scalar((scalar.arithmetic_negate())?)
             }
-        }
+        };
+        unimplemented!()
+        // Ok(res)
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {

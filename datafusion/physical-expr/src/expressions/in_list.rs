@@ -376,7 +376,9 @@ impl PhysicalExpr for InListExpr {
                 }
             }
         };
-        Ok(ColumnarValue::Array(Arc::new(r)))
+        let _res = ColumnarValue::Array(Arc::new(r));
+        unimplemented!()
+        // Ok(_res)
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {

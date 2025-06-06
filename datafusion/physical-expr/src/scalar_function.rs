@@ -212,7 +212,9 @@ impl PhysicalExpr for ScalarFunctionExpr {
                 };
             }
         }
-        Ok(output)
+
+        unimplemented!()
+        // Ok(output)
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {

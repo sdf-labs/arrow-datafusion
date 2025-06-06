@@ -83,23 +83,25 @@ impl PhysicalExpr for NotExpr {
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         let evaluate_arg = self.arg.evaluate(batch)?;
-        match evaluate_arg {
+        let _res = match evaluate_arg {
             ColumnarValue::Array(array) => {
                 let array = as_boolean_array(&array)?;
-                Ok(ColumnarValue::Array(Arc::new(
-                    arrow::compute::kernels::boolean::not(array)?,
-                )))
+                ColumnarValue::Array(Arc::new(arrow::compute::kernels::boolean::not(
+                    array,
+                )?))
             }
             ColumnarValue::Scalar(scalar) => {
                 if scalar.is_null() {
-                    return Ok(ColumnarValue::Scalar(ScalarValue::Boolean(None)));
+                    let _res = ColumnarValue::Scalar(ScalarValue::Boolean(None));
+                    unimplemented!()
+                    // return Ok(res)
                 }
                 let bool_value: bool = scalar.try_into()?;
-                Ok(ColumnarValue::Scalar(ScalarValue::Boolean(Some(
-                    !bool_value,
-                ))))
+                ColumnarValue::Scalar(ScalarValue::Boolean(Some(!bool_value)))
             }
-        }
+        };
+        unimplemented!()
+        // Ok(res)
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
