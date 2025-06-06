@@ -228,6 +228,7 @@ impl Stream for CoalesceBatchesStream {
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
         let poll = self.poll_next_inner(cx);
+        dbg!(&poll);
         self.baseline_metrics.record_poll(poll)
     }
 
@@ -292,6 +293,7 @@ impl CoalesceBatchesStream {
                 CoalesceBatchesStreamState::Pull => {
                     // Attempt to pull the next batch from the input stream.
                     let input_batch = ready!(self.input.poll_next_unpin(cx));
+                    dbg!(&self.input.schema(), &input_batch);
                     // Start timing the operation. The timer records time upon being dropped.
                     let _timer = cloned_time.timer();
 

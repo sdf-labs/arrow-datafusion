@@ -149,7 +149,10 @@ impl BatchCoalescer {
                 self.buffer.push(batch);
                 true
             }
-            _ => false,
+            _ => {
+                // self.buffer.push(batch.clone());
+                false
+            }
         }
     }
 
@@ -159,6 +162,7 @@ impl BatchCoalescer {
     /// `false`.
     fn target_reached(&mut self, batch: RecordBatch) -> bool {
         if batch.num_rows() == 0 {
+            self.buffer.push(batch);
             false
         } else {
             self.total_rows += batch.num_rows();
@@ -173,6 +177,7 @@ impl BatchCoalescer {
         let batch = concat_batches(&self.schema, &self.buffer)?;
         self.buffer.clear();
         self.buffered_rows = 0;
+        dbg!(&batch);
         Ok(batch)
     }
 }
