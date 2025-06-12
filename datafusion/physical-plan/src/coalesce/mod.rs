@@ -177,7 +177,6 @@ impl BatchCoalescer {
         let batch = concat_batches(&self.schema, &self.buffer)?;
         self.buffer.clear();
         self.buffered_rows = 0;
-        dbg!(&batch);
         Ok(batch)
     }
 }
@@ -272,7 +271,6 @@ fn gc_string_view_batch(batch: &RecordBatch) -> RecordBatch {
         .collect();
     let mut options = RecordBatchOptions::new();
     options = options.with_row_count(Some(batch.num_rows()));
-    dbg!(&batch.constraints());
     RecordBatch::try_new_with_options_and_constraints(
         batch.schema(),
         new_columns,

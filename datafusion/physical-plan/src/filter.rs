@@ -559,7 +559,6 @@ impl Stream for FilterExecStream {
                         self.projection.as_ref(),
                         &self.schema,
                     )?;
-                    dbg!(&filtered_batch);
                     timer.done();
                     // Skip entirely filtered batches
                     // if filtered_batch.num_rows() == 0 {

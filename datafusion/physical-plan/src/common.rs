@@ -43,7 +43,6 @@ pub(crate) type SharedMemoryReservation = Arc<Mutex<MemoryReservation>>;
 /// Create a vector of record batches from a stream
 pub async fn collect(stream: SendableRecordBatchStream) -> Result<Vec<RecordBatch>> {
     let res = stream.try_collect::<Vec<_>>().await;
-    dbg!(&res);
     res
 }
 

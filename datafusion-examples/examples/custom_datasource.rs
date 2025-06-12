@@ -84,7 +84,6 @@ async fn search_accounts(
         let record_batch = result.first().unwrap();
 
         assert_eq!(expected_result_length, record_batch.column(1).len());
-        dbg!(record_batch.columns());
     })
     .await
     .unwrap();
