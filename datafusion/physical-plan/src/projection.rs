@@ -37,6 +37,7 @@ use crate::joins::utils::{ColumnIndex, JoinFilter};
 use crate::{ColumnStatistics, DisplayFormatType, ExecutionPlan, PhysicalExpr};
 
 use arrow::datatypes::{Field, Schema, SchemaRef};
+use datafusion_common::scalar::ScalarValue;
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::{
@@ -238,8 +239,33 @@ impl ExecutionPlan for ProjectionExec {
             None
         };
 
+        // check if upstream is a ProjectionExec with the special column __slt__pos__
+        let row_offset = if let Some(projection) =
+            self.input.as_any().downcast_ref::<ProjectionExec>()
+        {
+            projection.expr.iter().find_map(|(expr, alias)| {
+                if alias.to_lowercase() == "__slt__pos__" {
+                    if let Some(x) = expr.as_any().downcast_ref::<Literal>() {
+                        match x.value() {
+                                ScalarValue::Decimal128(Some(i), _, _) => {
+                                    Some(*i as usize)
+                                }
+                                _ => panic!("Unsupported literal: {:?}", x),
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+        } else {
+            None
+        };
+
         Ok(Box::pin(ProjectionStream {
             table_name,
+            row_offset,
             schema: Arc::clone(&self.schema),
             expr: self.expr.iter().map(|x| Arc::clone(&x.0)).collect(),
             input: self.input.execute(partition, context)?,
@@ -345,6 +371,7 @@ impl ProjectionStream {
                 expr.evaluate(batch).and_then(|v| {
                     v.into_maybe_symbolic_array(
                         batch.num_rows(),
+                        self.row_offset.unwrap_or(0),
                         self.table_name.clone(),
                         idx,
                     )
@@ -366,6 +393,7 @@ impl ProjectionStream {
 /// Projection iterator
 struct ProjectionStream {
     table_name: Option<String>,
+    row_offset: Option<usize>,
     schema: SchemaRef,
     expr: Vec<Arc<dyn PhysicalExpr>>,
     input: SendableRecordBatchStream,

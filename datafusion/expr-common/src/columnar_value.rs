@@ -17,7 +17,9 @@
 
 //! [`ColumnarValue`] represents the result of evaluating an expression.
 
-use arrow::array::{make_colref_symbolic_expr_array, Array, ArrayRef, NullArray};
+use arrow::array::{
+    arrow_type_to_var_type, make_colref_symbolic_expr_array, Array, ArrayRef, NullArray,
+};
 use arrow::compute::{kernels, CastOptions};
 use arrow::datatypes::DataType;
 use arrow::util::pretty::pretty_format_columns;
@@ -145,27 +147,41 @@ impl ColumnarValue {
     pub fn into_maybe_symbolic_array(
         self,
         num_rows: usize,
+        row_offset: usize,
         table_name: Option<String>,
         column_position: usize,
     ) -> Result<ArrayRef> {
         Ok(match self {
-            ColumnarValue::Array(array) => table_name
-                .map(|tbl| {
-                    let symbolic_data =
-                        make_colref_symbolic_expr_array(tbl, column_position, num_rows);
-                    array.with_symbolic_data(&symbolic_data)
-                })
-                .unwrap_or(array),
-            ColumnarValue::Scalar(scalar) => {
-                let arr = scalar.to_array_of_size(num_rows)?;
+            ColumnarValue::Array(array) => {
+                let array_clone = Arc::clone(&array);
+                let data_type = array.data_type().clone();
                 table_name
                     .map(|tbl| {
                         let symbolic_data = make_colref_symbolic_expr_array(
                             tbl,
                             column_position,
                             num_rows,
+                            row_offset,
+                            arrow_type_to_var_type(data_type),
                         );
-                        arr.with_symbolic_data(&symbolic_data)
+                        array_clone.with_symbolic_data(&symbolic_data)
+                    })
+                    .unwrap_or(array)
+            }
+            ColumnarValue::Scalar(scalar) => {
+                let arr = scalar.to_array_of_size(num_rows)?;
+                let arr_clone = Arc::clone(&arr);
+                let data_type = arr.data_type().clone();
+                table_name
+                    .map(|tbl| {
+                        let symbolic_data = make_colref_symbolic_expr_array(
+                            tbl,
+                            column_position,
+                            num_rows,
+                            row_offset,
+                            arrow_type_to_var_type(data_type),
+                        );
+                        arr_clone.with_symbolic_data(&symbolic_data)
                     })
                     .unwrap_or(arr)
             }
