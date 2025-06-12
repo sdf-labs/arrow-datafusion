@@ -25,6 +25,7 @@ use std::sync::Arc;
 use crate::physical_expr::physical_exprs_bag_equal;
 use crate::PhysicalExpr;
 
+use arrow::array::BooleanArray;
 use arrow::array::*;
 use arrow::buffer::BooleanBuffer;
 use arrow::compute::kernels::boolean::{not, or_kleene};
@@ -117,7 +118,15 @@ where
         let in_array = &self.array;
         let has_nulls = in_array.null_count() != 0;
 
-        Ok(ArrayIter::new(v)
+        let lhs = v.to_symbolic_data().get(0).unwrap().clone();
+        let rhs = self.array.to_symbolic_data();
+        let symbolic_data = SymbolicExpr::BinaryExpr {
+            left: Box::new(lhs),
+            op: SymbolicOperator::In,
+            right: Box::new(SymbolicExpr::List(rhs)),
+        };
+
+        let _res: BooleanArray = ArrayIter::new(v)
             .map(|v| {
                 v.and_then(|v| {
                     let hash = v.hash_one(&self.hash_set.state);
@@ -135,7 +144,9 @@ where
                     }
                 })
             })
-            .collect())
+            .collect();
+
+        Ok(_res.with_symbolic_data(&[symbolic_data]))
     }
 
     fn has_nulls(&self) -> bool {
@@ -377,8 +388,7 @@ impl PhysicalExpr for InListExpr {
             }
         };
         let _res = ColumnarValue::Array(Arc::new(r));
-        unimplemented!()
-        // Ok(_res)
+        Ok(_res)
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
