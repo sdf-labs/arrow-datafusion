@@ -118,13 +118,15 @@ where
         let in_array = &self.array;
         let has_nulls = in_array.null_count() != 0;
 
-        let lhs = v.to_symbolic_data().get(0).unwrap().clone();
+        let lhs = v.to_symbolic_data();
         let rhs = self.array.to_symbolic_data();
-        let symbolic_data = SymbolicExpr::BinaryExpr {
-            left: Box::new(lhs),
-            op: SymbolicOperator::In,
-            right: Box::new(SymbolicExpr::List(rhs)),
-        };
+        let symbolic_data = lhs.iter().map(|(lhs)| {
+            SymbolicExpr::BinaryExpr {
+                left: Box::new(lhs.clone()),
+                op: SymbolicOperator::In,
+                right: Box::new(SymbolicExpr::List(rhs.clone())),
+            }
+        }).collect::<Vec<_>>();
 
         let _res: BooleanArray = ArrayIter::new(v)
             .map(|v| {
@@ -146,7 +148,7 @@ where
             })
             .collect();
 
-        Ok(_res.with_symbolic_data(&[symbolic_data]))
+        Ok(_res.with_symbolic_data(symbolic_data.as_slice()))
     }
 
     fn has_nulls(&self) -> bool {
