@@ -48,12 +48,17 @@ use crate::{
     SendableRecordBatchStream,
 };
 
-use arrow::array::{BooleanBufferBuilder, UInt32Array, UInt64Array};
+use arrow::array::{
+    BooleanArray, BooleanBufferBuilder, SymbolicExpr, UInt32Array, UInt64Array,
+};
+
 use arrow::compute::concat_batches;
 use arrow::datatypes::{Schema, SchemaRef};
-use arrow::record_batch::RecordBatch;
+use arrow::record_batch::{RecordBatch, RecordBatchOptions};
+use arrow_array::Array;
 use datafusion_common::{
-    exec_datafusion_err, internal_err, project_schema, JoinSide, Result, Statistics,
+    arrow_err, exec_datafusion_err, internal_err, project_schema, DataFusionError,
+    JoinSide, Result, Statistics,
 };
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
@@ -738,7 +743,7 @@ fn build_join_indices(
     right_batch: &RecordBatch,
     filter: Option<&JoinFilter>,
     indices_cache: &mut (UInt64Array, UInt32Array),
-) -> Result<(UInt64Array, UInt32Array)> {
+) -> Result<(UInt64Array, UInt32Array, BooleanArray)> {
     let left_row_count = left_batch.num_rows();
     let right_row_count = right_batch.num_rows();
     let output_row_count = left_row_count * right_row_count;
@@ -781,16 +786,17 @@ fn build_join_indices(
         };
 
     if let Some(filter) = filter {
-        apply_join_filter_to_indices(
+        let (left_indices, right_indices, predicate) = apply_join_filter_to_indices(
             left_batch,
             right_batch,
             left_indices,
             right_indices,
             filter,
             JoinSide::Left,
-        )
+        )?;
+        Ok((left_indices, right_indices, predicate))
     } else {
-        Ok((left_indices, right_indices))
+        todo!()
     }
 }
 
@@ -967,7 +973,7 @@ fn join_left_and_right_batch(
     indices_cache: &mut (UInt64Array, UInt32Array),
     right_side_ordered: bool,
 ) -> Result<RecordBatch> {
-    let (left_side, right_side) =
+    let (left_side, right_side, predicate) =
         build_join_indices(left_batch, right_batch, filter, indices_cache).map_err(
             |e| {
                 exec_datafusion_err!(
@@ -993,7 +999,7 @@ fn join_left_and_right_batch(
         right_side_ordered,
     )?;
 
-    build_batch_from_indices(
+    let joined_batch = build_batch_from_indices(
         schema,
         left_batch,
         right_batch,
@@ -1001,7 +1007,39 @@ fn join_left_and_right_batch(
         &right_side,
         column_indices,
         JoinSide::Left,
+    )?;
+
+    let mut all_constraints = vec![];
+    if let Some(left_constraints) = left_batch.constraints() {
+        all_constraints.extend(left_constraints.to_vec());
+    }
+    if let Some(right_constraints) = right_batch.constraints() {
+        all_constraints.extend(right_constraints.to_vec());
+    }
+    let constraints = predicate.to_maybe_symbolic_data().map(|exprs| {
+        exprs
+            .iter()
+            .enumerate()
+            .map(|(i, expr)| {
+                if predicate.is_null(i) || !predicate.value(i) {
+                    SymbolicExpr::not(expr.clone())
+                } else {
+                    expr.clone()
+                }
+            })
+            .collect::<Vec<_>>()
+    });
+    all_constraints.extend(constraints.unwrap_or_default().to_vec());
+    let options =
+        RecordBatchOptions::default().with_row_count(Some(joined_batch.num_rows()));
+
+    RecordBatch::try_new_with_options_and_constraints(
+        joined_batch.schema(),
+        joined_batch.columns().to_vec(),
+        &options,
+        Some(all_constraints),
     )
+    .map_err(|e| DataFusionError::ArrowError(e, None))
 }
 
 impl<T: BatchTransformer + Unpin + Send> Stream for NestedLoopJoinStream<T> {

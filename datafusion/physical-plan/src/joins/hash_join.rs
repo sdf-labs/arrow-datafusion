@@ -1480,7 +1480,7 @@ impl HashJoinStream {
         )?;
 
         // apply join filter if exists
-        let (left_indices, right_indices) = if let Some(filter) = &self.filter {
+        let (left_indices, right_indices, predicate) = if let Some(filter) = &self.filter {
             apply_join_filter_to_indices(
                 build_side.left_data.batch(),
                 &state.batch,
@@ -1490,7 +1490,7 @@ impl HashJoinStream {
                 JoinSide::Left,
             )?
         } else {
-            (left_indices, right_indices)
+            (left_indices, right_indices, BooleanArray::from(vec![false]))
         };
 
         // mark joined left-side indices as visited, if required by join type

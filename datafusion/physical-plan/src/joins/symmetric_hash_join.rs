@@ -60,7 +60,7 @@ use crate::{
 
 use arrow::array::{
     ArrowPrimitiveType, NativeAdapter, PrimitiveArray, PrimitiveBuilder, UInt32Array,
-    UInt64Array,
+    UInt64Array, BooleanArray,
 };
 use arrow::compute::concat_batches;
 use arrow::datatypes::{Schema, SchemaRef};
@@ -940,7 +940,7 @@ pub(crate) fn join_with_probe_batch(
         Some(build_hash_joiner.deleted_offset),
     )?;
 
-    let (build_indices, probe_indices) = if let Some(filter) = filter {
+    let (build_indices, probe_indices, predicate) = if let Some(filter) = filter {
         apply_join_filter_to_indices(
             &build_hash_joiner.input_buffer,
             probe_batch,
@@ -950,7 +950,7 @@ pub(crate) fn join_with_probe_batch(
             build_hash_joiner.build_side,
         )?
     } else {
-        (build_indices, probe_indices)
+        (build_indices, probe_indices, BooleanArray::from(vec![false]))
     };
 
     if need_to_produce_result_in_final(build_hash_joiner.build_side, join_type) {

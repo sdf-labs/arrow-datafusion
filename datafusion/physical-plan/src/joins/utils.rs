@@ -34,7 +34,7 @@ pub use super::join_filter::JoinFilter;
 
 use arrow::array::{
     downcast_array, new_null_array, Array, BooleanBufferBuilder, UInt32Array,
-    UInt32Builder, UInt64Array,
+    UInt32Builder, UInt64Array, BooleanArray,
 };
 use arrow::compute;
 use arrow::datatypes::{Field, Schema, SchemaBuilder, UInt32Type, UInt64Type};
@@ -1169,11 +1169,10 @@ pub(crate) fn apply_join_filter_to_indices(
     probe_indices: UInt32Array,
     filter: &JoinFilter,
     build_side: JoinSide,
-) -> Result<(UInt64Array, UInt32Array)> {
+) -> Result<(UInt64Array, UInt32Array, BooleanArray)> {
     if build_indices.is_empty() && probe_indices.is_empty() {
-        return Ok((build_indices, probe_indices));
+        return Ok((build_indices, probe_indices, BooleanArray::from(vec![false])));
     };
-
     let intermediate_batch = build_batch_from_indices(
         filter.schema(),
         build_input_buffer,
@@ -1194,6 +1193,7 @@ pub(crate) fn apply_join_filter_to_indices(
     Ok((
         downcast_array(left_filtered.as_ref()),
         downcast_array(right_filtered.as_ref()),
+        mask.clone(),
     ))
 }
 
