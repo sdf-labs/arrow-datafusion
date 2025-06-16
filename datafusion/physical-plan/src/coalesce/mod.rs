@@ -271,10 +271,11 @@ fn gc_string_view_batch(batch: &RecordBatch) -> RecordBatch {
         .collect();
     let mut options = RecordBatchOptions::new();
     options = options.with_row_count(Some(batch.num_rows()));
-    RecordBatch::try_new_with_options_and_constraints(
+    RecordBatch::try_new_with_options_and_constraints_and_symbolic_data(
         batch.schema(),
         new_columns,
         &options,
+        batch.row_symbolic_data().map(|c| c.to_vec()),
         batch.constraints().map(|c| c.to_vec()),
     )
     .expect("Failed to re-create the gc'ed record batch")

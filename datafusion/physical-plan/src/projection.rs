@@ -36,9 +36,10 @@ use crate::execution_plan::CardinalityEffect;
 use crate::joins::utils::{ColumnIndex, JoinFilter};
 use crate::{ColumnStatistics, DisplayFormatType, ExecutionPlan, PhysicalExpr};
 
+use arrow::array::SymbolicExpr;
 use arrow::datatypes::{Field, Schema, SchemaRef};
-use datafusion_common::scalar::ScalarValue;
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
+use datafusion_common::scalar::ScalarValue;
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
@@ -247,10 +248,8 @@ impl ExecutionPlan for ProjectionExec {
                 if alias.to_lowercase() == "__slt__pos__" {
                     if let Some(x) = expr.as_any().downcast_ref::<Literal>() {
                         match x.value() {
-                                ScalarValue::Decimal128(Some(i), _, _) => {
-                                    Some(*i as usize)
-                                }
-                                _ => panic!("Unsupported literal: {:?}", x),
+                            ScalarValue::Decimal128(Some(i), _, _) => Some(*i as usize),
+                            _ => panic!("Unsupported literal: {:?}", x),
                         }
                     } else {
                         None
@@ -379,13 +378,33 @@ impl ProjectionStream {
             })
             .collect::<Result<Vec<_>>>()?;
 
+        let row_symbolic_data = self.table_name.as_ref().map(|tbl| {
+            (0..batch.num_rows())
+                .map(|i| SymbolicExpr::row(tbl.clone(), self.row_offset.unwrap_or(0) + i))
+                .collect::<Vec<_>>()
+        });
+
+        dbg!(&batch.row_symbolic_data());
+        dbg!(&row_symbolic_data);
+
         if arrays.is_empty() {
             let options =
                 RecordBatchOptions::new().with_row_count(Some(batch.num_rows()));
-            RecordBatch::try_new_with_options(Arc::clone(&self.schema), arrays, &options)
-                .map_err(Into::into)
+            RecordBatch::try_new_with_options_and_constraints_and_symbolic_data(
+                Arc::clone(&self.schema),
+                arrays,
+                &options,
+                row_symbolic_data,
+                None,
+            )
+            .map_err(Into::into)
         } else {
-            RecordBatch::try_new(Arc::clone(&self.schema), arrays).map_err(Into::into)
+            RecordBatch::try_new_with_symbolic_data(
+                Arc::clone(&self.schema),
+                arrays,
+                row_symbolic_data,
+            )
+            .map_err(Into::into)
         }
     }
 }

@@ -24,7 +24,7 @@ use crate::aggregates::{
 use crate::metrics::{BaselineMetrics, RecordOutput};
 use crate::{RecordBatchStream, SendableRecordBatchStream};
 use arrow::datatypes::SchemaRef;
-use arrow::record_batch::RecordBatch;
+use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use datafusion_common::Result;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalExpr;
@@ -108,10 +108,19 @@ impl AggregateStream {
             }
 
             let elapsed_compute = this.baseline_metrics.elapsed_compute();
+            let mut constraints = vec![];
+            let mut row_symbolic_data = vec![];
 
             loop {
                 let result = match this.input.next().await {
                     Some(Ok(batch)) => {
+                        dbg!(&batch); 
+                        if let Some(batch_constraints) = batch.constraints() {
+                            constraints.extend(batch_constraints.to_vec());
+                        }
+                        if let Some(batch_row_symbolic_data) = batch.row_symbolic_data() {
+                            row_symbolic_data.extend(batch_row_symbolic_data.to_vec());
+                        }
                         let timer = elapsed_compute.timer();
                         let result = aggregate_batch(
                             &this.mode,
@@ -137,17 +146,25 @@ impl AggregateStream {
                     None => {
                         this.finished = true;
                         let timer = this.baseline_metrics.elapsed_compute().timer();
-                        let result =
-                            finalize_aggregation(&mut this.accumulators, &this.mode)
-                                .and_then(|columns| {
-                                    RecordBatch::try_new(
-                                        Arc::clone(&this.schema),
-                                        columns,
-                                    )
-                                    .map_err(Into::into)
-                                })
-                                .record_output(&this.baseline_metrics);
+                        let result = finalize_aggregation(
+                            &mut this.accumulators,
+                            &this.mode,
+                        )
+                        .and_then(|columns| {
+                            RecordBatch::try_new_with_options_and_constraints_and_symbolic_data(
+                                Arc::clone(&this.schema),
+                                columns,
+                                &RecordBatchOptions::new(),
+                                Some(row_symbolic_data),
+                                Some(constraints),
+                            )
+                            .map_err(Into::into)
+                        })
+                        .record_output(&this.baseline_metrics);
 
+                        match agg.aggr_expr
+
+                        dbg!(&result.as_ref().ok());
                         timer.done();
 
                         result
