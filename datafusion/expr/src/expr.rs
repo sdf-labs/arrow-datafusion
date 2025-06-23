@@ -367,23 +367,33 @@ impl<'a> TreeNodeContainer<'a, Self> for Expr {
     }
 }
 
+#[derive(Default, Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
+pub struct UnnestOptions {
+    pub inline_struct_fields: bool,
+}
+
 /// UNNEST expression.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub struct Unnest {
     pub expr: Box<Expr>,
+    pub options: UnnestOptions,
 }
 
 impl Unnest {
     /// Create a new Unnest expression.
-    pub fn new(expr: Expr) -> Self {
+    pub fn new(expr: Expr, options: UnnestOptions) -> Self {
         Self {
             expr: Box::new(expr),
+            options,
         }
     }
 
     /// Create a new Unnest expression.
-    pub fn new_boxed(boxed: Box<Expr>) -> Self {
-        Self { expr: boxed }
+    pub fn new_boxed(boxed: Box<Expr>, options: UnnestOptions) -> Self {
+        Self {
+            expr: boxed,
+            options,
+        }
     }
 }
 
@@ -1788,8 +1798,12 @@ impl NormalizeEq for Expr {
             | (Expr::IsNotUnknown(self_expr), Expr::IsNotUnknown(other_expr))
             | (Expr::Negative(self_expr), Expr::Negative(other_expr))
             | (
-                Expr::Unnest(Unnest { expr: self_expr }),
-                Expr::Unnest(Unnest { expr: other_expr }),
+                Expr::Unnest(Unnest {
+                    expr: self_expr, ..
+                }),
+                Expr::Unnest(Unnest {
+                    expr: other_expr, ..
+                }),
             ) => self_expr.normalize_eq(other_expr),
             (
                 Expr::Between(Between {
@@ -2202,7 +2216,7 @@ impl HashNode for Expr {
                 data_type.hash(state);
                 column.hash(state);
             }
-            Expr::Unnest(Unnest { expr: _expr }) => {}
+            Expr::Unnest(Unnest { expr: _expr, .. }) => {}
         };
     }
 }
@@ -2418,7 +2432,7 @@ impl Display for SchemaDisplay<'_> {
             }
             Expr::Negative(expr) => write!(f, "(- {})", SchemaDisplay(expr)),
             Expr::Not(expr) => write!(f, "NOT {}", SchemaDisplay(expr)),
-            Expr::Unnest(Unnest { expr }) => {
+            Expr::Unnest(Unnest { expr, .. }) => {
                 write!(f, "UNNEST({})", SchemaDisplay(expr))
             }
             Expr::ScalarFunction(ScalarFunction { func, args }) => {
@@ -2745,7 +2759,7 @@ impl Display for Expr {
                 }
             },
             Expr::Placeholder(Placeholder { id, .. }) => write!(f, "{id}"),
-            Expr::Unnest(Unnest { expr }) => {
+            Expr::Unnest(Unnest { expr, .. }) => {
                 write!(f, "{UNNEST_COLUMN_PREFIX}({expr})")
             }
         }

@@ -2043,6 +2043,7 @@ mod tests {
                         relation: Some(TableReference::partial("schema", "table")),
                         name: "array_col".to_string(),
                     })),
+                    options: datafusion_expr::expr::UnnestOptions::default(),
                 }),
                 r#"UNNEST("table".array_col)"#,
             ),

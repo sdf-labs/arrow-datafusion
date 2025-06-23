@@ -19,7 +19,7 @@
 
 use crate::expr::{
     AggregateFunction, BinaryExpr, Cast, Exists, GroupingSet, InList, InSubquery,
-    Placeholder, TryCast, Unnest, WildcardOptions, WindowFunction,
+    Placeholder, TryCast, Unnest, UnnestOptions, WildcardOptions, WindowFunction,
 };
 use crate::function::{
     AccumulatorArgs, AccumulatorFactoryFunction, PartitionEvaluatorFactory,
@@ -374,6 +374,7 @@ pub fn when(when: Expr, then: Expr) -> CaseBuilder {
 pub fn unnest(expr: Expr) -> Expr {
     Expr::Unnest(Unnest {
         expr: Box::new(expr),
+        options: UnnestOptions::default(),
     })
 }
 

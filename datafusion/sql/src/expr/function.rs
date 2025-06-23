@@ -251,7 +251,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
             let expr = exprs.swap_remove(0);
             Self::check_unnest_arg(&expr, schema)?;
-            return Ok(Expr::Unnest(Unnest::new(expr)));
+            return Ok(Expr::Unnest(Unnest::new(
+                expr,
+                expr::UnnestOptions::default(),
+            )));
         }
 
         if !order_by.is_empty() && is_function_window {
