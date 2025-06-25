@@ -1706,7 +1706,7 @@ impl DataFrame {
     /// # }
     /// ```
     pub fn with_column(self, name: &str, expr: Expr) -> Result<DataFrame> {
-        let window_func_exprs = find_window_exprs(std::slice::from_ref(&expr));
+        let window_func_exprs = find_window_exprs([&expr]);
 
         let (window_fn_str, plan) = if window_func_exprs.is_empty() {
             (None, self.plan)
