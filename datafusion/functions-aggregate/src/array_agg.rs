@@ -24,9 +24,11 @@ use arrow::compute::{filter, SortOptions};
 use arrow::datatypes::{DataType, Field, Fields};
 
 use datafusion_common::cast::as_list_array;
-use datafusion_common::utils::{get_row_at_idx, SingleRowListArrayBuilder};
-use datafusion_common::{exec_err, ScalarValue};
-use datafusion_common::{internal_err, Result};
+use datafusion_common::scalar::copy_array_data;
+use datafusion_common::utils::{
+    get_row_at_idx, take_function_args, SingleRowListArrayBuilder,
+};
+>>>>>>> c32eb2fd6 (Validate states shape in merge_batch)
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{Accumulator, Signature, Volatility};
@@ -573,9 +575,8 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
         // inside `ARRAY_AGG` list, we will receive an `Array` that stores values
         // received from its ordering requirement expression. (This information
         // is necessary for during merging).
-        let [array_agg_values, agg_orderings, ..] = &states else {
-            return exec_err!("State should have two elements");
-        };
+        let [array_agg_values, agg_orderings] =
+            take_function_args("OrderSensitiveArrayAggAccumulator::merge_batch", states)?;
         let Some(agg_orderings) = agg_orderings.as_list_opt::<i32>() else {
             return exec_err!("Expects to receive a list array");
         };
