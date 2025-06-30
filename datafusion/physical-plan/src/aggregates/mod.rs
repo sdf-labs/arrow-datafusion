@@ -447,6 +447,8 @@ impl AggregateExec {
         input_schema: SchemaRef,
         schema: SchemaRef,
     ) -> Result<Self> {
+        dbg!(&aggr_expr);
+        dbg!(&group_by);
         // Make sure arguments are consistent in size
         if aggr_expr.len() != filter_expr.len() {
             return internal_err!("Inconsistent aggregate expr: {:?} and filter expr: {:?} for AggregateExec, their size should match", aggr_expr, filter_expr);
@@ -468,6 +470,8 @@ impl AggregateExec {
                 })
                 .collect::<Vec<_>>(),
         );
+
+        dbg!(input_eq_properties);
 
         let req = get_finer_aggregate_exprs_requirement(
             &mut aggr_expr,
