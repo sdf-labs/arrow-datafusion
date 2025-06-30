@@ -17,6 +17,11 @@
 
 //! `ARRAY_AGG` aggregate implementation: [`ArrayAgg`]
 
+use std::cmp::Ordering;
+use std::collections::{HashSet, VecDeque};
+use std::mem::{size_of, size_of_val, take};
+use std::sync::Arc;
+
 use arrow::array::{
     new_empty_array, Array, ArrayRef, AsArray, BooleanArray, ListArray, StructArray,
 };
@@ -26,13 +31,14 @@ use arrow::datatypes::{DataType, Field, Fields};
 use datafusion_common::cast::as_list_array;
 use datafusion_common::scalar::copy_array_data;
 use datafusion_common::utils::{
-    get_row_at_idx, take_function_args, SingleRowListArrayBuilder,
+    compare_rows, get_row_at_idx, take_function_args, SingleRowListArrayBuilder,
 };
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{Accumulator, Signature, Volatility};
 use datafusion_expr::{AggregateUDFImpl, Documentation};
 use datafusion_functions_aggregate_common::merge_arrays::merge_ordered_arrays;
+use datafusion_functions_aggregate_common::order::AggregateOrderSensitivity;
 use datafusion_functions_aggregate_common::utils::ordering_fields;
 use datafusion_macros::user_doc;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
@@ -76,12 +82,14 @@ This aggregation function can only mix DISTINCT and ORDER BY if the ordering exp
 /// ARRAY_AGG aggregate expression
 pub struct ArrayAgg {
     signature: Signature,
+    is_input_pre_ordered: bool,
 }
 
 impl Default for ArrayAgg {
     fn default() -> Self {
         Self {
             signature: Signature::any(1, Volatility::Immutable),
+            is_input_pre_ordered: false,
         }
     }
 }
@@ -141,6 +149,20 @@ impl AggregateUDFImpl for ArrayAgg {
         Ok(fields)
     }
 
+    fn order_sensitivity(&self) -> AggregateOrderSensitivity {
+        AggregateOrderSensitivity::Beneficial
+    }
+
+    fn with_beneficial_ordering(
+        self: Arc<Self>,
+        beneficial_ordering: bool,
+    ) -> Result<Option<Arc<dyn AggregateUDFImpl>>> {
+        Ok(Some(Arc::new(Self {
+            signature: self.signature.clone(),
+            is_input_pre_ordered: beneficial_ordering,
+        })))
+    }
+
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         let data_type = acc_args.exprs[0].data_type(acc_args.schema)?;
         let ignore_nulls =
@@ -195,7 +217,8 @@ impl AggregateUDFImpl for ArrayAgg {
         OrderSensitiveArrayAggAccumulator::try_new(
             &data_type,
             &ordering_dtypes,
-            acc_args.ordering_req.clone(),
+            ordering,
+            self.is_input_pre_ordered,
             acc_args.is_reversed,
             ignore_nulls,
         )
@@ -507,6 +530,8 @@ pub(crate) struct OrderSensitiveArrayAggAccumulator {
     datatypes: Vec<DataType>,
     /// Stores the ordering requirement of the `Accumulator`.
     ordering_req: LexOrdering,
+    /// Whether the input is known to be pre-ordered
+    is_input_pre_ordered: bool,
     /// Whether the aggregation is running in reverse.
     reverse: bool,
     /// Whether the aggregation should ignore null values.
@@ -520,6 +545,7 @@ impl OrderSensitiveArrayAggAccumulator {
         datatype: &DataType,
         ordering_dtypes: &[DataType],
         ordering_req: LexOrdering,
+        is_input_pre_ordered: bool,
         reverse: bool,
         ignore_nulls: bool,
     ) -> Result<Self> {
@@ -530,9 +556,57 @@ impl OrderSensitiveArrayAggAccumulator {
             ordering_values: vec![],
             datatypes,
             ordering_req,
+            is_input_pre_ordered,
             reverse,
             ignore_nulls,
         })
+    }
+
+    fn sort(&mut self) {
+        let sort_options = self
+            .ordering_req
+            .iter()
+            .map(|sort_expr| sort_expr.options)
+            .collect::<Vec<_>>();
+        let mut values = take(&mut self.values)
+            .into_iter()
+            .zip(take(&mut self.ordering_values))
+            .collect::<Vec<_>>();
+        let mut delayed_cmp_err = Ok(());
+        values.sort_by(|(_, left_ordering), (_, right_ordering)| {
+            compare_rows(left_ordering, right_ordering, &sort_options).unwrap_or_else(
+                |err| {
+                    delayed_cmp_err = Err(err);
+                    Ordering::Equal
+                },
+            )
+        });
+        (self.values, self.ordering_values) = values.into_iter().unzip();
+    }
+
+    fn evaluate_orderings(&self) -> Result<ScalarValue> {
+        let fields = ordering_fields(&self.ordering_req, &self.datatypes[1..]);
+
+        let column_wise_ordering_values = if self.ordering_values.is_empty() {
+            fields
+                .iter()
+                .map(|f| new_empty_array(f.data_type()))
+                .collect::<Vec<_>>()
+        } else {
+            (0..fields.len())
+                .map(|i| {
+                    let column_values = self.ordering_values.iter().map(|x| x[i].clone());
+                    ScalarValue::iter_to_array(column_values)
+                })
+                .collect::<Result<_>>()?
+        };
+
+        let ordering_array = StructArray::try_new(
+            Fields::from(fields),
+            column_wise_ordering_values,
+            None,
+        )?;
+        Ok(SingleRowListArrayBuilder::new(Arc::new(ordering_array)).build_list_scalar())
     }
 }
 
@@ -586,8 +660,11 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
         let mut partition_ordering_values = vec![];
 
         // Existing values should be merged also.
-        partition_values.push(self.values.clone().into());
-        partition_ordering_values.push(self.ordering_values.clone().into());
+        if !self.is_input_pre_ordered {
+            self.sort();
+        }
+        partition_values.push(take(&mut self.values).into());
+        partition_ordering_values.push(take(&mut self.ordering_values).into());
 
         // Convert array to Scalars to sort them easily. Convert back to array at evaluation.
         let array_agg_res = ScalarValue::convert_array_to_scalar_vec(array_agg_values)?;
@@ -636,6 +713,10 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        if !self.is_input_pre_ordered {
+            self.sort();
+        }
+
         let mut result = vec![self.evaluate()?];
         result.push(self.evaluate_orderings()?);
 
@@ -643,6 +724,10 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
+        if !self.is_input_pre_ordered {
+            self.sort();
+        }
+
         if self.values.is_empty() {
             return Ok(ScalarValue::new_null_list(
                 self.datatypes[0].clone(),
