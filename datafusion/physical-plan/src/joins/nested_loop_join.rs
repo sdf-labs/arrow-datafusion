@@ -49,7 +49,8 @@ use crate::{
 };
 
 use arrow::array::{
-    BooleanArray, BooleanBufferBuilder, SymbolicExpr, UInt32Array, UInt64Array,
+    BooleanArray, BooleanBufferBuilder, SymbolicExpr, SymbolicOperator, UInt32Array,
+    UInt64Array,
 };
 
 use arrow::compute::concat_batches;
@@ -1009,27 +1010,26 @@ fn join_left_and_right_batch(
         JoinSide::Left,
     )?;
 
-    let mut all_constraints = vec![];
-    if let Some(left_constraints) = left_batch.constraints() {
-        all_constraints.extend(left_constraints.to_vec());
+    let join_predicate = predicate.to_maybe_symbolic_data();
+    let left_constraints = match left_batch.constraints().unwrap() {
+        SymbolicExpr::GenericRow { constraints, .. } => constraints,
+        _ => panic!("Expected left_batch to have constraints"),
+    };
+    let right_constraints = match right_batch.constraints().unwrap() {
+        SymbolicExpr::GenericRow { constraints, .. } => constraints,
+        _ => panic!("Expected right_batch to have constraints"),
+    };
+    let mut joined_constraints = vec![];
+    joined_constraints.extend(left_constraints.unwrap());
+    joined_constraints.extend(right_constraints.unwrap());
+    if let Some(join_predicate) = join_predicate {
+        joined_constraints.push(join_predicate);
     }
-    if let Some(right_constraints) = right_batch.constraints() {
-        all_constraints.extend(right_constraints.to_vec());
-    }
-    let constraints = predicate.to_maybe_symbolic_data().map(|exprs| {
-        exprs
-            .iter()
-            .enumerate()
-            .map(|(i, expr)| {
-                if predicate.is_null(i) || !predicate.value(i) {
-                    SymbolicExpr::not(expr.clone())
-                } else {
-                    expr.clone()
-                }
-            })
-            .collect::<Vec<_>>()
-    });
-    all_constraints.extend(constraints.unwrap_or_default().to_vec());
+
+    let joined_constraints = SymbolicExpr::GenericRow {
+        table: "_".to_string(),
+        constraints: Some(joined_constraints),
+    };
     let options =
         RecordBatchOptions::default().with_row_count(Some(joined_batch.num_rows()));
 
@@ -1037,7 +1037,7 @@ fn join_left_and_right_batch(
         joined_batch.schema(),
         joined_batch.columns().to_vec(),
         &options,
-        Some(all_constraints),
+        Some(joined_constraints),
     )
     .map_err(|e| DataFusionError::ArrowError(e, None))
 }

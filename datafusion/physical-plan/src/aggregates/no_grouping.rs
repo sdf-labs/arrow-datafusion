@@ -23,11 +23,13 @@ use crate::aggregates::{
 };
 use crate::metrics::{BaselineMetrics, RecordOutput};
 use crate::{RecordBatchStream, SendableRecordBatchStream};
+use arrow::array::{ArrayRef, SymbolicExpr, SymbolicFunctions};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use datafusion_common::Result;
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::PhysicalExpr;
+use datafusion_expr::Expr;
+use datafusion_physical_expr::{expressions::Column, PhysicalExpr};
 use futures::stream::BoxStream;
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -38,6 +40,7 @@ use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use futures::stream::{Stream, StreamExt};
 
 use super::AggregateExec;
+use arrow::array::ListArray;
 
 /// stream struct for aggregation without grouping columns
 pub(crate) struct AggregateStream {
@@ -61,6 +64,7 @@ struct AggregateStreamInner {
     filter_expressions: Vec<Option<Arc<dyn PhysicalExpr>>>,
     accumulators: Vec<AccumulatorItem>,
     reservation: MemoryReservation,
+    batch_constraints: Option<SymbolicExpr>,
     finished: bool,
 }
 
@@ -100,6 +104,7 @@ impl AggregateStream {
             filter_expressions,
             accumulators,
             reservation,
+            batch_constraints: None,
             finished: false,
         };
         let stream = futures::stream::unfold(inner, |mut this| async move {
@@ -108,20 +113,36 @@ impl AggregateStream {
             }
 
             let elapsed_compute = this.baseline_metrics.elapsed_compute();
-            let mut constraints = vec![];
-            let mut row_symbolic_data = vec![];
 
             loop {
                 let result = match this.input.next().await {
                     Some(Ok(batch)) => {
-                        dbg!(&batch); 
-                        if let Some(batch_constraints) = batch.constraints() {
-                            constraints.extend(batch_constraints.to_vec());
-                        }
-                        if let Some(batch_row_symbolic_data) = batch.row_symbolic_data() {
-                            row_symbolic_data.extend(batch_row_symbolic_data.to_vec());
-                        }
                         let timer = elapsed_compute.timer();
+
+                        if this.batch_constraints.is_none() {
+                            if let Some(c) = batch.constraints() {
+                                let agg_column_index = if let Some(col) = this
+                                    .aggregate_expressions[0][0]
+                                    .as_any()
+                                    .downcast_ref::<Column>()
+                                {
+                                    col.index()
+                                } else {
+                                    panic!("Expected column expression")
+                                };
+                                let agg_column = batch.column(agg_column_index);
+                                let column_expr =
+                                    batch.column(agg_column_index).to_symbolic_data();
+                                let batch_constraints = SymbolicExpr::function(
+                                    SymbolicFunctions::Count,
+                                    column_expr,
+                                    true,
+                                    batch.constraints().unwrap(),
+                                );
+                                this.batch_constraints = Some(batch_constraints);
+                            }
+                        }
+
                         let result = aggregate_batch(
                             &this.mode,
                             batch,
@@ -149,24 +170,44 @@ impl AggregateStream {
                         let result = finalize_aggregation(
                             &mut this.accumulators,
                             &this.mode,
+                            &this.batch_constraints,
                         )
                         .and_then(|columns| {
-                            RecordBatch::try_new_with_options_and_constraints_and_symbolic_data(
-                                Arc::clone(&this.schema),
-                                columns,
-                                &RecordBatchOptions::new(),
-                                Some(row_symbolic_data),
-                                Some(constraints),
-                            )
-                            .map_err(Into::into)
+                            // let mut new_columns = vec![];
+                            // for col in &columns {
+                            //     new_columns.push(col.with_symbolic_data(
+                            //         &batch_constraints.clone().unwrap(),
+                            //     ));
+                            // }
+                            let mut contains_list_array = false;
+                            for col in &columns {
+                                if col.as_any().downcast_ref::<ListArray>().is_some() {
+                                    contains_list_array = true;
+                                    break;
+                                }
+                            }
+                            let batch = if contains_list_array {
+                                RecordBatch::try_new_with_options_and_constraints(
+                                    Arc::clone(&this.schema),
+                                    columns,
+                                    &RecordBatchOptions::new(),
+                                    this.batch_constraints.clone(),
+                                )?
+                            } else {
+                                RecordBatch::try_new_with_constraints(
+                                    Arc::clone(&this.schema),
+                                    columns,
+                                    Some(SymbolicExpr::generic_row(
+                                        "_".to_string(),
+                                        None,
+                                    )),
+                                )?
+                            };
+                            Ok(batch)
                         })
                         .record_output(&this.baseline_metrics);
 
-                        match agg.aggr_expr
-
-                        dbg!(&result.as_ref().ok());
                         timer.done();
-
                         result
                     }
                 };

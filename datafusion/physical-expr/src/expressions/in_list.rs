@@ -120,13 +120,11 @@ where
 
         let lhs = v.to_symbolic_data();
         let rhs = self.array.to_symbolic_data();
-        let symbolic_data = lhs.iter().map(|(lhs)| {
-            SymbolicExpr::BinaryExpr {
-                left: Box::new(lhs.clone()),
-                op: SymbolicOperator::In,
-                right: Box::new(SymbolicExpr::List(rhs.clone())),
-            }
-        }).collect::<Vec<_>>();
+        let symbolic_data = SymbolicExpr::BinaryExpr {
+            left: Box::new(lhs.clone()),
+            op: SymbolicOperator::In,
+            right: Box::new(SymbolicExpr::List(vec![rhs.clone()])),
+        };
 
         let _res: BooleanArray = ArrayIter::new(v)
             .map(|v| {
@@ -148,7 +146,7 @@ where
             })
             .collect();
 
-        Ok(_res.with_symbolic_data(symbolic_data.as_slice()))
+        Ok(_res.with_symbolic_data(&symbolic_data))
     }
 
     fn has_nulls(&self) -> bool {

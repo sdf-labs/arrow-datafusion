@@ -33,8 +33,8 @@ use crate::{
 pub use super::join_filter::JoinFilter;
 
 use arrow::array::{
-    downcast_array, new_null_array, Array, BooleanBufferBuilder, UInt32Array,
-    UInt32Builder, UInt64Array, BooleanArray,
+    downcast_array, new_null_array, Array, BooleanArray, BooleanBufferBuilder,
+    UInt32Array, UInt32Builder, UInt64Array,
 };
 use arrow::compute;
 use arrow::datatypes::{Field, Schema, SchemaBuilder, UInt32Type, UInt64Type};
@@ -1170,9 +1170,13 @@ pub(crate) fn apply_join_filter_to_indices(
     filter: &JoinFilter,
     build_side: JoinSide,
 ) -> Result<(UInt64Array, UInt32Array, BooleanArray)> {
-    if build_indices.is_empty() && probe_indices.is_empty() {
-        return Ok((build_indices, probe_indices, BooleanArray::from(vec![false])));
-    };
+    // if build_indices.is_empty() && probe_indices.is_empty() {
+    //     return Ok((
+    //         build_indices,
+    //         probe_indices,
+    //         BooleanArray::from(vec![false]),
+    //     ));
+    // };
     let intermediate_batch = build_batch_from_indices(
         filter.schema(),
         build_input_buffer,
@@ -1231,7 +1235,9 @@ pub(crate) fn build_batch_from_indices(
             Arc::new(compute::is_not_null(probe_indices)?)
         } else if column_index.side == build_side {
             let array = build_input_buffer.column(column_index.index);
-            if array.is_empty() || build_indices.null_count() == build_indices.len() {
+            let res = if array.is_empty()
+                || build_indices.null_count() == build_indices.len()
+            {
                 // Outer join would generate a null index when finding no match at our side.
                 // Therefore, it's possible we are empty but need to populate an n-length null array,
                 // where n is the length of the index array.
@@ -1239,15 +1245,19 @@ pub(crate) fn build_batch_from_indices(
                 new_null_array(array.data_type(), build_indices.len())
             } else {
                 compute::take(array.as_ref(), build_indices, None)?
-            }
+            };
+            res.with_symbolic_data(&array.to_symbolic_data())
         } else {
             let array = probe_batch.column(column_index.index);
-            if array.is_empty() || probe_indices.null_count() == probe_indices.len() {
+            let res = if array.is_empty()
+                || probe_indices.null_count() == probe_indices.len()
+            {
                 assert_eq!(probe_indices.null_count(), probe_indices.len());
                 new_null_array(array.data_type(), probe_indices.len())
             } else {
                 compute::take(array.as_ref(), probe_indices, None)?
-            }
+            };
+            res.with_symbolic_data(&array.to_symbolic_data())
         };
         columns.push(array);
     }

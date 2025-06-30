@@ -160,8 +160,6 @@ impl ColumnarValue {
                         let symbolic_data = make_colref_symbolic_expr_array(
                             tbl,
                             column_position,
-                            num_rows,
-                            row_offset,
                             arrow_type_to_var_type(data_type),
                         );
                         array_clone.with_symbolic_data(&symbolic_data)
@@ -177,8 +175,6 @@ impl ColumnarValue {
                         let symbolic_data = make_colref_symbolic_expr_array(
                             tbl,
                             column_position,
-                            num_rows,
-                            row_offset,
                             arrow_type_to_var_type(data_type),
                         );
                         arr_clone.with_symbolic_data(&symbolic_data)

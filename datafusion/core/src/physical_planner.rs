@@ -721,43 +721,43 @@ impl DefaultPhysicalPlanner {
                 let (aggregates, filters, _order_bys): (Vec<_>, Vec<_>, Vec<_>) =
                     multiunzip(agg_filter);
 
-                let initial_aggr = Arc::new(AggregateExec::try_new(
-                    AggregateMode::Partial,
-                    groups.clone(),
-                    aggregates,
-                    filters.clone(),
-                    input_exec,
-                    Arc::clone(&physical_input_schema),
-                )?);
+                // let initial_aggr = Arc::new(AggregateExec::try_new(
+                //     AggregateMode::Single,
+                //     groups.clone(),
+                //     aggregates,
+                //     filters.clone(),
+                //     input_exec,
+                //     Arc::clone(&physical_input_schema),
+                // )?);
 
-                let can_repartition = !groups.is_empty()
-                    && session_state.config().target_partitions() > 1
-                    && session_state.config().repartition_aggregations();
+                // let can_repartition = !groups.is_empty()
+                //     && session_state.config().target_partitions() > 1
+                //     && session_state.config().repartition_aggregations();
 
-                // Some aggregators may be modified during initialization for
-                // optimization purposes. For example, a FIRST_VALUE may turn
-                // into a LAST_VALUE with the reverse ordering requirement.
-                // To reflect such changes to subsequent stages, use the updated
-                // `AggregateFunctionExpr`/`PhysicalSortExpr` objects.
-                let updated_aggregates = initial_aggr.aggr_expr().to_vec();
+                // // Some aggregators may be modified during initialization for
+                // // optimization purposes. For example, a FIRST_VALUE may turn
+                // // into a LAST_VALUE with the reverse ordering requirement.
+                // // To reflect such changes to subsequent stages, use the updated
+                // // `AggregateFunctionExpr`/`PhysicalSortExpr` objects.
+                // let updated_aggregates = initial_aggr.aggr_expr().to_vec();
 
-                let next_partition_mode = if can_repartition {
-                    // construct a second aggregation with 'AggregateMode::FinalPartitioned'
-                    AggregateMode::FinalPartitioned
-                } else {
-                    // construct a second aggregation, keeping the final column name equal to the
-                    // first aggregation and the expressions corresponding to the respective aggregate
-                    AggregateMode::Final
-                };
+                // let next_partition_mode = if can_repartition {
+                //     // construct a second aggregation with 'AggregateMode::FinalPartitioned'
+                //     AggregateMode::FinalPartitioned
+                // } else {
+                //     // construct a second aggregation, keeping the final column name equal to the
+                //     // first aggregation and the expressions corresponding to the respective aggregate
+                //     AggregateMode::Final
+                // };
 
-                let final_grouping_set = initial_aggr.group_expr().as_final();
+                // let final_grouping_set = initial_aggr.group_expr().as_final();
 
                 Arc::new(AggregateExec::try_new(
-                    next_partition_mode,
-                    final_grouping_set,
-                    updated_aggregates,
+                    AggregateMode::Single,
+                    groups.clone(),
+                    aggregates,
                     filters,
-                    initial_aggr,
+                    input_exec,
                     Arc::clone(&physical_input_schema),
                 )?)
             }

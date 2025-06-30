@@ -35,6 +35,7 @@ use crate::{
 };
 
 use arrow::array::ArrayRef;
+use arrow::array::SymbolicExpr;
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_array::{UInt16Array, UInt32Array, UInt64Array, UInt8Array};
@@ -1198,6 +1199,7 @@ pub fn create_accumulators(
 pub fn finalize_aggregation(
     accumulators: &mut [AccumulatorItem],
     mode: &AggregateMode,
+    batch_constraints: &Option<SymbolicExpr>,
 ) -> Result<Vec<ArrayRef>> {
     match mode {
         AggregateMode::Partial => {
@@ -1222,6 +1224,15 @@ pub fn finalize_aggregation(
             accumulators
                 .iter_mut()
                 .map(|accumulator| accumulator.evaluate().and_then(|v| v.to_array()))
+                .map(|v| {
+                    v.and_then(|array| {
+                        if let Some(batch_constraints) = batch_constraints {
+                            Ok(array.with_symbolic_data(&batch_constraints))
+                        } else {
+                            Ok(array)
+                        }
+                    })
+                })
                 .collect()
         }
     }

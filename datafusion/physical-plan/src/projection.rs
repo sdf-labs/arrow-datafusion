@@ -46,6 +46,7 @@ use datafusion_common::tree_node::{
 };
 use datafusion_common::{internal_err, JoinSide, Result};
 use datafusion_execution::TaskContext;
+use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::PhysicalExprRef;
@@ -368,41 +369,59 @@ impl ProjectionStream {
             .enumerate()
             .map(|(idx, expr)| {
                 expr.evaluate(batch).and_then(|v| {
-                    v.into_maybe_symbolic_array(
-                        batch.num_rows(),
-                        self.row_offset.unwrap_or(0),
-                        self.table_name.clone(),
-                        idx,
-                    )
+                    if self.table_name.is_some() {
+                        v.into_maybe_symbolic_array(
+                            batch.num_rows(),
+                            self.row_offset.unwrap_or(0),
+                            self.table_name.clone(),
+                            idx,
+                        )
+                    } else if batch.constraints().is_some() {
+                        // dbg!(&v);
+                        match v {
+                            ColumnarValue::Array(array) => {
+                                let array_clone = Arc::clone(&array);
+                                Ok(array_clone.with_symbolic_data(
+                                    &batch.column(idx).to_symbolic_data(),
+                                ))
+                            }
+                            _ => panic!("Unsupported columnar value: {:?}", v),
+                        }
+                    } else {
+                        v.into_array(batch.num_rows())
+                    }
                 })
             })
             .collect::<Result<Vec<_>>>()?;
 
-        let row_symbolic_data = self.table_name.as_ref().map(|tbl| {
-            (0..batch.num_rows())
-                .map(|i| SymbolicExpr::row(tbl.clone(), self.row_offset.unwrap_or(0) + i))
-                .collect::<Vec<_>>()
-        });
+        // dbg!(&batch.row_symbolic_data());
+        // dbg!(&row_symbolic_data);
 
-        dbg!(&batch.row_symbolic_data());
-        dbg!(&row_symbolic_data);
+        let mut constraints = None;
+        if let Some(c) = batch.constraints() {
+            constraints = Some(c.clone());
+        } else {
+            if let Some(table_name) = self.table_name.clone() {
+                let symbolic_expr = SymbolicExpr::generic_row(table_name, None);
+                constraints = Some(symbolic_expr);
+            }
+        }
 
         if arrays.is_empty() {
             let options =
                 RecordBatchOptions::new().with_row_count(Some(batch.num_rows()));
-            RecordBatch::try_new_with_options_and_constraints_and_symbolic_data(
+            RecordBatch::try_new_with_options_and_constraints(
                 Arc::clone(&self.schema),
                 arrays,
                 &options,
-                row_symbolic_data,
-                None,
+                constraints,
             )
             .map_err(Into::into)
         } else {
-            RecordBatch::try_new_with_symbolic_data(
+            RecordBatch::try_new_with_constraints(
                 Arc::clone(&self.schema),
                 arrays,
-                row_symbolic_data,
+                constraints,
             )
             .map_err(Into::into)
         }

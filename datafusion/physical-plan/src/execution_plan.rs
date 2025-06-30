@@ -846,6 +846,7 @@ pub async fn collect(
     plan: Arc<dyn ExecutionPlan>,
     context: Arc<TaskContext>,
 ) -> Result<Vec<RecordBatch>> {
+    // dbg!(&plan);
     let stream = execute_stream(plan, context)?;
     crate::common::collect(stream).await
 }
@@ -862,6 +863,7 @@ pub fn execute_stream(
     plan: Arc<dyn ExecutionPlan>,
     context: Arc<TaskContext>,
 ) -> Result<SendableRecordBatchStream> {
+    dbg!(&plan);
     match plan.output_partitioning().partition_count() {
         0 => Ok(Box::pin(EmptyRecordBatchStream::new(plan.schema()))),
         1 => plan.execute(0, context),
