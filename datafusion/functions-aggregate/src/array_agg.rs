@@ -28,7 +28,6 @@ use datafusion_common::scalar::copy_array_data;
 use datafusion_common::utils::{
     get_row_at_idx, take_function_args, SingleRowListArrayBuilder,
 };
->>>>>>> c32eb2fd6 (Validate states shape in merge_batch)
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{Accumulator, Signature, Volatility};
