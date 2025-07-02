@@ -2288,8 +2288,7 @@ logical_plan
 02)--TableScan: annotated_data_infinite2 projection=[a, b, d]
 physical_plan
 01)AggregateExec: mode=Single, gby=[a@0 as a, b@1 as b], aggr=[array_agg(annotated_data_infinite2.d) ORDER BY [annotated_data_infinite2.d ASC NULLS LAST]], ordering_mode=Sorted
-02)--PartialSortExec: expr=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, d@2 ASC NULLS LAST], common_prefix_length=[2]
-03)----StreamingTableExec: partition_sizes=1, projection=[a, b, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST]
+02)--StreamingTableExec: partition_sizes=1, projection=[a, b, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST]
 
 # as can be seen in the result below d is indeed ordered.
 query II?
@@ -2506,12 +2505,16 @@ TUR [100.0, 75.0] 175
 # test_ordering_sensitive_aggregation3
 # When different aggregators have conflicting requirements, we cannot satisfy all of them in current implementation.
 # test below should raise Plan Error.
-statement error DataFusion error: This feature is not implemented: Conflicting ordering requirements in aggregate functions is not supported
+query ???
 SELECT ARRAY_AGG(s.amount ORDER BY s.amount DESC) AS amounts,
     ARRAY_AGG(s.amount ORDER BY s.amount ASC) AS amounts2,
     ARRAY_AGG(s.amount ORDER BY s.sn ASC) AS amounts3
   FROM sales_global AS s
   GROUP BY s.country
+----
+[80.0, 30.0] [30.0, 80.0] [30.0, 80.0]
+[200.0, 50.0] [50.0, 200.0] [50.0, 200.0]
+[100.0, 75.0] [75.0, 100.0] [75.0, 100.0]
 
 # test_ordering_sensitive_aggregation4
 # If aggregators can work with bounded memory (Sorted or PartiallySorted mode), we should append requirement to
