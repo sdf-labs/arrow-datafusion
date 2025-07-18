@@ -18,6 +18,7 @@
 use std::any::Any;
 #[cfg(test)]
 use std::collections::HashMap;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 use std::vec;
 
@@ -2624,6 +2625,34 @@ impl ScalarUDFImpl for DummyUDF {
         _number_rows: usize,
     ) -> Result<ColumnarValue> {
         unimplemented!("DummyUDF::invoke")
+    }
+
+    fn equals(&self, other: &dyn ScalarUDFImpl) -> bool {
+        let Some(other) = other.as_any().downcast_ref::<Self>() else {
+            return false;
+        };
+        let Self {
+            name,
+            signature,
+            return_type,
+        } = self;
+        name == &other.name
+            && signature == &other.signature
+            && return_type == &other.return_type
+    }
+
+    fn hash_value(&self) -> u64 {
+        let Self {
+            name,
+            signature,
+            return_type,
+        } = self;
+        let mut hasher = DefaultHasher::new();
+        std::any::type_name::<Self>().hash(&mut hasher);
+        name.hash(&mut hasher);
+        signature.hash(&mut hasher);
+        return_type.hash(&mut hasher);
+        hasher.finish()
     }
 }
 
