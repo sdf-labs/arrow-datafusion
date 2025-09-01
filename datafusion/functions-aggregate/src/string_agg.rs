@@ -31,6 +31,7 @@ use datafusion_functions_aggregate_common::accumulator::StateFieldsArgs;
 use datafusion_macros::user_doc;
 use datafusion_physical_expr::expressions::Literal;
 use std::any::Any;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::mem::size_of_val;
 
 make_udaf_expr_and_func!(
@@ -178,6 +179,29 @@ impl AggregateUDFImpl for StringAgg {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+
+    fn equals(&self, other: &dyn AggregateUDFImpl) -> bool {
+        let Some(other) = other.as_any().downcast_ref::<Self>() else {
+            return false;
+        };
+        let Self {
+            signature,
+            array_agg,
+        } = self;
+        signature == &other.signature && array_agg == &other.array_agg
+    }
+
+    fn hash_value(&self) -> u64 {
+        let Self {
+            signature,
+            array_agg,
+        } = self;
+        let mut hasher = DefaultHasher::new();
+        std::any::type_name::<Self>().hash(&mut hasher);
+        signature.hash(&mut hasher);
+        array_agg.hash(&mut hasher);
+        hasher.finish()
     }
 }
 
