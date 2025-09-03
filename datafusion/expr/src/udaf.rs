@@ -815,7 +815,7 @@ impl PartialOrd for dyn AggregateUDFImpl {
     }
 }
 
-fn udaf_default_schema_name<F: AggregateUDFImpl + ?Sized>(
+pub fn udaf_default_schema_name<F: AggregateUDFImpl + ?Sized>(
     func: &F,
     params: &AggregateFunctionParams,
 ) -> Result<String> {
@@ -868,7 +868,7 @@ fn udaf_default_schema_name<F: AggregateUDFImpl + ?Sized>(
     Ok(schema_name)
 }
 
-fn udaf_default_human_display<F: AggregateUDFImpl + ?Sized>(
+pub fn udaf_default_human_display<F: AggregateUDFImpl + ?Sized>(
     func: &F,
     params: &AggregateFunctionParams,
 ) -> Result<String> {
@@ -907,7 +907,7 @@ fn udaf_default_human_display<F: AggregateUDFImpl + ?Sized>(
     Ok(schema_name)
 }
 
-fn udaf_default_window_function_schema_name<F: AggregateUDFImpl + ?Sized>(
+pub fn udaf_default_window_function_schema_name<F: AggregateUDFImpl + ?Sized>(
     func: &F,
     params: &WindowFunctionParams,
 ) -> Result<String> {
@@ -949,7 +949,7 @@ fn udaf_default_window_function_schema_name<F: AggregateUDFImpl + ?Sized>(
     Ok(schema_name)
 }
 
-fn udaf_default_display_name<F: AggregateUDFImpl + ?Sized>(
+pub fn udaf_default_display_name<F: AggregateUDFImpl + ?Sized>(
     func: &F,
     params: &AggregateFunctionParams,
 ) -> Result<String> {
@@ -989,7 +989,7 @@ fn udaf_default_display_name<F: AggregateUDFImpl + ?Sized>(
     Ok(display_name)
 }
 
-fn udaf_default_window_function_display_name<F: AggregateUDFImpl + ?Sized>(
+pub fn udaf_default_window_function_display_name<F: AggregateUDFImpl + ?Sized>(
     func: &F,
     params: &WindowFunctionParams,
 ) -> Result<String> {
@@ -1029,7 +1029,7 @@ fn udaf_default_window_function_display_name<F: AggregateUDFImpl + ?Sized>(
     Ok(display_name)
 }
 
-fn udaf_default_return_field<F: AggregateUDFImpl + ?Sized>(
+pub fn udaf_default_return_field<F: AggregateUDFImpl + ?Sized>(
     func: &F,
     arg_fields: &[FieldRef],
 ) -> Result<FieldRef> {
