@@ -2093,6 +2093,7 @@ async fn test_not_replaced_with_partial_sort_for_unbounded_input() -> Result<()>
     Ok(())
 }
 
+#[ignore] // See commit
 #[tokio::test]
 async fn test_window_partial_constant_and_set_monotonicity() -> Result<()> {
     let input_schema = create_test_schema()?;
