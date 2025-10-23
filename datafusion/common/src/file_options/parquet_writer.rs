@@ -35,7 +35,7 @@ use parquet::{
         metadata::KeyValue,
         properties::{
             EnabledStatistics, WriterProperties, WriterPropertiesBuilder, WriterVersion,
-            DEFAULT_MAX_STATISTICS_SIZE, DEFAULT_STATISTICS_ENABLED,
+            DEFAULT_STATISTICS_ENABLED,
         },
     },
     schema::types::ColumnPath,
@@ -158,15 +158,10 @@ impl TryFrom<&TableParquetOptions> for WriterPropertiesBuilder {
                     builder.set_column_bloom_filter_ndv(path.clone(), bloom_filter_ndv);
             }
 
-            // max_statistics_size is deprecated, currently it is not being used
-            // TODO: remove once deprecated
+            // max_statistics_size has been deprecated and removed in parquet 56.x
+            // Silently ignore if set
             #[allow(deprecated)]
-            if let Some(max_statistics_size) = options.max_statistics_size {
-                builder = {
-                    #[allow(deprecated)]
-                    builder.set_column_max_statistics_size(path, max_statistics_size)
-                }
-            }
+            let _ = options.max_statistics_size;
         }
 
         Ok(builder)
@@ -261,12 +256,10 @@ impl ParquetOptions {
             .set_data_page_row_count_limit(*data_page_row_count_limit)
             .set_bloom_filter_enabled(*bloom_filter_on_write);
 
-        builder = {
-            #[allow(deprecated)]
-            builder.set_max_statistics_size(
-                max_statistics_size.unwrap_or(DEFAULT_MAX_STATISTICS_SIZE),
-            )
-        };
+        // max_statistics_size has been deprecated and removed in parquet 56.x
+        // Silently ignore if set
+        #[allow(deprecated)]
+        let _ = max_statistics_size;
 
         if let Some(bloom_filter_fpp) = bloom_filter_fpp {
             builder = builder.set_bloom_filter_fpp(*bloom_filter_fpp);

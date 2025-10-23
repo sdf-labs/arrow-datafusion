@@ -1965,6 +1965,13 @@ impl ScalarValue {
                     ScalarValue::iter_to_decimal256_array(scalars, *precision, *scale)?;
                 Arc::new(decimal_array)
             }
+            DataType::Decimal32(_, _) | DataType::Decimal64(_, _) => {
+                return _not_impl_err!(
+                    "Unsupported creation of {:?} array from ScalarValue {:?}",
+                    data_type,
+                    scalars.peek()
+                );
+            }
             DataType::Null => ScalarValue::iter_to_null_array(scalars)?,
             DataType::Boolean => build_array_primitive!(BooleanArray, Boolean),
             DataType::Float16 => build_array_primitive!(Float16Array, Float16),

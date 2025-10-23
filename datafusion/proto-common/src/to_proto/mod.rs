@@ -197,6 +197,11 @@ impl TryFrom<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
                 precision: *precision as u32,
                 scale: *scale as i32,
             }),
+            DataType::Decimal32(_, _) | DataType::Decimal64(_, _) => {
+                return Err(Error::General(
+                    "Proto serialization error: Decimal32 and Decimal64 data types are not yet supported".to_owned()
+                ))
+            }
             DataType::Map(field, sorted) => {
                 Self::Map(Box::new(
                     protobuf::Map {
