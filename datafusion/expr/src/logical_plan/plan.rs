@@ -2121,8 +2121,6 @@ impl PartialOrd for Values {
 /// Evaluates an arbitrary list of expressions (essentially a
 /// SELECT with an expression list) on its input.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
-// mark non_exhaustive to encourage use of try_new/new()
-#[non_exhaustive]
 pub struct Projection {
     /// The list of expressions
     pub expr: Vec<Expr>,
@@ -2206,8 +2204,6 @@ pub fn projection_schema(input: &LogicalPlan, exprs: &[Expr]) -> Result<Arc<DFSc
 
 /// Aliased subquery
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-// mark non_exhaustive to encourage use of try_new/new()
-#[non_exhaustive]
 pub struct SubqueryAlias {
     /// The incoming logical plan
     pub input: Arc<LogicalPlan>,
@@ -2296,7 +2292,6 @@ impl PartialOrd for SubqueryAlias {
 /// Filter should not be created directly but instead use `try_new()`
 /// and that these fields are only pub to support pattern matching
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
-#[non_exhaustive]
 pub struct Filter {
     /// The predicate expression, which must have Boolean type.
     pub predicate: Expr,
@@ -2595,7 +2590,7 @@ impl Debug for TableScan {
             .field("projected_schema", &self.projected_schema)
             .field("filters", &self.filters)
             .field("fetch", &self.fetch)
-            .finish_non_exhaustive()
+            .finish()
     }
 }
 
@@ -3509,8 +3504,6 @@ impl PartialOrd for DistinctOn {
 /// "C+B" and "SUM(A)" are the names of the output columns. Note that "C+B" is a
 /// single new column
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-// mark non_exhaustive to encourage use of try_new/new()
-#[non_exhaustive]
 pub struct Aggregate {
     /// The incoming logical plan
     pub input: Arc<LogicalPlan>,
