@@ -915,17 +915,23 @@ pub fn field_not_found<R: Into<TableReference>>(
     name: &str,
     schema: &DFSchema,
 ) -> DataFusionError {
+    let mut valid_fields = schema.columns();
+    // Sort so "Valid fields are ..." in error Display is deterministic across runs
+    // (projection / optimizer field order can otherwise vary for the same logical schema).
+    valid_fields.sort_by(|a, b| a.flat_name().cmp(&b.flat_name()));
     schema_datafusion_err!(SchemaError::FieldNotFound {
         field: Box::new(Column::new(qualifier, name)),
-        valid_fields: schema.columns().to_vec(),
+        valid_fields,
     })
 }
 
 /// Convenience wrapper over [`field_not_found`] for when there is no qualifier
 pub fn unqualified_field_not_found(name: &str, schema: &DFSchema) -> DataFusionError {
+    let mut valid_fields = schema.columns();
+    valid_fields.sort_by(|a, b| a.flat_name().cmp(&b.flat_name()));
     schema_datafusion_err!(SchemaError::FieldNotFound {
         field: Box::new(Column::new_unqualified(name)),
-        valid_fields: schema.columns().to_vec(),
+        valid_fields,
     })
 }
 

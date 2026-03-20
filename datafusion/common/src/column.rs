@@ -284,13 +284,15 @@ impl Column {
             }
         }
 
+        let mut valid_fields: Vec<Column> = schemas
+            .iter()
+            .flat_map(|s| s.iter())
+            .flat_map(|s| s.columns())
+            .collect();
+        valid_fields.sort_by(|a, b| a.flat_name().cmp(&b.flat_name()));
         _schema_err!(SchemaError::FieldNotFound {
             field: Box::new(self),
-            valid_fields: schemas
-                .iter()
-                .flat_map(|s| s.iter())
-                .flat_map(|s| s.columns())
-                .collect(),
+            valid_fields,
         })
     }
 
