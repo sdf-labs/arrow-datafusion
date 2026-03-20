@@ -3308,9 +3308,31 @@ impl Display for Expr {
             }
             Expr::ScalarVariable(_, var_names) => write!(f, "{}", var_names.join(".")),
             Expr::Literal(v, metadata) => {
+                // Use [`ScalarValue`]'s [`Display`] for UTF-8 scalars so schema / field names
+                // (via [`SchemaDisplay`]) do not embed the concrete string storage variant
+                // (`Utf8` / `LargeUtf8` / `Utf8View` from [`Debug`]), which can differ across
+                // planning runs for the same SQL literal.
+                let use_value_display = matches!(
+                    v,
+                    ScalarValue::Utf8(_)
+                        | ScalarValue::LargeUtf8(_)
+                        | ScalarValue::Utf8View(_)
+                );
                 match metadata.as_ref().map(|m| m.is_empty()).unwrap_or(true) {
-                    false => write!(f, "{v:?} {:?}", metadata.as_ref().unwrap()),
-                    true => write!(f, "{v:?}"),
+                    false => {
+                        if use_value_display {
+                            write!(f, "{v} {:?}", metadata.as_ref().unwrap())
+                        } else {
+                            write!(f, "{v:?} {:?}", metadata.as_ref().unwrap())
+                        }
+                    }
+                    true => {
+                        if use_value_display {
+                            write!(f, "{v}")
+                        } else {
+                            write!(f, "{v:?}")
+                        }
+                    }
                 }
             }
             Expr::Case(case) => {
